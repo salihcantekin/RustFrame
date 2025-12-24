@@ -4,14 +4,19 @@
 // 1. Window creation (overlay selector + destination/mirror window)
 // 2. Event loop handling (mouse/keyboard input)
 // 3. Coordination between capture and rendering subsystems
+// 4. System tray icon with context menu
 
 use anyhow::Result;
 use log::{info, error};
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalPosition;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
+
+// Tray icon and menu
+use tray_icon::{TrayIconBuilder, TrayIcon, Icon};
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem};
 
 mod capture;
 mod window_manager;
@@ -20,6 +25,14 @@ mod renderer;
 use window_manager::{OverlayWindow, DestinationWindow};
 use capture::{CaptureEngine, CaptureSettings};
 use renderer::Renderer;
+
+/// Menu item IDs for tray icon context menu
+mod menu_ids {
+    pub const TOGGLE_CURSOR: &str = "toggle_cursor";
+    pub const TOGGLE_BORDER: &str = "toggle_border";
+    pub const TOGGLE_EXCLUDE: &str = "toggle_exclude";
+    pub const EXIT: &str = "exit";
+}
 
 /// Main application state
 /// This holds all the windows, capture engine, and renderers
@@ -47,6 +60,14 @@ struct RustFrameApp {
 
     /// Last mouse position during drag (for calculating delta)
     last_mouse_pos: Option<(f64, f64)>,
+
+    /// System tray icon
+    tray_icon: Option<TrayIcon>,
+    
+    /// Menu items for updating check state
+    menu_cursor: Option<CheckMenuItem>,
+    menu_border: Option<CheckMenuItem>,
+    menu_exclude: Option<CheckMenuItem>,
 }
 
 impl RustFrameApp {
@@ -60,8 +81,157 @@ impl RustFrameApp {
             is_selecting: true,
             is_dragging: false,
             last_mouse_pos: None,
+            tray_icon: None,
+            menu_cursor: None,
+            menu_border: None,
+            menu_exclude: None,
         }
     }
+    
+    /// Create and show the system tray icon with context menu
+    fn create_tray_icon(&mut self) {
+        // Create menu items
+        let menu_cursor = CheckMenuItem::with_id(
+            menu_ids::TOGGLE_CURSOR,
+            "Show Cursor",
+            true,
+            self.settings.show_cursor,
+            None,
+        );
+        let menu_border = CheckMenuItem::with_id(
+            menu_ids::TOGGLE_BORDER,
+            "Show Border",
+            true,
+            self.settings.show_border,
+            None,
+        );
+        let menu_exclude = CheckMenuItem::with_id(
+            menu_ids::TOGGLE_EXCLUDE,
+            "Production Mode (Single Window)",
+            true,
+            self.settings.exclude_from_capture,
+            None,
+        );
+        let menu_exit = MenuItem::with_id(menu_ids::EXIT, "Exit", true, None);
+        
+        // Build the menu
+        let menu = Menu::new();
+        let _ = menu.append(&menu_cursor);
+        let _ = menu.append(&menu_border);
+        let _ = menu.append(&menu_exclude);
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&menu_exit);
+        
+        // Store menu items for later updates
+        self.menu_cursor = Some(menu_cursor);
+        self.menu_border = Some(menu_border);
+        self.menu_exclude = Some(menu_exclude);
+        
+        // Create a simple icon (16x16 blue square)
+        let icon_rgba = create_default_icon();
+        let icon = Icon::from_rgba(icon_rgba, 16, 16).expect("Failed to create icon");
+        
+        // Build tray icon
+        match TrayIconBuilder::new()
+            .with_tooltip("RustFrame - Screen Capture")
+            .with_icon(icon)
+            .with_menu(Box::new(menu))
+            .build()
+        {
+            Ok(tray) => {
+                info!("Tray icon created successfully");
+                self.tray_icon = Some(tray);
+            }
+            Err(e) => {
+                error!("Failed to create tray icon: {}", e);
+            }
+        }
+    }
+    
+    /// Handle tray menu events
+    fn handle_menu_event(&mut self, event: &MenuEvent) {
+        match event.id().as_ref() {
+            id if id == menu_ids::TOGGLE_CURSOR => {
+                self.settings.show_cursor = !self.settings.show_cursor;
+                if let Some(menu) = &self.menu_cursor {
+                    menu.set_checked(self.settings.show_cursor);
+                }
+                info!("Cursor visibility: {}", self.settings.show_cursor);
+                self.update_overlay_title();
+            }
+            id if id == menu_ids::TOGGLE_BORDER => {
+                self.settings.show_border = !self.settings.show_border;
+                if let Some(menu) = &self.menu_border {
+                    menu.set_checked(self.settings.show_border);
+                }
+                info!("Border visibility: {}", self.settings.show_border);
+                self.update_overlay_title();
+                
+                // Toggle hollow frame if capture is active
+                if !self.is_selecting {
+                    if let Some(overlay) = &self.overlay_window {
+                        if self.settings.show_border {
+                            overlay.make_hollow_frame(self.settings.border_width);
+                            overlay.show();
+                        } else {
+                            overlay.hide();
+                        }
+                    }
+                }
+            }
+            id if id == menu_ids::TOGGLE_EXCLUDE => {
+                self.settings.exclude_from_capture = !self.settings.exclude_from_capture;
+                if let Some(menu) = &self.menu_exclude {
+                    menu.set_checked(self.settings.exclude_from_capture);
+                }
+                info!("Production mode (dest behind overlay): {}", self.settings.exclude_from_capture);
+                self.update_overlay_title();
+                
+                // Reposition destination window if capture is active
+                if !self.is_selecting {
+                    if let (Some(overlay), Some(dest)) = (&self.overlay_window, &self.destination_window) {
+                        let overlay_pos = overlay.get_outer_position();
+                        let size = overlay.get_inner_size();
+                        
+                        if self.settings.exclude_from_capture {
+                            dest.position_offscreen(size);
+                        } else {
+                            dest.position_beside_overlay(overlay_pos, size);
+                        }
+                    }
+                }
+            }
+            id if id == menu_ids::EXIT => {
+                info!("Exit requested from tray menu");
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Create a simple 16x16 icon (blue square with frame border)
+fn create_default_icon() -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16 {
+        for x in 0..16 {
+            // Create a simple frame icon
+            let is_border = x == 0 || x == 15 || y == 0 || y == 15;
+            let is_inner_border = x == 1 || x == 14 || y == 1 || y == 14;
+            
+            if is_border {
+                // Dark blue border
+                rgba.extend_from_slice(&[0, 100, 180, 255]);
+            } else if is_inner_border {
+                // Light blue inner border
+                rgba.extend_from_slice(&[50, 150, 220, 255]);
+            } else {
+                // Transparent center (like hollow frame)
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    rgba
 }
 
 impl ApplicationHandler for RustFrameApp {
@@ -96,10 +266,20 @@ impl ApplicationHandler for RustFrameApp {
                 }
             }
         }
+        
+        // Create tray icon
+        if self.tray_icon.is_none() {
+            self.create_tray_icon();
+        }
     }
 
     /// Called when the event loop is about to block waiting for events
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Check for tray menu events
+        if let Ok(event) = MenuEvent::receiver().try_recv() {
+            self.handle_menu_event(&event);
+        }
+        
         // During selection mode, just wait for user input
         if self.is_selecting {
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -159,30 +339,70 @@ impl ApplicationHandler for RustFrameApp {
             WindowEvent::Resized(new_size) => {
                 info!("Window {:?} resized to {:?}", window_id, new_size);
 
-                // If overlay window is resized, update hollow frame and capture region
+                // If overlay window is resized, update hollow frame, capture region, and destination
                 if let Some(overlay) = &self.overlay_window {
-                    if overlay.window_id() == window_id {
-                        // If capturing with border, update the hollow frame region
-                        if !self.is_selecting && self.settings.show_border {
+                    if overlay.window_id() == window_id && !self.is_selecting {
+                        // Update the hollow frame region
+                        if self.settings.show_border {
                             overlay.update_hollow_frame(self.settings.border_width);
-                            
-                            // Also update capture region
-                            if let Some(capture) = &mut self.capture_engine {
-                                let rect = overlay.get_capture_rect();
-                                if let Err(e) = capture.update_region(rect) {
-                                    error!("Failed to update capture region: {}", e);
-                                }
+                        }
+                        
+                        // Update capture region (inside border if border is shown)
+                        if let Some(capture) = &mut self.capture_engine {
+                            let rect = if self.settings.show_border {
+                                overlay.get_capture_rect_inner(self.settings.border_width)
+                            } else {
+                                overlay.get_capture_rect()
+                            };
+                            if let Err(e) = capture.update_region(rect) {
+                                error!("Failed to update capture region: {}", e);
+                            }
+                        }
+                        
+                        // Resize destination window to match (minus border if shown)
+                        if let Some(dest) = &self.destination_window {
+                            let inner_size = if self.settings.show_border {
+                                PhysicalSize::new(
+                                    new_size.width.saturating_sub(self.settings.border_width * 2),
+                                    new_size.height.saturating_sub(self.settings.border_width * 2)
+                                )
+                            } else {
+                                new_size
+                            };
+                            dest.resize(inner_size);
+                            if let Some(renderer) = &mut self.renderer {
+                                renderer.resize(inner_size.width, inner_size.height);
                             }
                         }
                     }
                 }
 
-                // If destination window is resized, resize renderer
+                // If destination window is resized (by user), resize renderer
                 if let Some(dest) = &self.destination_window {
                     if dest.window_id() == window_id {
                         if let Some(renderer) = &mut self.renderer {
                             renderer.resize(new_size.width, new_size.height);
                         }
+                    }
+                }
+            }
+
+            WindowEvent::Moved(new_position) => {
+                // If overlay window is moved during capture, update capture region
+                if let Some(overlay) = &self.overlay_window {
+                    if overlay.window_id() == window_id && !self.is_selecting {
+                        // Update capture region with new position (inside border if shown)
+                        if let Some(capture) = &mut self.capture_engine {
+                            let rect = if self.settings.show_border {
+                                overlay.get_capture_rect_inner(self.settings.border_width)
+                            } else {
+                                overlay.get_capture_rect()
+                            };
+                            if let Err(e) = capture.update_region(rect) {
+                                error!("Failed to update capture region after move: {}", e);
+                            }
+                        }
+                        info!("Overlay moved to {:?}, capture region updated", new_position);
                     }
                 }
             }
@@ -269,9 +489,21 @@ impl RustFrameApp {
     /// Transition from "selection mode" to "capture mode"
     fn start_capture(&mut self) {
         if let Some(overlay) = &self.overlay_window {
-            let rect = overlay.get_capture_rect();
             let overlay_position = overlay.get_outer_position();
-            let size = overlay.get_inner_size();
+            let full_size = overlay.get_inner_size();
+            
+            // Calculate capture rect - if border is shown, capture INSIDE the border
+            let (rect, inner_size) = if self.settings.show_border {
+                let r = overlay.get_capture_rect_inner(self.settings.border_width);
+                let s = PhysicalSize::new(
+                    full_size.width.saturating_sub(self.settings.border_width * 2),
+                    full_size.height.saturating_sub(self.settings.border_width * 2)
+                );
+                (r, s)
+            } else {
+                (overlay.get_capture_rect(), full_size)
+            };
+            
             info!("Starting capture for region: {:?}", rect);
 
             // Convert overlay to hollow frame (click-through interior)
@@ -281,20 +513,19 @@ impl RustFrameApp {
                 overlay.hide();
             }
 
-            // Position destination window NEXT TO the overlay (prevents infinite mirror)
+            // Position destination window based on mode
+            // Use inner_size (without border) for destination
             if let Some(dest) = &self.destination_window {
                 dest.set_title("RustFrame Casting - Share THIS window in Google Meet");
                 
-                if let Err(e) = dest.set_exclude_from_capture(self.settings.exclude_from_capture) {
-                    error!("Failed to set exclude_from_capture: {}", e);
+                // Position based on mode:
+                // - exclude_from_capture=true (prod mode): off-screen, user doesn't see it
+                // - exclude_from_capture=false (dev mode): beside overlay, both visible
+                if self.settings.exclude_from_capture {
+                    dest.position_offscreen(inner_size);
+                } else {
+                    dest.position_beside_overlay(overlay_position, inner_size);
                 }
-                
-                // Calculate position for destination (to the right of overlay)
-                let dest_position = PhysicalPosition::new(
-                    overlay_position.x + size.width as i32 + 20,
-                    overlay_position.y
-                );
-                dest.show_at(dest_position, size);
             }
 
             // Initialize Windows.Graphics.Capture engine with settings
@@ -329,11 +560,14 @@ impl RustFrameApp {
         if let Some(overlay) = &self.overlay_window {
             let cursor = if self.settings.show_cursor { "ON" } else { "OFF" };
             let border = if self.settings.show_border { "ON" } else { "OFF" };
-            let exclude = if self.settings.exclude_from_capture { "ON" } else { "OFF" };
+            // E = Production mode: destination window behind overlay (single window view)
+            // OFF = Dev mode: two windows side by side
+            // ON = Prod mode: destination hidden behind overlay
+            let mode = if self.settings.exclude_from_capture { "PROD(single)" } else { "DEV(side-by-side)" };
             
             let title = format!(
-                "RustFrame | [C]ursor:{} [B]order:{} [E]xclude:{} | ENTER=Start ESC=Exit",
-                cursor, border, exclude
+                "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} | ENTER=Start ESC=Exit",
+                cursor, border, mode
             );
             overlay.set_title(&title);
         }

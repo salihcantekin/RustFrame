@@ -49,6 +49,7 @@ windows = { version = "0.58", features = [
 
     # UI and Window Management
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
 
     # Security (needed for some COM operations)
@@ -65,6 +66,10 @@ thiserror = "1.0"
 # Additional utilities
 bytemuck = { version = "1.14", features = ["derive"] }
 pollster = "0.3"
+
+# System tray icon
+tray-icon = "0.19"
+muda = "0.15"
 
 # Windows raw handle support
 [target.'cfg(windows)'.dependencies]

@@ -16,7 +16,7 @@
 // - Displays captured content
 // - Can be shared on Teams/Zoom/Discord
 
-use anyhow::{Result, Context, anyhow};
+use anyhow::{Result, Context};
 use log::info;
 use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
@@ -25,19 +25,30 @@ use winit::{
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
 };
 use std::sync::Arc;
+use std::cell::Cell;
 
 use crate::capture::CaptureRect;
 
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HWND, RECT, COLORREF},
+    Foundation::{HWND, RECT, COLORREF, LRESULT, WPARAM, LPARAM},
     Graphics::Gdi::{CreateSolidBrush, FillRect, FrameRect, GetDC, ReleaseDC, DeleteObject, HBRUSH},
     UI::WindowsAndMessaging::*,
 };
 
+// Constants for WM_SETCURSOR
+#[cfg(windows)]
+const WM_SETCURSOR: u32 = 0x0020;
+
+// Thread-local storage for border width used in window subclass
+thread_local! {
+    static BORDER_WIDTH: Cell<u32> = const { Cell::new(5) };
+}
+
 /// Wrapper for the overlay (selector) window
 pub struct OverlayWindow {
     window: Arc<Window>,
+    border_width: Cell<u32>,
 }
 
 impl OverlayWindow {
@@ -77,6 +88,7 @@ impl OverlayWindow {
 
         Ok(Self {
             window: Arc::new(window),
+            border_width: Cell::new(5),
         })
     }
 
@@ -139,6 +151,11 @@ impl OverlayWindow {
     pub fn hide(&self) {
         self.window.set_visible(false);
     }
+    
+    /// Show the overlay window
+    pub fn show(&self) {
+        self.window.set_visible(true);
+    }
 
     /// Set the window title
     pub fn set_title(&self, title: &str) {
@@ -171,6 +188,22 @@ impl OverlayWindow {
         }
     }
 
+    /// Get the capture rectangle INSIDE the border (excludes border from capture)
+    /// This is used when border is visible to avoid capturing the border itself
+    pub fn get_capture_rect_inner(&self, border_width: u32) -> CaptureRect {
+        let position = self.window.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
+        let size = self.window.inner_size();
+        let border = border_width as i32;
+        
+        // Offset position by border width and reduce size by 2*border
+        CaptureRect {
+            x: position.x + border,
+            y: position.y + border,
+            width: size.width.saturating_sub(border_width * 2),
+            height: size.height.saturating_sub(border_width * 2),
+        }
+    }
+
     /// Get a reference to the underlying winit window
     pub fn get_window(&self) -> &Arc<Window> {
         &self.window
@@ -188,12 +221,21 @@ impl OverlayWindow {
     }
 
     /// Convert the overlay to a hollow frame (only border visible, interior click-through)
-    /// Uses SetWindowRgn to create a "donut" shaped window region
+    /// Uses SetWindowRgn for the visual appearance and subclass for hit testing
     #[cfg(windows)]
     pub fn make_hollow_frame(&self, border_width: u32) {
         use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, SetWindowRgn, RGN_DIFF};
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, HWND_TOPMOST, SWP_NOACTIVATE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SetWindowLongPtrW, GetWindowLongPtrW,
+            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, HWND_TOPMOST, SWP_NOACTIVATE,
+            GWL_STYLE, GWL_EXSTYLE, WS_POPUP, WS_VISIBLE, WS_THICKFRAME,
+            WS_EX_TOPMOST, WS_EX_TOOLWINDOW, WS_EX_LAYERED,
+            SetLayeredWindowAttributes, LWA_COLORKEY,
+        };
         use windows::Win32::Foundation::HWND;
+        
+        self.border_width.set(border_width);
+        BORDER_WIDTH.with(|b| b.set(border_width));
         
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -209,20 +251,35 @@ impl OverlayWindow {
             unsafe {
                 let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
 
-                // Create outer rectangle (full window)
-                let outer_rgn = CreateRectRgn(0, 0, width, height);
+                // Remove title bar AND thick frame - use only popup for clean look
+                // WS_THICKFRAME causes the ugly blue border, so we remove it
+                let new_style = WS_POPUP | WS_VISIBLE;
+                SetWindowLongPtrW(hwnd, GWL_STYLE, new_style.0 as isize);
                 
-                // Create inner rectangle (the hole)
+                // Add layered and toolwindow style
+                let ex_style = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style.0 as isize);
+                
+                // Set a color key for transparency (we'll use a specific color for the hole)
+                // Actually we'll use region approach but with extended resize area
+                
+                // Create outer rectangle including resize margin
+                let resize_margin = 8i32; // Extra margin for resize handles
+                let outer_rgn = CreateRectRgn(-resize_margin, -resize_margin, width + resize_margin, height + resize_margin);
+                
+                // Create inner rectangle (the hole) - but leave border visible
                 let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
                 
-                // Subtract inner from outer to create hollow frame
+                // Subtract inner from outer to create hollow frame with resize margins
                 let _ = CombineRgn(outer_rgn, outer_rgn, inner_rgn, RGN_DIFF);
                 
-                // Apply the region to the window
-                // The window will only exist where the region is defined (the border)
+                // Apply the region
                 SetWindowRgn(hwnd, outer_rgn, true);
                 
-                // Make window always on top
+                // Install window subclass for custom hit testing
+                Self::install_subclass(hwnd, border_width);
+                
+                // Force window to update
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -235,11 +292,121 @@ impl OverlayWindow {
         }
     }
 
+    /// Install a window subclass for custom WM_NCHITTEST handling
+    #[cfg(windows)]
+    unsafe fn install_subclass(hwnd: HWND, border_width: u32) {
+        use windows::Win32::UI::Shell::{SetWindowSubclass, DefSubclassProc};
+        use std::ptr;
+        
+        // Subclass procedure for custom hit testing
+        unsafe extern "system" fn subclass_proc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+            _uidsubclass: usize,
+            _dwrefdata: usize,
+        ) -> LRESULT {
+            // Handle cursor changes
+            if msg == WM_SETCURSOR {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    LoadCursorW, SetCursor, IDC_SIZEALL, IDC_SIZENWSE, IDC_SIZENESW,
+                    IDC_SIZEWE, IDC_SIZENS, HTCAPTION, HTTOPLEFT, HTTOPRIGHT,
+                    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT, HTRIGHT, HTTOP, HTBOTTOM,
+                };
+                
+                let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
+                
+                let cursor_id = match hit_test {
+                    x if x == HTCAPTION => Some(IDC_SIZEALL),
+                    x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
+                    x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
+                    x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
+                    x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
+                    _ => None,
+                };
+                
+                if let Some(id) = cursor_id {
+                    if let Ok(cur) = LoadCursorW(None, id) {
+                        let _ = SetCursor(cur);
+                    }
+                    return LRESULT(1); // Cursor handled
+                }
+                return DefSubclassProc(hwnd, msg, wparam, lparam);
+            }
+            
+            if msg == WM_NCHITTEST {
+                // Get cursor position
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                
+                // Get window rect
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut rect);
+                
+                let border = BORDER_WIDTH.with(|b| b.get()) as i32;
+                let resize_margin = border.max(8); // At least 8px for resize
+                
+                // Check if on edges for resize
+                let on_left = x >= rect.left - 4 && x < rect.left + resize_margin;
+                let on_right = x >= rect.right - resize_margin && x < rect.right + 4;
+                let on_top = y >= rect.top - 4 && y < rect.top + resize_margin;
+                let on_bottom = y >= rect.bottom - resize_margin && y < rect.bottom + 4;
+                
+                // Determine hit test result
+                if on_top && on_left {
+                    return LRESULT(HTTOPLEFT as isize);
+                } else if on_top && on_right {
+                    return LRESULT(HTTOPRIGHT as isize);
+                } else if on_bottom && on_left {
+                    return LRESULT(HTBOTTOMLEFT as isize);
+                } else if on_bottom && on_right {
+                    return LRESULT(HTBOTTOMRIGHT as isize);
+                } else if on_left {
+                    return LRESULT(HTLEFT as isize);
+                } else if on_right {
+                    return LRESULT(HTRIGHT as isize);
+                } else if on_top {
+                    // Top center = caption (for dragging)
+                    let center_start = rect.left + (rect.right - rect.left) / 3;
+                    let center_end = rect.right - (rect.right - rect.left) / 3;
+                    if x >= center_start && x <= center_end {
+                        return LRESULT(HTCAPTION as isize);
+                    }
+                    return LRESULT(HTTOP as isize);
+                } else if on_bottom {
+                    return LRESULT(HTBOTTOM as isize);
+                }
+                
+                // Check if in border area (for dragging)
+                let in_border = (x >= rect.left && x < rect.left + border) ||
+                               (x >= rect.right - border && x < rect.right) ||
+                               (y >= rect.top && y < rect.top + border) ||
+                               (y >= rect.bottom - border && y < rect.bottom);
+                
+                if in_border {
+                    return LRESULT(HTCAPTION as isize); // Allow dragging from border
+                }
+                
+                // Interior is transparent (click-through)
+                return LRESULT(HTTRANSPARENT as isize);
+            }
+            
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+        
+        // Install the subclass
+        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, 0);
+    }
+
     /// Update the hollow frame region after resize
     #[cfg(windows)]
     pub fn update_hollow_frame(&self, border_width: u32) {
         use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, SetWindowRgn, RGN_DIFF};
         use windows::Win32::Foundation::HWND;
+        
+        self.border_width.set(border_width);
+        BORDER_WIDTH.with(|b| b.set(border_width));
         
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -255,10 +422,11 @@ impl OverlayWindow {
             unsafe {
                 let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
 
-                // Create new outer rectangle
-                let outer_rgn = CreateRectRgn(0, 0, width, height);
+                // Create outer rectangle with resize margin
+                let resize_margin = 8i32;
+                let outer_rgn = CreateRectRgn(-resize_margin, -resize_margin, width + resize_margin, height + resize_margin);
                 
-                // Create new inner rectangle
+                // Create inner rectangle (the hole)
                 let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
                 
                 // Subtract inner from outer
@@ -292,9 +460,9 @@ impl DestinationWindow {
         // Debug mode: show window for debugging, positioned next to overlay
         // Release mode: hidden until capture starts
         #[cfg(debug_assertions)]
-        let (initial_visible, initial_position) = (true, PhysicalPosition::new(550, 100));
+        let (initial_visible, initial_position, with_decorations) = (true, PhysicalPosition::new(550, 100), true);
         #[cfg(not(debug_assertions))]
-        let (initial_visible, initial_position) = (false, PhysicalPosition::new(100, 100));
+        let (initial_visible, initial_position, with_decorations) = (false, PhysicalPosition::new(100, 100), false);
 
         info!("Creating destination window (initially {})", if initial_visible { "visible" } else { "hidden" });
 
@@ -303,8 +471,8 @@ impl DestinationWindow {
             .with_title("RustFrame - Screen Share This Window")
             .with_inner_size(LogicalSize::new(400, 300)) // Will be resized to match overlay
             .with_position(initial_position)
-            .with_resizable(true) // User can resize
-            .with_decorations(true) // Normal window with title bar
+            .with_resizable(with_decorations) // Resizable only in debug mode
+            .with_decorations(with_decorations) // Title bar only in debug mode
             .with_transparent(false) // Opaque background
             .with_visible(initial_visible);
 
@@ -474,9 +642,136 @@ impl DestinationWindow {
         self.window.request_redraw();
     }
 
+    /// Resize the destination window
+    pub fn resize(&self, size: PhysicalSize<u32>) {
+        let _ = self.window.request_inner_size(size);
+    }
+
     /// Get the window's current size (for renderer resize)
     pub fn get_size(&self) -> PhysicalSize<u32> {
         self.window.inner_size()
+    }
+
+    /// Get the window's current position
+    pub fn get_outer_position(&self) -> PhysicalPosition<i32> {
+        self.window.outer_position().unwrap_or(PhysicalPosition::new(0, 0))
+    }
+
+    /// Position destination window OFF-SCREEN (production mode)
+    /// User won't see it, but Google Meet can still capture it
+    /// This prevents infinite mirror since dest is outside capture region
+    #[cfg(windows)]
+    pub fn position_offscreen(&self, size: PhysicalSize<u32>) {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::Win32::Foundation::HWND;
+        
+        // Position far off-screen (left side, way outside visible area)
+        // Google Meet can still capture the window content
+        let offscreen_position = PhysicalPosition::new(-9999, 100);
+        
+        let _ = self.window.request_inner_size(size);
+        self.window.set_outer_position(offscreen_position);
+        self.window.set_visible(true);
+        
+        // Make frameless and hide from taskbar
+        let handle = match self.window.window_handle() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
+                
+                // Remove title bar (frameless)
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                let new_style = style & !(WS_CAPTION.0 as i32 | WS_THICKFRAME.0 as i32);
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                
+                // Add WS_EX_TOOLWINDOW to hide from taskbar
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_TOOLWINDOW.0 as i32);
+                
+                // Force window to update with new styles
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                );
+            }
+        }
+        
+        info!("Destination window positioned OFF-SCREEN (frameless, hidden from taskbar) with size {:?}", size);
+    }
+    
+    #[cfg(not(windows))]
+    pub fn position_offscreen(&self, size: PhysicalSize<u32>) {
+        // Fallback: position off-screen
+        let offscreen_position = PhysicalPosition::new(-9999, 100);
+        let _ = self.window.request_inner_size(size);
+        self.window.set_outer_position(offscreen_position);
+        self.window.set_visible(true);
+    }
+
+    /// Position destination window BESIDE the overlay (development mode)
+    /// Also restores title bar if it was hidden in PROD mode
+    #[cfg(windows)]
+    pub fn position_beside_overlay(&self, overlay_position: PhysicalPosition<i32>, size: PhysicalSize<u32>) {
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        use windows::Win32::Foundation::HWND;
+        
+        // Position to the right of overlay
+        let dest_position = PhysicalPosition::new(
+            overlay_position.x + size.width as i32 + 20,
+            overlay_position.y
+        );
+        let _ = self.window.request_inner_size(size);
+        self.window.set_outer_position(dest_position);
+        self.window.set_visible(true);
+        
+        // Restore title bar and normal window style (in case we're coming from PROD mode)
+        let handle = match self.window.window_handle() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
+                
+                // Restore title bar and frame
+                let style = GetWindowLongW(hwnd, GWL_STYLE);
+                let new_style = style | WS_CAPTION.0 as i32 | WS_THICKFRAME.0 as i32;
+                SetWindowLongW(hwnd, GWL_STYLE, new_style);
+                
+                // Remove WS_EX_TOOLWINDOW to show in taskbar again
+                let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                let new_ex_style = ex_style & !(WS_EX_TOOLWINDOW.0 as i32);
+                SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style);
+                
+                // Force window to update with new styles
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                );
+            }
+        }
+        
+        info!("Destination window positioned BESIDE overlay at {:?} (with title bar)", dest_position);
+    }
+    
+    #[cfg(not(windows))]
+    pub fn position_beside_overlay(&self, overlay_position: PhysicalPosition<i32>, size: PhysicalSize<u32>) {
+        let dest_position = PhysicalPosition::new(
+            overlay_position.x + size.width as i32 + 20,
+            overlay_position.y
+        );
+        let _ = self.window.request_inner_size(size);
+        self.window.set_outer_position(dest_position);
+        self.window.set_visible(true);
     }
 
     /// Get a reference to the underlying winit window
