@@ -1,0 +1,238 @@
+# RustFrame
+
+**A modern Windows screen region capture tool built with Rust, using Windows.Graphics.Capture API**
+
+RustFrame is a RegionToShare clone that allows you to select a region of your screen and mirror it to a separate window, perfect for sharing specific content on Teams, Zoom, or Discord without exposing your entire screen.
+
+## 🎯 Features
+
+- ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
+- ✅ **Transparent Overlay**: Frameless, transparent selection window with Win32 styling
+- ✅ **Real-time Mirroring**: Captured region displayed in a shareable window
+- ✅ **Drag-to-Move**: Click and drag the overlay window to reposition
+- ✅ **Resizable Selection**: Resize the overlay to select your desired region
+- ✅ **GPU Rendering**: wgpu-based rendering pipeline with Direct3D 12 backend
+- ✅ **Extensively Documented**: Every module includes detailed comments explaining the "why"
+
+## 🏗️ Architecture
+
+### Core Modules
+
+#### `main.rs` - Application Orchestrator
+- Event loop management (winit-based)
+- Window lifecycle coordination
+- Mouse/keyboard input handling
+- Drag functionality implementation
+
+#### `capture.rs` - Windows.Graphics.Capture Implementation
+- **Direct3D 11 device creation** with BGRA support
+- **WinRT interop** between Win32 D3D11 and WinRT APIs
+- **GraphicsCaptureItem** for monitor/window capture
+- **Frame pool management** with double-buffering
+- **Event-driven frame capture** using TypedEventHandler
+- Thread-safe frame access with Arc<Mutex<>>
+
+#### `window_manager.rs` - Window Management
+- **OverlayWindow**: Transparent, borderless, always-on-top selector
+  - Win32 `SetLayeredWindowAttributes` for true transparency
+  - `WS_EX_LAYERED` extended window style
+  - Drag-to-move functionality
+- **DestinationWindow**: Standard shareable window with title bar
+
+#### `renderer.rs` - wgpu Rendering Pipeline
+- **D3D11 → wgpu texture bridge** with staging texture
+- **CPU-side texture copying** (map → copy → unmap)
+- **Full-screen quad rendering** with texture sampling
+- **WGSL shaders** for GPU processing
+- Automatic resize handling
+
+#### `shader.wgsl` - GPU Shaders
+- Vertex shader: NDC to clip space transformation
+- Fragment shader: Texture sampling and output
+
+## 🚀 Usage
+
+### Building
+
+See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed build setup.
+
+**Quick start with RustRover:**
+1. Open project in RustRover
+2. Press `Ctrl+F9` to build
+3. Press `Shift+F10` to run
+
+**Command line (requires proper MSVC setup):**
+```bash
+cargo build --release
+cargo run --release
+```
+
+### Running
+
+1. **Launch RustFrame**
+   ```bash
+   cargo run
+   ```
+
+2. **Two windows appear:**
+   - **Overlay Window** (transparent, borderless): This is your selection tool
+   - **Destination Window** (normal): This is what you share on Teams/Zoom
+
+3. **Position the overlay:**
+   - **Click and drag** to move the overlay window
+   - **Resize** using window edges (standard Windows resize)
+   - Position it over the content you want to share
+
+4. **Start capturing:**
+   - Press **ENTER** to start real-time capture
+   - The destination window will display the selected region
+
+5. **Share on Teams/Zoom:**
+   - Select "RustFrame - Captured Region" window in your screen sharing dialog
+   - Only the captured region will be visible to participants
+
+6. **Exit:**
+   - Press **ESC** to close the application
+
+## 🛠️ Technical Details
+
+### Why Windows.Graphics.Capture?
+
+Traditional screen capture methods (GDI's `BitBlt`) have significant limitations:
+- **CPU-bound**: Involves CPU-side memory copies
+- **Poor performance**: Can't capture modern DWM-composited content efficiently
+- **Missing features**: No support for HDR, multi-GPU, or proper DPI scaling
+
+**Windows.Graphics.Capture (WGC) solves these:**
+- **GPU-accelerated**: Zero-copy capture using Direct3D 11 textures
+- **Modern**: Supports DWM, HDR, and multi-monitor setups
+- **Efficient**: Lower latency and CPU usage
+- **Future-proof**: Microsoft's recommended API for Windows 10/11
+
+### Texture Pipeline
+
+```
+Screen (DWM)
+    ↓ (GPU, Windows.Graphics.Capture)
+D3D11 Texture
+    ↓ (GPU-to-GPU copy)
+Staging Texture (CPU-readable)
+    ↓ (Map + CPU copy)
+CPU Memory Buffer
+    ↓ (Upload to GPU)
+wgpu Texture
+    ↓ (GPU rendering)
+Swapchain → Window
+```
+
+**Performance note:** The CPU copy step (staging texture) adds ~2-5ms latency. For production use, implement Direct3D 12 resource sharing for zero-copy interop.
+
+### COM Object Safety
+
+This project uses many Windows COM objects (`ID3D11Device`, `GraphicsCaptureSession`, etc.). Key safety considerations:
+
+1. **COM Initialization**: `CoInitializeEx` called with `COINIT_MULTITHREADED`
+2. **Reference Counting**: COM objects use automatic reference counting
+3. **Thread Safety**: `Send`/`Sync` implemented for COM wrappers after verification
+4. **Explicit Cleanup**: `Drop` implementations for proper resource cleanup
+
+### Transparency Implementation
+
+```rust
+// Step 1: Enable layered window
+SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED);
+
+// Step 2: Set alpha transparency
+SetLayeredWindowAttributes(hwnd, COLORREF(0), 200, LWA_ALPHA);
+//                                           ↑     ↑    ↑
+//                                    color key  alpha  mode
+```
+
+- **WS_EX_LAYERED**: Enables per-window alpha blending
+- **LWA_ALPHA**: Use alpha channel for transparency
+- **200/255 opacity**: Slightly transparent (adjust as needed)
+
+## 📋 Dependencies
+
+### Core Libraries
+- **`winit`**: Cross-platform window creation and event handling
+- **`wgpu`**: Modern GPU graphics API (WebGPU for Rust)
+- **`windows`**: Official Microsoft Windows API bindings
+
+### Key Features Used
+- `Graphics_Capture`: Windows.Graphics.Capture API
+- `Graphics_DirectX_Direct3D11`: D3D11 texture interop
+- `Win32_Graphics_Dxgi`: DirectX Graphics Infrastructure
+- `Win32_System_WinRT`: WinRT-to-Win32 bridges
+
+See [Cargo.toml](Cargo.toml) for complete dependency list with explanations.
+
+## 🔧 Known Limitations & TODOs
+
+### Current Limitations
+
+1. **Captures entire monitor** (not cropped to overlay region yet)
+   - WGC captures the whole monitor
+   - Cropping should happen in the renderer
+   - **TODO**: Implement texture cropping based on overlay bounds
+
+2. **CPU-side texture copying** (not zero-copy)
+   - Uses staging texture with Map/Unmap
+   - Adds 2-5ms latency per frame
+   - **TODO**: Implement Direct3D 12 resource sharing
+
+3. **No visual border on overlay** (hard to see transparent window)
+   - **TODO**: Render a colored rectangle outline in overlay window
+
+4. **Resizing uses default Windows handles** (not ideal for borderless)
+   - **TODO**: Implement custom resize handles
+
+### Future Enhancements
+
+- [ ] Implement texture cropping (overlay region only)
+- [ ] Add visual border outline to overlay
+- [ ] Implement custom resize handles
+- [ ] Add hotkeys (F1 to show/hide overlay, etc.)
+- [ ] Support multi-monitor selection
+- [ ] Add window picker (capture specific window instead of monitor)
+- [ ] Implement zero-copy D3D12 texture sharing
+- [ ] Add settings UI (framerate, quality, etc.)
+- [ ] Save/load region presets
+
+## 📚 Learning Resources
+
+This project is designed as a learning resource. Key concepts demonstrated:
+
+### Windows Graphics APIs
+- **COM Programming**: Creating and managing COM objects in Rust
+- **Windows.Graphics.Capture**: Modern screen capture API
+- **Direct3D 11**: GPU device creation, texture management
+- **DXGI**: DirectX Graphics Infrastructure and swapchains
+- **WinRT Interop**: Bridging Win32 and WinRT APIs
+
+### Rust Systems Programming
+- **Unsafe Code**: Proper use of `unsafe` with justification
+- **FFI**: Calling Windows APIs through `windows` crate
+- **Resource Management**: RAII, Drop implementations
+- **Thread Safety**: Arc, Mutex, Send/Sync
+
+### Graphics Programming
+- **GPU Rendering**: wgpu render pipelines
+- **Shader Programming**: WGSL shaders
+- **Texture Management**: Staging, mapping, uploading
+- **Swapchain Presentation**: Frame synchronization
+
+## 🙏 Acknowledgments
+
+- **RegionToShare**: Original inspiration
+- **Microsoft**: Windows.Graphics.Capture API documentation
+- **wgpu Community**: Excellent graphics API and examples
+- **windows-rs**: Official Rust bindings for Windows
+
+## 📄 License
+
+This project is for educational purposes. Use at your own risk.
+
+---
+
+**Built with ❤️ and Rust 🦀 for the Windows platform**

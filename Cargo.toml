@@ -1,0 +1,82 @@
+[package]
+name = "RustFrame"
+version = "0.1.0"
+edition = "2021"
+authors = ["Your Name"]
+description = "A Windows screen region capture tool using Windows.Graphics.Capture API"
+
+[dependencies]
+# Window management - cross-platform windowing library
+winit = { version = "0.30", features = ["rwh_06"] }
+
+# Raw window handle support - needed to bridge winit and wgpu
+raw-window-handle = "0.6"
+
+# GPU graphics - WebGPU implementation for Rust
+wgpu = { version = "23", features = ["dx12"] }
+
+# Async runtime - needed for wgpu and some Windows APIs
+tokio = { version = "1", features = ["full"] }
+
+# Futures utilities
+futures = "0.3"
+
+# Windows API bindings - this is where the magic happens
+# We need MANY specific features for WGC and D3D11
+windows = { version = "0.58", features = [
+    # Foundation types (IInspectable, HRESULT, HSTRING, etc.)
+    "Foundation",
+    "Foundation_Collections",
+
+    # Windows.Graphics.Capture - the star of the show
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+
+    # Win32 Graphics APIs
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+
+    # Win32 System APIs
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_System_Com",
+
+    # UI and Window Management
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+
+    # Security (needed for some COM operations)
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+# Logging and error handling
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Additional utilities
+bytemuck = { version = "1.14", features = ["derive"] }
+pollster = "0.3"
+
+# Windows raw handle support
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[profile.release]
+# Optimize for performance
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+# Faster compile times during development
+opt-level = 1
