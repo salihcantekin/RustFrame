@@ -31,7 +31,8 @@ const ID_BTN_CANCEL: i32 = 107;
 
 // Dialog dimensions
 const DIALOG_WIDTH: i32 = 420;
-const DIALOG_HEIGHT: i32 = 320;
+const DIALOG_HEIGHT_DEV: i32 = 290;
+const DIALOG_HEIGHT_PROD: i32 = 250;
 
 // Thread-local state for dialog
 thread_local! {
@@ -39,15 +40,20 @@ thread_local! {
     static SETTINGS_CHANGED: RefCell<bool> = RefCell::new(false);
     static DIALOG_HWND: RefCell<isize> = RefCell::new(0);
     static DIALOG_FONT: RefCell<isize> = RefCell::new(0);
+    static DIALOG_DEV_MODE: RefCell<bool> = RefCell::new(false);
 }
 
 /// Show the settings dialog
 /// Returns Some(CaptureSettings) if user clicked Save, None if cancelled
+/// dev_mode: if true, shows production mode option
 #[cfg(windows)]
-pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<CaptureSettings> {
+pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) -> Option<CaptureSettings> {
     use windows::core::PCWSTR;
     
     unsafe {
+        // Store dev_mode for create_controls
+        DIALOG_DEV_MODE.with(|d| *d.borrow_mut() = dev_mode);
+        
         // Initialize common controls for modern visual style
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -105,8 +111,9 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
         // Get screen dimensions for centering
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        let dialog_height = if dev_mode { DIALOG_HEIGHT_DEV } else { DIALOG_HEIGHT_PROD };
         let x = (screen_width - DIALOG_WIDTH) / 2;
-        let y = (screen_height - DIALOG_HEIGHT) / 2;
+        let y = (screen_height - dialog_height) / 2;
         
         // Create the dialog window with modern style
         let window_name = wide_string("RustFrame Settings");
@@ -118,7 +125,7 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
             x,
             y,
             DIALOG_WIDTH,
-            DIALOG_HEIGHT,
+            dialog_height,
             None,
             None,
             GetModuleHandleW(None).unwrap(),
@@ -146,8 +153,8 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
         // Store hwnd for reference
         DIALOG_HWND.with(|h| *h.borrow_mut() = hwnd.0 as isize);
         
-        // Create controls
-        create_controls(hwnd, current_settings, hfont);
+        // Create controls (pass dev_mode for conditional UI)
+        create_controls(hwnd, current_settings, hfont, dev_mode);
         
         // Message loop - run until window is closed
         let mut msg = MSG::default();
@@ -186,7 +193,7 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
 use windows::Win32::Graphics::Gdi::GetDeviceCaps;
 
 #[cfg(windows)]
-unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT) {
+unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, dev_mode: bool) {
     use windows::core::PCWSTR;
     
     let hinstance = GetModuleHandleW(None).unwrap();
@@ -298,24 +305,27 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT) 
     let _ = SendMessageW(px_hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     y_pos += spacing;
     
-    // Checkbox: Production Mode
-    let text = wide_string("  Production mode (hide destination window)");
-    let check_prod = CreateWindowExW(
-        WINDOW_EX_STYLE::default(),
-        PCWSTR(button_class.as_ptr()),
-        PCWSTR(text.as_ptr()),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-        left_margin, y_pos, control_width, control_height,
-        hwnd,
-        HMENU(ID_CHECK_PROD_MODE as *mut c_void),
-        hinstance,
-        None,
-    ).unwrap();
-    let _ = SendMessageW(check_prod, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
-    if settings.exclude_from_capture {
-        let _ = SendMessageW(check_prod, BM_SETCHECK, WPARAM(BST_CHECKED.0 as usize), LPARAM(0));
+    // Checkbox: Production Mode (only in dev mode)
+    if dev_mode {
+        let text = wide_string("  Production mode (hide destination window)");
+        let check_prod = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            PCWSTR(button_class.as_ptr()),
+            PCWSTR(text.as_ptr()),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            left_margin, y_pos, control_width, control_height,
+            hwnd,
+            HMENU(ID_CHECK_PROD_MODE as *mut c_void),
+            hinstance,
+            None,
+        ).unwrap();
+        let _ = SendMessageW(check_prod, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
+        if settings.exclude_from_capture {
+            let _ = SendMessageW(check_prod, BM_SETCHECK, WPARAM(BST_CHECKED.0 as usize), LPARAM(0));
+        }
+        y_pos += spacing;
     }
-    y_pos += spacing + 20;
+    y_pos += 20;
     
     // Buttons - Save and Cancel
     let btn_width = 100;
@@ -393,6 +403,8 @@ unsafe extern "system" fn settings_dialog_proc(
 
 #[cfg(windows)]
 unsafe fn save_settings_from_controls(hwnd: HWND) {
+    let dev_mode = DIALOG_DEV_MODE.with(|d| *d.borrow());
+    
     DIALOG_SETTINGS.with(|settings_cell| {
         let mut settings_opt = settings_cell.borrow_mut();
         if let Some(ref mut settings) = *settings_opt {
@@ -405,8 +417,11 @@ unsafe fn save_settings_from_controls(hwnd: HWND) {
                 settings.show_border = SendMessageW(check_border, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == BST_CHECKED.0 as isize;
             }
             
-            if let Ok(check_prod) = GetDlgItem(hwnd, ID_CHECK_PROD_MODE) {
-                settings.exclude_from_capture = SendMessageW(check_prod, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == BST_CHECKED.0 as isize;
+            // Production mode checkbox only exists in dev mode
+            if dev_mode {
+                if let Ok(check_prod) = GetDlgItem(hwnd, ID_CHECK_PROD_MODE) {
+                    settings.exclude_from_capture = SendMessageW(check_prod, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == BST_CHECKED.0 as isize;
+                }
             }
             
             // Read border width
@@ -437,7 +452,7 @@ fn wide_string(s: &str) -> Vec<u16> {
 }
 
 #[cfg(not(windows))]
-pub fn show_settings_dialog(_current_settings: &CaptureSettings) -> Option<CaptureSettings> {
+pub fn show_settings_dialog(_current_settings: &CaptureSettings, _dev_mode: bool) -> Option<CaptureSettings> {
     // Settings dialog not supported on non-Windows platforms
     None
 }

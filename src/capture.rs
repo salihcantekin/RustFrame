@@ -75,15 +75,26 @@ pub struct CaptureSettings {
 }
 
 impl Default for CaptureSettings {
+    /// Default settings for PRODUCTION mode
     fn default() -> Self {
         Self {
-            show_cursor: false, // Hide cursor by default (prevents double cursor)
+            show_cursor: true,  // Show cursor in production
             show_border: true,
             border_width: 3,
-            // Set to false for Google Meet "window share" compatibility
-            // If true: prevents infinite mirror but window share shows black
-            // If false: window share works, destination must be outside capture region
-            exclude_from_capture: false,
+            // Production mode: destination hidden behind overlay
+            exclude_from_capture: true,
+        }
+    }
+}
+
+impl CaptureSettings {
+    /// Development mode settings - destination window visible beside overlay
+    pub fn for_development() -> Self {
+        Self {
+            show_cursor: true,
+            show_border: true,
+            border_width: 3,
+            exclude_from_capture: false, // Show destination window for debugging
         }
     }
 }

@@ -6,6 +6,9 @@
 // 3. Coordination between capture and rendering subsystems
 // 4. System tray icon with context menu
 
+// Hide console window in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use anyhow::Result;
 use log::{info, error};
 use winit::application::ApplicationHandler;
@@ -70,16 +73,27 @@ struct RustFrameApp {
     menu_cursor: Option<CheckMenuItem>,
     menu_border: Option<CheckMenuItem>,
     menu_exclude: Option<CheckMenuItem>,
+    
+    /// Development mode flag (shows extra options)
+    dev_mode: bool,
 }
 
 impl RustFrameApp {
-    fn new() -> Self {
+    fn new(dev_mode: bool) -> Self {
+        let settings = if dev_mode {
+            info!("Starting in DEVELOPMENT mode (destination window visible)");
+            CaptureSettings::for_development()
+        } else {
+            info!("Starting in PRODUCTION mode (destination hidden)");
+            CaptureSettings::default()
+        };
+        
         Self {
             overlay_window: None,
             destination_window: None,
             capture_engine: None,
             renderer: None,
-            settings: CaptureSettings::default(),
+            settings,
             is_selecting: true,
             is_dragging: false,
             last_mouse_pos: None,
@@ -87,6 +101,7 @@ impl RustFrameApp {
             menu_cursor: None,
             menu_border: None,
             menu_exclude: None,
+            dev_mode,
         }
     }
     
@@ -107,13 +122,20 @@ impl RustFrameApp {
             self.settings.show_border,
             None,
         );
-        let menu_exclude = CheckMenuItem::with_id(
-            menu_ids::TOGGLE_EXCLUDE,
-            "Production Mode (Single Window)",
-            true,
-            self.settings.exclude_from_capture,
-            None,
-        );
+        
+        // Production mode option only visible in dev mode
+        let menu_exclude = if self.dev_mode {
+            Some(CheckMenuItem::with_id(
+                menu_ids::TOGGLE_EXCLUDE,
+                "Production Mode (Single Window)",
+                true,
+                self.settings.exclude_from_capture,
+                None,
+            ))
+        } else {
+            None
+        };
+        
         let menu_settings = MenuItem::with_id(menu_ids::SETTINGS, "Settings...", true, None);
         let menu_exit = MenuItem::with_id(menu_ids::EXIT, "Exit", true, None);
         
@@ -121,7 +143,12 @@ impl RustFrameApp {
         let menu = Menu::new();
         let _ = menu.append(&menu_cursor);
         let _ = menu.append(&menu_border);
-        let _ = menu.append(&menu_exclude);
+        
+        // Only add production mode option in dev mode
+        if let Some(ref exclude_item) = menu_exclude {
+            let _ = menu.append(exclude_item);
+        }
+        
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&menu_settings);
         let _ = menu.append(&PredefinedMenuItem::separator());
@@ -130,7 +157,7 @@ impl RustFrameApp {
         // Store menu items for later updates
         self.menu_cursor = Some(menu_cursor);
         self.menu_border = Some(menu_border);
-        self.menu_exclude = Some(menu_exclude);
+        self.menu_exclude = menu_exclude;
         
         // Create a simple icon (16x16 blue square)
         let icon_rgba = create_default_icon();
@@ -597,7 +624,7 @@ impl RustFrameApp {
     fn show_settings_dialog(&mut self) {
         info!("Opening settings dialog...");
         
-        if let Some(new_settings) = settings_dialog::show_settings_dialog(&self.settings) {
+        if let Some(new_settings) = settings_dialog::show_settings_dialog(&self.settings, self.dev_mode) {
             info!("Settings changed, applying...");
             
             // Update cursor menu checkbox
@@ -693,12 +720,29 @@ fn main() -> Result<()> {
     info!("RustFrame starting...");
     info!("Using Windows.Graphics.Capture API (not GDI/BitBlt)");
 
+    // Determine if we should run in development mode:
+    // 1. Debug builds always run in DEV mode
+    // 2. Release builds with --dev argument run in DEV mode
+    // 3. Otherwise, run in PRODUCTION mode
+    let args: Vec<String> = std::env::args().collect();
+    let has_dev_flag = args.iter().any(|arg| arg == "--dev" || arg == "-d");
+    
+    #[cfg(debug_assertions)]
+    let dev_mode = true; // Always DEV mode in debug builds
+    
+    #[cfg(not(debug_assertions))]
+    let dev_mode = has_dev_flag; // Only DEV mode if --dev flag is passed
+    
+    if has_dev_flag && cfg!(not(debug_assertions)) {
+        info!("--dev flag detected, forcing development mode");
+    }
+
     // Create the winit event loop
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
     // Create application state
-    let mut app = RustFrameApp::new();
+    let mut app = RustFrameApp::new(dev_mode);
 
     // Run the event loop
     event_loop.run_app(&mut app)?;
