@@ -359,7 +359,7 @@ impl ApplicationHandler for RustFrameApp {
                 if self.is_selecting {
                     if let Some(overlay) = &self.overlay_window {
                         if overlay.window_id() == window_id {
-                            if let Err(e) = overlay.draw_overlay() {
+                            if let Err(e) = overlay.redraw_selection_overlay() {
                                 error!("Overlay redraw failed: {}", e);
                             }
                         }
@@ -382,6 +382,15 @@ impl ApplicationHandler for RustFrameApp {
 
             WindowEvent::Resized(new_size) => {
                 info!("Window {:?} resized to {:?}", window_id, new_size);
+
+                // If overlay window is resized during selection, redraw the overlay
+                if let Some(overlay) = &self.overlay_window {
+                    if overlay.window_id() == window_id && self.is_selecting {
+                        if let Err(e) = overlay.redraw_selection_overlay() {
+                            error!("Failed to redraw selection overlay: {}", e);
+                        }
+                    }
+                }
 
                 // If overlay window is resized, update hollow frame, capture region, and destination
                 if let Some(overlay) = &self.overlay_window {

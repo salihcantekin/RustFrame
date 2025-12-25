@@ -32,17 +32,30 @@ use crate::capture::CaptureRect;
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::{HWND, RECT, COLORREF, LRESULT, WPARAM, LPARAM},
-    Graphics::Gdi::{CreateSolidBrush, FillRect, FrameRect, GetDC, ReleaseDC, DeleteObject, HBRUSH},
+    Graphics::Gdi::{GetDC, ReleaseDC, DeleteObject},
     UI::WindowsAndMessaging::*,
 };
 
-// Constants for WM_SETCURSOR
+/// Helper function to create wide strings for Windows API
+#[cfg(windows)]
+fn wide_string(s: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+// Constants for WM_SETCURSOR and WM_SIZE
 #[cfg(windows)]
 const WM_SETCURSOR: u32 = 0x0020;
+#[cfg(windows)]
+const WM_SIZE: u32 = 0x0005;
 
-// Thread-local storage for border width used in window subclass
+// Thread-local storage for border width and overlay HWND
 thread_local! {
     static BORDER_WIDTH: Cell<u32> = const { Cell::new(5) };
+    static OVERLAY_HWND: Cell<isize> = const { Cell::new(0) };
 }
 
 /// Wrapper for the overlay (selector) window
@@ -53,20 +66,20 @@ pub struct OverlayWindow {
 
 impl OverlayWindow {
     /// Create a new overlay window for region selection
+    /// The window is semi-transparent with a visible border and help text
     pub fn new(event_loop: &ActiveEventLoop) -> Result<Self> {
         info!("Creating overlay window");
 
         // Configure window attributes for the overlay
-        // Normal window with title bar - user drags/resizes to select region
-        // Press ENTER to start capture, ESC to exit
+        // Frameless transparent window - we'll draw our own border and content
         let attributes = WindowAttributes::default()
-            .with_title("RustFrame - Drag to position, resize to select region, ENTER to start")
-            .with_inner_size(LogicalSize::new(400, 300)) // Initial size
-            .with_position(PhysicalPosition::new(100, 100)) // Initial position
-            .with_min_inner_size(LogicalSize::new(200, 150)) // Minimum size
+            .with_title("RustFrame Selection")
+            .with_inner_size(LogicalSize::new(800, 600)) // Initial size - larger for better visibility
+            .with_position(PhysicalPosition::new(200, 100)) // Initial position
+            .with_min_inner_size(LogicalSize::new(400, 300)) // Minimum size
             .with_resizable(true) // User can resize to select region
-            .with_decorations(true) // Normal window with title bar for easy dragging
-            .with_transparent(false) // Keep opaque so it's visible
+            .with_decorations(false) // No title bar - we draw everything
+            .with_transparent(true) // Enable transparency
             .with_window_level(WindowLevel::AlwaysOnTop); // Stay on top
 
         let window = event_loop
@@ -75,16 +88,13 @@ impl OverlayWindow {
 
         info!("Overlay window created with ID: {:?}", window.id());
 
-        // Apply Windows-specific styling for true transparency and borderless overlay
+        // Apply Windows-specific styling for layered window with alpha
         #[cfg(windows)]
-        Self::apply_windows_overlay_style(&window)?;
+        Self::apply_selection_mode_style(&window)?;
 
-        // Set the window background color to blue so it's visible
+        // Draw the initial overlay content
         #[cfg(windows)]
-        Self::set_overlay_background_color(&window)?;
-
-        // Request an initial redraw so the outline/fill is visible immediately
-        window.request_redraw();
+        Self::draw_selection_overlay(&window)?;
 
         Ok(Self {
             window: Arc::new(window),
@@ -92,43 +102,642 @@ impl OverlayWindow {
         })
     }
 
-    /// Apply Windows-specific styling for overlay
-    /// Keep it simple - just a normal window that's easy to drag
+    /// Apply Windows-specific styling for selection mode
+    /// Creates a layered window with semi-transparent content
     #[cfg(windows)]
-    fn apply_windows_overlay_style(_window: &Window) -> Result<()> {
-        // No special styling needed - use normal window decorations
-        // This makes dragging smooth and reliable
-        info!("Overlay window using standard decorations for easy dragging");
-        Ok(())
-    }
-
-    /// Set the window background to blue color
-    #[cfg(windows)]
-    fn set_overlay_background_color(window: &Window) -> Result<()> {
+    fn apply_selection_mode_style(window: &Window) -> Result<()> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowLongPtrW, GWL_EXSTYLE, GetWindowLongPtrW,
+            WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TOOLWINDOW,
+        };
+        use windows::Win32::UI::Shell::SetWindowSubclass;
+        
         let handle = window.window_handle()
             .context("Failed to get window handle")?;
 
         if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
             unsafe {
                 let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
-
-                // Create a blue brush (RGB: 70, 130, 180 = steel blue)
-                let brush = CreateSolidBrush(Self::rgb(70, 130, 180));
-                SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, brush.0 as isize);
-
-                info!("Set overlay window background to blue");
+                
+                // Store HWND for subclass to redraw on resize
+                OVERLAY_HWND.with(|h| h.set(hwnd.0 as isize));
+                
+                // Add layered style for transparency
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                let new_ex_style = ex_style | (WS_EX_LAYERED.0 as isize) | (WS_EX_TOPMOST.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style);
+                
+                // Install subclass for hit-testing (drag/resize on frameless window)
+                let _ = SetWindowSubclass(hwnd, Some(Self::selection_subclass_proc), 1, 0);
+                
+                info!("Applied layered window style for selection mode");
             }
         }
-
+        
         Ok(())
     }
-
-    /// Draw a semi-transparent fill and border so the selection region is visible
+    
+    /// Subclass proc for selection mode window - handles drag/resize on frameless window
     #[cfg(windows)]
-    pub fn draw_overlay(&self) -> Result<()> {
-        // Overlay is transparent; drawing on layered window with GDI causes sizing issues
-        // Keep this as a no-op for now
+    unsafe extern "system" fn selection_subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uidsubclass: usize,
+        _dwrefdata: usize,
+    ) -> LRESULT {
+        use windows::Win32::UI::Shell::DefSubclassProc;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            LoadCursorW, SetCursor, 
+            IDC_SIZEALL, IDC_SIZENWSE, IDC_SIZENESW, IDC_SIZEWE, IDC_SIZENS,
+            HTCAPTION, HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+            HTLEFT, HTRIGHT, HTTOP, HTBOTTOM, HTCLIENT,
+        };
+        
+        // Handle resize - redraw the overlay with new size
+        if msg == WM_SIZE {
+            // Get new window size from lparam
+            let new_width = (lparam.0 & 0xFFFF) as i32;
+            let new_height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+            
+            if new_width > 0 && new_height > 0 {
+                // Redraw the overlay with the new size
+                Self::draw_selection_overlay_hwnd(hwnd, new_width, new_height);
+            }
+        }
+        
+        // Handle cursor changes based on hit test result
+        if msg == WM_SETCURSOR {
+            let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
+            
+            let cursor_id = match hit_test {
+                x if x == HTCAPTION => Some(IDC_SIZEALL),
+                x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
+                x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
+                x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
+                x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
+                _ => None,
+            };
+            
+            if let Some(id) = cursor_id {
+                if let Ok(cur) = LoadCursorW(None, id) {
+                    let _ = SetCursor(cur);
+                }
+                return LRESULT(1);
+            }
+        }
+        
+        // Custom hit testing for frameless window
+        if msg == WM_NCHITTEST {
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            
+            let mut rect = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut rect);
+            
+            let border = 8; // Resize border size
+            
+            let on_left = x >= rect.left && x < rect.left + border;
+            let on_right = x >= rect.right - border && x < rect.right;
+            let on_top = y >= rect.top && y < rect.top + border;
+            let on_bottom = y >= rect.bottom - border && y < rect.bottom;
+            
+            // Return appropriate hit test result
+            if on_top && on_left { return LRESULT(HTTOPLEFT as isize); }
+            if on_top && on_right { return LRESULT(HTTOPRIGHT as isize); }
+            if on_bottom && on_left { return LRESULT(HTBOTTOMLEFT as isize); }
+            if on_bottom && on_right { return LRESULT(HTBOTTOMRIGHT as isize); }
+            if on_left { return LRESULT(HTLEFT as isize); }
+            if on_right { return LRESULT(HTRIGHT as isize); }
+            if on_top { return LRESULT(HTTOP as isize); }
+            if on_bottom { return LRESULT(HTBOTTOM as isize); }
+            
+            // Inside the window - treat as caption for dragging
+            return LRESULT(HTCAPTION as isize);
+        }
+        
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+    
+    /// Draw the selection overlay directly from HWND and size (used by subclass on resize)
+    #[cfg(windows)]
+    fn draw_selection_overlay_hwnd(hwnd: HWND, width: i32, height: i32) {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, SelectObject, DeleteDC,
+            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateDIBSection, DIB_RGB_COLORS,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            UpdateLayeredWindow, ULW_ALPHA,
+        };
+        use windows::Win32::Foundation::POINT;
+        
+        unsafe {
+            if width <= 0 || height <= 0 { return; }
+            
+            // Get screen DC
+            let screen_dc = GetDC(None);
+            let mem_dc = CreateCompatibleDC(screen_dc);
+            
+            // Create 32-bit ARGB bitmap for alpha blending
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height, // Top-down
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let bitmap = match CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(b) => b,
+                Err(_) => {
+                    let _ = DeleteDC(mem_dc);
+                    let _ = ReleaseDC(None, screen_dc);
+                    return;
+                }
+            };
+            let old_bitmap = SelectObject(mem_dc, bitmap);
+            
+            // Draw directly to the bitmap memory
+            let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
+            
+            let border_width = 4;
+            let corner_size = 20;
+            
+            // Colors (ARGB format - stored as BGRA in memory)
+            let border_color: u32 = 0xFF00A8FF; // Bright blue, fully opaque
+            let fill_color: u32 = 0x10000000;    // Almost fully transparent
+            let corner_color: u32 = 0xFF00D4FF;  // Lighter blue for corners
+            let text_bg_color: u32 = 0xF0181818; // Very dark gray, almost opaque
+            let text_border_color: u32 = 0xFF00A8FF; // Blue border for text box
+            
+            // Text box dimensions (fixed size, centered)
+            let text_box_width = 280.min(width - 20);
+            let text_box_height = 260.min(height - 20);
+            let text_box_left = (width - text_box_width) / 2;
+            let text_box_top = (height - text_box_height) / 2;
+            let text_box_right = text_box_left + text_box_width;
+            let text_box_bottom = text_box_top + text_box_height;
+            let text_box_border = 2;
+            
+            for y in 0..height {
+                for x in 0..width {
+                    let idx = (y * width + x) as usize;
+                    
+                    let on_border = x < border_width || x >= width - border_width ||
+                                    y < border_width || y >= height - border_width;
+                    
+                    // Corner markers (L-shaped)
+                    let in_top_left = (x < corner_size && y < border_width * 2) || 
+                                     (y < corner_size && x < border_width * 2);
+                    let in_top_right = (x >= width - corner_size && y < border_width * 2) || 
+                                      (y < corner_size && x >= width - border_width * 2);
+                    let in_bottom_left = (x < corner_size && y >= height - border_width * 2) || 
+                                        (y >= height - corner_size && x < border_width * 2);
+                    let in_bottom_right = (x >= width - corner_size && y >= height - border_width * 2) || 
+                                         (y >= height - corner_size && x >= width - border_width * 2);
+                    
+                    let in_corner = in_top_left || in_top_right || in_bottom_left || in_bottom_right;
+                    
+                    // Check if in text box area
+                    let in_text_box = x >= text_box_left && x < text_box_right &&
+                                     y >= text_box_top && y < text_box_bottom;
+                    
+                    // Text box border
+                    let on_text_box_border = in_text_box && (
+                        x < text_box_left + text_box_border || 
+                        x >= text_box_right - text_box_border ||
+                        y < text_box_top + text_box_border || 
+                        y >= text_box_bottom - text_box_border
+                    );
+                    
+                    if in_corner {
+                        pixels[idx] = corner_color;
+                    } else if on_border {
+                        pixels[idx] = border_color;
+                    } else if on_text_box_border {
+                        pixels[idx] = text_border_color;
+                    } else if in_text_box {
+                        pixels[idx] = text_bg_color;
+                    } else {
+                        pixels[idx] = fill_color;
+                    }
+                }
+            }
+            
+            // Draw help text directly to pixels
+            Self::draw_help_text_pixels(pixels, width, height);
+            
+            // Update the layered window with our bitmap
+            let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
+                BlendOp: 0, // AC_SRC_OVER
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: 1, // AC_SRC_ALPHA
+            };
+            
+            let size_struct = windows::Win32::Foundation::SIZE { cx: width, cy: height };
+            let point_src = POINT { x: 0, y: 0 };
+            
+            let _ = UpdateLayeredWindow(
+                hwnd,
+                screen_dc,
+                None, // Use current position
+                Some(&size_struct),
+                mem_dc,
+                Some(&point_src),
+                COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            );
+            
+            // Cleanup
+            SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap);
+            let _ = DeleteDC(mem_dc);
+            let _ = ReleaseDC(None, screen_dc);
+        }
+    }
+    
+    /// Draw the selection overlay with semi-transparent background, border, and help text
+    #[cfg(windows)]
+    fn draw_selection_overlay(window: &Window) -> Result<()> {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, SelectObject, DeleteDC,
+            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateDIBSection, DIB_RGB_COLORS,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            UpdateLayeredWindow, ULW_ALPHA,
+        };
+        use windows::Win32::Foundation::POINT;
+        
+        let handle = window.window_handle()
+            .context("Failed to get window handle")?;
+
+        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
+                let size = window.inner_size();
+                let width = size.width as i32;
+                let height = size.height as i32;
+                
+                // Get screen DC
+                let screen_dc = GetDC(None);
+                let mem_dc = CreateCompatibleDC(screen_dc);
+                
+                // Create 32-bit ARGB bitmap for alpha blending
+                let bmi = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                        biWidth: width,
+                        biHeight: -height, // Top-down
+                        biPlanes: 1,
+                        biBitCount: 32,
+                        biCompression: BI_RGB.0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                
+                let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+                let bitmap = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+                    .context("Failed to create DIB section")?;
+                let old_bitmap = SelectObject(mem_dc, bitmap);
+                
+                // Draw directly to the bitmap memory
+                let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
+                
+                let border_width = 4;
+                let corner_size = 20;
+                
+                // Colors (ARGB format - stored as BGRA in memory)
+                let border_color: u32 = 0xFF00A8FF; // Bright blue, fully opaque
+                let fill_color: u32 = 0x10000000;    // Almost fully transparent
+                let corner_color: u32 = 0xFF00D4FF;  // Lighter blue for corners
+                let text_bg_color: u32 = 0xF0181818; // Very dark gray, almost opaque
+                let text_border_color: u32 = 0xFF00A8FF; // Blue border for text box
+                
+                // Text box dimensions (fixed size, centered)
+                let text_box_width = 280;
+                let text_box_height = 260;
+                let text_box_left = (width - text_box_width) / 2;
+                let text_box_top = (height - text_box_height) / 2;
+                let text_box_right = text_box_left + text_box_width;
+                let text_box_bottom = text_box_top + text_box_height;
+                let text_box_border = 2;
+                
+                for y in 0..height {
+                    for x in 0..width {
+                        let idx = (y * width + x) as usize;
+                        
+                        let on_border = x < border_width || x >= width - border_width ||
+                                        y < border_width || y >= height - border_width;
+                        
+                        // Corner markers (L-shaped)
+                        let in_top_left = (x < corner_size && y < border_width * 2) || 
+                                         (y < corner_size && x < border_width * 2);
+                        let in_top_right = (x >= width - corner_size && y < border_width * 2) || 
+                                          (y < corner_size && x >= width - border_width * 2);
+                        let in_bottom_left = (x < corner_size && y >= height - border_width * 2) || 
+                                            (y >= height - corner_size && x < border_width * 2);
+                        let in_bottom_right = (x >= width - corner_size && y >= height - border_width * 2) || 
+                                             (y >= height - corner_size && x >= width - border_width * 2);
+                        
+                        let in_corner = in_top_left || in_top_right || in_bottom_left || in_bottom_right;
+                        
+                        // Check if in text box area
+                        let in_text_box = x >= text_box_left && x < text_box_right &&
+                                         y >= text_box_top && y < text_box_bottom;
+                        
+                        // Text box border
+                        let on_text_box_border = in_text_box && (
+                            x < text_box_left + text_box_border || 
+                            x >= text_box_right - text_box_border ||
+                            y < text_box_top + text_box_border || 
+                            y >= text_box_bottom - text_box_border
+                        );
+                        
+                        if in_corner {
+                            pixels[idx] = corner_color;
+                        } else if on_border {
+                            pixels[idx] = border_color;
+                        } else if on_text_box_border {
+                            pixels[idx] = text_border_color;
+                        } else if in_text_box {
+                            pixels[idx] = text_bg_color;
+                        } else {
+                            pixels[idx] = fill_color;
+                        }
+                    }
+                }
+                
+                // Draw help text directly to pixels
+                Self::draw_help_text_pixels(pixels, width, height);
+                
+                // Update the layered window with our bitmap
+                let mut blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
+                    BlendOp: 0, // AC_SRC_OVER
+                    BlendFlags: 0,
+                    SourceConstantAlpha: 255,
+                    AlphaFormat: 1, // AC_SRC_ALPHA
+                };
+                
+                let size_struct = windows::Win32::Foundation::SIZE { cx: width, cy: height };
+                let point_src = POINT { x: 0, y: 0 };
+                
+                let _ = UpdateLayeredWindow(
+                    hwnd,
+                    screen_dc,
+                    None, // Use current position
+                    Some(&size_struct),
+                    mem_dc,
+                    Some(&point_src),
+                    COLORREF(0),
+                    Some(&blend),
+                    ULW_ALPHA,
+                );
+                
+                // Cleanup
+                SelectObject(mem_dc, old_bitmap);
+                let _ = DeleteObject(bitmap);
+                let _ = DeleteDC(mem_dc);
+                let _ = ReleaseDC(None, screen_dc);
+                
+                info!("Drew selection overlay with help text");
+            }
+        }
+        
         Ok(())
+    }
+    
+    /// Draw help text showing keyboard shortcuts - pixel-based for proper alpha
+    #[cfg(windows)]
+    fn draw_help_text_pixels(pixels: &mut [u32], width: i32, height: i32) {
+        // Simple bitmap font for text rendering
+        // Each character is 8x12 pixels, stored as bit patterns
+        
+        let white: u32 = 0xFFFFFFFF;
+        let blue: u32 = 0xFF00D4FF;
+        let gray: u32 = 0xFFB0B0B0;
+        
+        // Help text content - using fixed-width spacing
+        let lines: &[(&str, u32, i32)] = &[
+            ("RustFrame", blue, 2),      // Title, scale 2x
+            ("", white, 1),
+            ("Drag borders to resize", gray, 1),
+            ("Drag center to move", gray, 1),
+            ("", white, 1),
+            ("ENTER - Start capture", white, 1),
+            ("ESC   - Exit", white, 1),
+            ("", white, 1),
+            ("C - Toggle cursor", gray, 1),
+            ("B - Toggle border", gray, 1),
+            ("S - Settings", gray, 1),
+        ];
+        
+        // Calculate starting Y position
+        let line_height = 16;
+        let title_height = 28;
+        let total_height: i32 = lines.iter().map(|(text, _, scale)| {
+            if text.is_empty() { 8 } else if *scale > 1 { title_height } else { line_height }
+        }).sum();
+        
+        let mut y = (height - total_height) / 2;
+        
+        for (text, color, scale) in lines {
+            if text.is_empty() {
+                y += 8;
+                continue;
+            }
+            
+            let char_width = 7 * scale;
+            let text_width = text.len() as i32 * char_width;
+            let x = (width - text_width) / 2;
+            
+            Self::draw_text_line(pixels, width, height, x, y, text, *color, *scale);
+            
+            y += if *scale > 1 { title_height } else { line_height };
+        }
+    }
+    
+    /// Draw a single line of text using a simple bitmap font
+    #[cfg(windows)]
+    fn draw_text_line(pixels: &mut [u32], img_width: i32, img_height: i32, start_x: i32, start_y: i32, text: &str, color: u32, scale: i32) {
+        // Simple 5x7 bitmap font (ASCII 32-127)
+        // Each character is stored as 7 bytes (rows), each byte has 5 bits (columns)
+        static FONT: &[u8] = &[
+            // Space (32)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // ! (33)
+            0x04, 0x04, 0x04, 0x04, 0x00, 0x04, 0x00,
+            // " (34)
+            0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // # (35)
+            0x0A, 0x1F, 0x0A, 0x0A, 0x1F, 0x0A, 0x00,
+            // $ (36)
+            0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04,
+            // % (37)
+            0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03,
+            // & (38)
+            0x08, 0x14, 0x14, 0x08, 0x15, 0x12, 0x0D,
+            // ' (39)
+            0x04, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // ( (40)
+            0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02,
+            // ) (41)
+            0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08,
+            // * (42)
+            0x00, 0x04, 0x15, 0x0E, 0x15, 0x04, 0x00,
+            // + (43)
+            0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00,
+            // , (44)
+            0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08,
+            // - (45)
+            0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00,
+            // . (46)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00,
+            // / (47)
+            0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10,
+            // 0-9 (48-57)
+            0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E, // 0
+            0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E, // 1
+            0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F, // 2
+            0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E, // 3
+            0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02, // 4
+            0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E, // 5
+            0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E, // 6
+            0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08, // 7
+            0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E, // 8
+            0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C, // 9
+            // : (58)
+            0x00, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00,
+            // ; (59)
+            0x00, 0x00, 0x04, 0x00, 0x04, 0x04, 0x08,
+            // < (60)
+            0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02,
+            // = (61)
+            0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00,
+            // > (62)
+            0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08,
+            // ? (63)
+            0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04,
+            // @ (64)
+            0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E,
+            // A-Z (65-90)
+            0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11, // A
+            0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E, // B
+            0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E, // C
+            0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E, // D
+            0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F, // E
+            0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10, // F
+            0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E, // G
+            0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11, // H
+            0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E, // I
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x11, 0x0E, // J
+            0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11, // K
+            0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F, // L
+            0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11, // M
+            0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11, // N
+            0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E, // O
+            0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10, // P
+            0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D, // Q
+            0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11, // R
+            0x0E, 0x11, 0x10, 0x0E, 0x01, 0x11, 0x0E, // S
+            0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, // T
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E, // U
+            0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04, // V
+            0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11, // W
+            0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11, // X
+            0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04, // Y
+            0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F, // Z
+            // [ (91)
+            0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E,
+            // \ (92)
+            0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01,
+            // ] (93)
+            0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E,
+            // ^ (94)
+            0x04, 0x0A, 0x11, 0x00, 0x00, 0x00, 0x00,
+            // _ (95)
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F,
+            // ` (96)
+            0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+            // a-z (97-122)
+            0x00, 0x00, 0x0E, 0x01, 0x0F, 0x11, 0x0F, // a
+            0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x1E, // b
+            0x00, 0x00, 0x0E, 0x11, 0x10, 0x11, 0x0E, // c
+            0x01, 0x01, 0x0F, 0x11, 0x11, 0x11, 0x0F, // d
+            0x00, 0x00, 0x0E, 0x11, 0x1F, 0x10, 0x0E, // e
+            0x06, 0x08, 0x1E, 0x08, 0x08, 0x08, 0x08, // f
+            0x00, 0x00, 0x0F, 0x11, 0x0F, 0x01, 0x0E, // g
+            0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x11, // h
+            0x04, 0x00, 0x0C, 0x04, 0x04, 0x04, 0x0E, // i
+            0x02, 0x00, 0x06, 0x02, 0x02, 0x12, 0x0C, // j
+            0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12, // k
+            0x0C, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E, // l
+            0x00, 0x00, 0x1A, 0x15, 0x15, 0x11, 0x11, // m
+            0x00, 0x00, 0x1E, 0x11, 0x11, 0x11, 0x11, // n
+            0x00, 0x00, 0x0E, 0x11, 0x11, 0x11, 0x0E, // o
+            0x00, 0x00, 0x1E, 0x11, 0x1E, 0x10, 0x10, // p
+            0x00, 0x00, 0x0F, 0x11, 0x0F, 0x01, 0x01, // q
+            0x00, 0x00, 0x16, 0x19, 0x10, 0x10, 0x10, // r
+            0x00, 0x00, 0x0E, 0x10, 0x0E, 0x01, 0x1E, // s
+            0x08, 0x08, 0x1E, 0x08, 0x08, 0x09, 0x06, // t
+            0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0D, // u
+            0x00, 0x00, 0x11, 0x11, 0x11, 0x0A, 0x04, // v
+            0x00, 0x00, 0x11, 0x11, 0x15, 0x15, 0x0A, // w
+            0x00, 0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11, // x
+            0x00, 0x00, 0x11, 0x11, 0x0F, 0x01, 0x0E, // y
+            0x00, 0x00, 0x1F, 0x02, 0x04, 0x08, 0x1F, // z
+        ];
+        
+        let mut x = start_x;
+        for ch in text.chars() {
+            let idx = if ch >= ' ' && ch <= 'z' {
+                (ch as usize) - 32
+            } else {
+                0 // Space for unknown chars
+            };
+            
+            // Draw character
+            for row in 0..7 {
+                let font_idx = idx * 7 + row;
+                if font_idx >= FONT.len() { break; }
+                let row_data = FONT[font_idx];
+                
+                for col in 0..5 {
+                    if (row_data >> (4 - col)) & 1 == 1 {
+                        // Draw pixel with scaling
+                        for sy in 0..scale {
+                            for sx in 0..scale {
+                                let px = x + col * scale + sx;
+                                let py = start_y + row as i32 * scale + sy;
+                                if px >= 0 && px < img_width && py >= 0 && py < img_height {
+                                    let pidx = (py * img_width + px) as usize;
+                                    if pidx < pixels.len() {
+                                        pixels[pidx] = color;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            x += 6 * scale + scale; // Character width + spacing
+        }
+    }
+    
+    /// Redraw the selection overlay (called on resize)
+    #[cfg(windows)]
+    pub fn redraw_selection_overlay(&self) -> Result<()> {
+        Self::draw_selection_overlay(&self.window)
     }
 
     #[cfg(windows)]
@@ -750,12 +1359,12 @@ impl DestinationWindow {
                 let new_ex_style = ex_style & !(WS_EX_TOOLWINDOW.0 as i32);
                 SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style);
                 
-                // Force window to update with new styles
+                // Force window to update with new styles and bring to front
                 let _ = SetWindowPos(
                     hwnd,
-                    None,
+                    HWND_TOP,
                     0, 0, 0, 0,
-                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
                 );
             }
         }
