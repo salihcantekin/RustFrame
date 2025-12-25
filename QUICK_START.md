@@ -18,17 +18,22 @@ cargo run
 |--------|-----------|
 | **Move overlay** | Click and drag |
 | **Resize overlay** | Drag window edges |
-| **Start capture** | ENTER |
+| **Start capture** | ENTER / Numpad Enter |
+| **Toggle cursor** | C |
+| **Open settings** | S |
+| **Toggle help** | H |
+| **Adjust border** | + / - |
 | **Exit** | ESC |
 
 ## 📸 Typical Workflow
 
-1. **Launch** → Two windows appear
+1. **Launch** → Transparent overlay window appears
 2. **Position** → Drag overlay over content you want to share
 3. **Resize** → Adjust overlay to frame exactly what you need
-4. **Confirm** → Press ENTER to start capturing
-5. **Share** → In Teams/Zoom, share "RustFrame - Captured Region" window
-6. **Done** → Press ESC to exit
+4. **Configure** → Press S for settings, C to toggle cursor, H for help
+5. **Confirm** → Press ENTER to start capturing
+6. **Share** → In Teams/Zoom/Google Meet, share "RustFrame Output" window
+7. **Done** → Press ESC to exit
 
 ## 🏗️ Build Issues?
 
@@ -48,7 +53,11 @@ src/
 ├── capture.rs        ← Windows.Graphics.Capture (WGC) API
 ├── window_manager.rs ← Transparent overlay + destination window
 ├── renderer.rs       ← wgpu rendering pipeline
-└── shader.wgsl       ← GPU shaders
+├── shader.wgsl       ← GPU shaders
+├── settings_dialog.rs← Settings window
+├── constants.rs      ← Centralized constants
+├── utils.rs          ← Shared utilities
+└── bitmap_font.rs    ← Pixel font rendering
 ```
 
 ## 🔍 Key Concepts
@@ -58,9 +67,11 @@ src/
 - **Using WGC** (modern, fast, GPU-accelerated)
 - Captures via Direct3D 11 textures
 
-### Two Windows
-1. **Overlay**: Transparent, borderless selector (what YOU see)
-2. **Destination**: Normal window with captured content (what OTHERS see)
+### Production Mode
+- Overlay window appears on screen for selection
+- Destination window is positioned off-screen
+- Share the "RustFrame Output" window in video calls
+- No infinite mirror effect!
 
 ### Texture Flow
 ```
@@ -72,11 +83,11 @@ Screen → D3D11 Texture → Staging → CPU → wgpu → Window
 
 **Scenario**: You want to share a terminal window on Zoom without showing your entire screen.
 
-1. Run `cargo run`
+1. Run RustFrame
 2. Drag the **overlay window** over your terminal
 3. Resize it to fit the terminal perfectly
 4. Press **ENTER**
-5. In Zoom, click "Share Screen" → Select "RustFrame - Captured Region"
+5. In Zoom, click "Share Screen" → Select "RustFrame Output"
 6. ✨ Only your terminal is visible to others!
 
 ## 🐛 Troubleshooting
@@ -84,17 +95,13 @@ Screen → D3D11 Texture → Staging → CPU → wgpu → Window
 ### "Nothing is captured / black screen"
 - Press ENTER to start capture (you might still be in selection mode)
 
-### "Overlay window is invisible"
-- It's transparent! Look for a subtle window frame
-- TODO: We should add a colored border for visibility
-
-### "Captures whole monitor, not just overlay region"
-- Known limitation (cropping not yet implemented)
-- The capture engine gets the full monitor, we need to add cropping
+### "Overlay window is hard to see"
+- Press H to show help overlay with visual indicators
+- The overlay has a subtle colored border
 
 ### "Performance is laggy"
-- The CPU copy step adds latency
-- For production: implement zero-copy D3D12 sharing
+- The CPU copy step adds some latency
+- This is normal for the current implementation
 
 ## 🚀 Next Steps
 

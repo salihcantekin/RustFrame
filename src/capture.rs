@@ -17,14 +17,12 @@
 // 5. Handle FrameArrived events to get new frames
 
 use anyhow::{Result, anyhow, Context};
-use log::{info, warn, error};
+use log::{info, warn};
 use windows::{
-    core::*,
     Foundation::TypedEventHandler,
     Graphics::{
         Capture::{
             Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
-            Direct3D11CaptureFrame,
         },
         DirectX::{
             Direct3D11::{IDirect3DDevice, IDirect3DSurface},
@@ -36,7 +34,7 @@ use windows::{
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
             },
             Dxgi::IDXGIDevice,
@@ -49,7 +47,7 @@ use windows::{
         UI::WindowsAndMessaging::GetDesktopWindow,
     },
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Represents a rectangular region on the screen
 #[derive(Debug, Clone, Copy)]
@@ -78,10 +76,9 @@ impl Default for CaptureSettings {
     /// Default settings for PRODUCTION mode
     fn default() -> Self {
         Self {
-            show_cursor: true,  // Show cursor in production
+            show_cursor: true,
             show_border: true,
-            border_width: 3,
-            // Production mode: destination hidden behind overlay
+            border_width: crate::constants::capture::DEFAULT_BORDER_WIDTH,
             exclude_from_capture: true,
         }
     }
@@ -93,8 +90,8 @@ impl CaptureSettings {
         Self {
             show_cursor: true,
             show_border: true,
-            border_width: 3,
-            exclude_from_capture: false, // Show destination window for debugging
+            border_width: crate::constants::capture::DEFAULT_BORDER_WIDTH,
+            exclude_from_capture: false,
         }
     }
 }

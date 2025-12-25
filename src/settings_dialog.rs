@@ -4,6 +4,8 @@
 // Uses modern Windows controls with proper DPI scaling and Segoe UI font.
 
 use crate::capture::CaptureSettings;
+use crate::constants::{dialog, capture as capture_const};
+use crate::utils::wide_string;
 use log::info;
 use std::cell::RefCell;
 
@@ -12,7 +14,7 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM, LRESULT},
     UI::WindowsAndMessaging::*,
     UI::Controls::*,
-    Graphics::Gdi::{GetSysColorBrush, COLOR_3DFACE, CreateFontW, SelectObject, HFONT, GetDC, ReleaseDC, DeleteObject, HGDIOBJ,
+    Graphics::Gdi::{GetSysColorBrush, COLOR_3DFACE, CreateFontW, HFONT, GetDC, ReleaseDC, DeleteObject, HGDIOBJ,
         FW_NORMAL, CLEARTYPE_QUALITY, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, FF_SWISS},
     Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWM_SYSTEMBACKDROP_TYPE, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW},
     System::LibraryLoader::GetModuleHandleW,
@@ -21,7 +23,6 @@ use windows::Win32::{
 #[cfg(windows)]
 use std::ffi::c_void;
 
-// Control IDs
 const ID_CHECK_CURSOR: i32 = 101;
 const ID_CHECK_BORDER: i32 = 102;
 const ID_CHECK_PROD_MODE: i32 = 103;
@@ -29,10 +30,8 @@ const ID_EDIT_BORDER_WIDTH: i32 = 105;
 const ID_BTN_SAVE: i32 = 106;
 const ID_BTN_CANCEL: i32 = 107;
 
-// Dialog dimensions
-const DIALOG_WIDTH: i32 = 420;
-const DIALOG_HEIGHT_DEV: i32 = 290;
-const DIALOG_HEIGHT_PROD: i32 = 250;
+// Static text style for center alignment
+const SS_CENTER: u32 = 0x01;
 
 // Thread-local state for dialog
 thread_local! {
@@ -111,8 +110,8 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
         // Get screen dimensions for centering
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        let dialog_height = if dev_mode { DIALOG_HEIGHT_DEV } else { DIALOG_HEIGHT_PROD };
-        let x = (screen_width - DIALOG_WIDTH) / 2;
+        let dialog_height = if dev_mode { dialog::HEIGHT_DEV } else { dialog::HEIGHT_PROD };
+        let x = (screen_width - dialog::WIDTH) / 2;
         let y = (screen_height - dialog_height) / 2;
         
         // Create the dialog window with modern style
@@ -124,7 +123,7 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
             x,
             y,
-            DIALOG_WIDTH,
+            dialog::WIDTH,
             dialog_height,
             None,
             None,
@@ -332,7 +331,7 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
     let btn_height = 32;
     let btn_spacing = 20;
     let total_btn_width = btn_width * 2 + btn_spacing;
-    let btn_start_x = (DIALOG_WIDTH - total_btn_width) / 2;
+    let btn_start_x = (dialog::WIDTH - total_btn_width) / 2;
     
     let text = wide_string("Save");
     let save_btn = CreateWindowExW(
@@ -361,6 +360,28 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         None,
     ).unwrap();
     let _ = SendMessageW(cancel_btn, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
+    
+    // Credit label at bottom
+    let dialog_height = if dev_mode { dialog::HEIGHT_DEV } else { dialog::HEIGHT_PROD };
+    let text = wide_string("by Salih Cantekin");
+    let credit_hwnd = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(static_class.as_ptr()),
+        PCWSTR(text.as_ptr()),
+        WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_CENTER as u32),
+        0, dialog_height - 55, dialog::WIDTH, 18,
+        hwnd,
+        None,
+        hinstance,
+        None,
+    ).unwrap();
+    // Use smaller font for credit
+    let small_font = CreateFontW(
+        14, 0, 0, 0, FW_NORMAL.0 as i32, 0, 0, 0,
+        DEFAULT_CHARSET.0 as u32, 0, 0, CLEARTYPE_QUALITY.0 as u32, 0,
+        PCWSTR(wide_string("Segoe UI").as_ptr()),
+    );
+    let _ = SendMessageW(credit_hwnd, WM_SETFONT, WPARAM(small_font.0 as usize), LPARAM(1));
 }
 
 #[cfg(windows)]
@@ -431,7 +452,9 @@ unsafe fn save_settings_from_controls(hwnd: HWND) {
                 if len > 0 {
                     let text: String = String::from_utf16_lossy(&buffer[..len as usize]);
                     if let Ok(width) = text.parse::<u32>() {
-                        settings.border_width = width.max(1).min(50); // Clamp between 1-50
+                        settings.border_width = width
+                            .max(capture_const::MIN_BORDER_WIDTH)
+                            .min(capture_const::MAX_BORDER_WIDTH);
                     }
                 }
             }
@@ -441,14 +464,6 @@ unsafe fn save_settings_from_controls(hwnd: HWND) {
                   settings.border_width, settings.exclude_from_capture);
         }
     });
-}
-
-/// Convert a Rust string to a null-terminated wide string (UTF-16)
-#[cfg(windows)]
-fn wide_string(s: &str) -> Vec<u16> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
 }
 
 #[cfg(not(windows))]

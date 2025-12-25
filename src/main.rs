@@ -11,8 +11,9 @@
 
 use anyhow::Result;
 use log::{info, error};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
@@ -21,10 +22,13 @@ use winit::window::WindowId;
 use tray_icon::{TrayIconBuilder, TrayIcon, Icon};
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem};
 
+mod bitmap_font;
 mod capture;
-mod window_manager;
+mod constants;
 mod renderer;
 mod settings_dialog;
+mod utils;
+mod window_manager;
 
 use window_manager::{OverlayWindow, DestinationWindow};
 use capture::{CaptureEngine, CaptureSettings};
@@ -76,6 +80,9 @@ struct RustFrameApp {
     
     /// Development mode flag (shows extra options)
     dev_mode: bool,
+    
+    /// Startup time - used to ignore Enter key for first 500ms
+    startup_time: Instant,
 }
 
 impl RustFrameApp {
@@ -102,6 +109,7 @@ impl RustFrameApp {
             menu_border: None,
             menu_exclude: None,
             dev_mode,
+            startup_time: Instant::now(),
         }
     }
     
@@ -300,7 +308,7 @@ impl ApplicationHandler for RustFrameApp {
 
         // Create the destination window
         if self.destination_window.is_none() {
-            match DestinationWindow::new(event_loop) {
+            match DestinationWindow::new(event_loop, self.dev_mode) {
                 Ok(dest) => {
                     info!("Destination window created successfully");
                     self.destination_window = Some(dest);
@@ -464,15 +472,22 @@ impl ApplicationHandler for RustFrameApp {
                 // Only handle key press events (not release)
                 if event.state == winit::event::ElementState::Pressed {
                     use winit::keyboard::{PhysicalKey, KeyCode};
+                    use std::time::Duration;
                     
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
                             info!("ESC pressed, exiting");
                             event_loop.exit();
                         }
-                        PhysicalKey::Code(KeyCode::Enter) if self.is_selecting => {
-                            info!("Region selection confirmed, starting capture");
-                            self.start_capture();
+                        PhysicalKey::Code(KeyCode::Enter) | PhysicalKey::Code(KeyCode::NumpadEnter) if self.is_selecting => {
+                            // Ignore Enter for first 500ms after startup
+                            // This prevents accidental capture when launching with Enter key
+                            if self.startup_time.elapsed() < Duration::from_millis(500) {
+                                info!("Enter ignored (startup cooldown)");
+                            } else {
+                                info!("Region selection confirmed, starting capture");
+                                self.start_capture();
+                            }
                         }
                         // Settings shortcuts (only during selection mode)
                         PhysicalKey::Code(KeyCode::KeyC) if self.is_selecting => {

@@ -2,8 +2,10 @@
 name = "RustFrame"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name"]
+authors = ["Salih Cantekin"]
 description = "A Windows screen region capture tool using Windows.Graphics.Capture API"
+repository = "https://github.com/salihcantekin/RustFrame"
+license = "MIT"
 
 [dependencies]
 # Window management - cross-platform windowing library

@@ -1,0 +1,142 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      release_name:
+        description: 'Release name'
+        required: true
+        default: 'RustFrame Release'
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Verify binary exists
+        run: |
+          if (Test-Path "target/release/RustFrame.exe") {
+            Write-Host "✅ RustFrame.exe found!"
+            Get-Item "target/release/RustFrame.exe" | Format-List
+          } else {
+            Write-Error "❌ RustFrame.exe not found!"
+            exit 1
+          }
+
+      - name: Create release package
+        run: |
+          # Create release directory
+          New-Item -ItemType Directory -Force -Path "release-package"
+          
+          # Copy the executable
+          Copy-Item "target/release/RustFrame.exe" -Destination "release-package/"
+          
+          # Copy manifest if exists
+          if (Test-Path "RustFrame.exe.manifest") {
+            Copy-Item "RustFrame.exe.manifest" -Destination "release-package/"
+          }
+          
+          # Copy README
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" -Destination "release-package/"
+          }
+          
+          # Copy QUICK_START if exists
+          if (Test-Path "QUICK_START.md") {
+            Copy-Item "QUICK_START.md" -Destination "release-package/"
+          }
+          
+          # Create ZIP archive
+          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip"
+          
+          Write-Host "✅ Release package created!"
+          Get-ChildItem "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip" | Format-List
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustFrame-${{ github.event.inputs.version }}-windows-x64
+          path: |
+            release-package/RustFrame.exe
+            release-package/README.md
+            release-package/QUICK_START.md
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.release_name }}
+          body: |
+            ## RustFrame ${{ github.event.inputs.version }}
+            
+            ### 📥 Download
+            Download `RustFrame-${{ github.event.inputs.version }}-windows-x64.zip`, extract and run `RustFrame.exe`.
+            
+            ### ✨ Features
+            - GPU-accelerated screen capture using Windows.Graphics.Capture API
+            - Adjustable frame overlay for precise region selection
+            - Perfect for video conferencing screen sharing
+            - Keyboard shortcuts for quick adjustments
+            
+            ### 🎮 Quick Start
+            1. Run `RustFrame.exe`
+            2. Resize/move the overlay to select capture region
+            3. Press `Enter` to start capture
+            4. Share the "RustFrame Output" window in your video call
+            5. Press `Escape` to exit
+            
+            ### ⌨️ Keyboard Shortcuts
+            - `Enter` / `Numpad Enter`: Start capture
+            - `Escape`: Exit application
+            - `C`: Toggle cursor visibility
+            - `S`: Open settings
+            - `H`: Toggle help overlay
+            - `+/-`: Adjust border width
+            
+            ---
+            Built with ❤️ using Rust
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: |
+            RustFrame-${{ github.event.inputs.version }}-windows-x64.zip
+            target/release/RustFrame.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

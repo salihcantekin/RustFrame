@@ -63,33 +63,38 @@ Alternatively, install Visual Studio Build Tools for proper MSVC support.
 ## Project Status
 
 All code is complete and ready to build:
-- ✅ `main.rs` - Application entry point
+- ✅ `main.rs` - Application entry point with event loop
 - ✅ `capture.rs` - Windows.Graphics.Capture implementation
 - ✅ `window_manager.rs` - Transparent overlay and destination windows
 - ✅ `renderer.rs` - wgpu rendering with D3D11 texture copying
 - ✅ `shader.wgsl` - GPU shaders
+- ✅ `settings_dialog.rs` - Settings window with cursor/border options
+- ✅ `constants.rs` - Centralized constants
+- ✅ `utils.rs` - Shared utility functions
+- ✅ `bitmap_font.rs` - Pixel font rendering for help overlay
 
 Once you resolve the linker issue, the project should compile successfully!
 
 ## Next Steps After Building
 
-1. Run the application: `cargo run`
-2. You'll see two windows:
-   - **Overlay Window**: Transparent, borderless (move/resize to select region)
-   - **Destination Window**: Shows captured content
-3. Press **ENTER** to start capturing
-4. Press **ESC** to exit
+1. Run the application: `cargo run --release`
+2. Transparent overlay window appears
+3. Drag and resize overlay to select your capture region
+4. Use keyboard shortcuts:
+   - **ENTER**: Start capturing
+   - **C**: Toggle cursor visibility
+   - **S**: Open settings
+   - **H**: Toggle help overlay
+   - **+/-**: Adjust border width
+   - **ESC**: Exit
+5. Share "RustFrame Output" window in video calls
 
-## Known Limitations
+## Technical Notes
 
 1. **D3D11 → wgpu texture transfer uses CPU** (not zero-copy)
    - Performance impact: ~2-5ms per frame
-   - For production: implement Direct3D12 resource sharing
+   - For future optimization: implement Direct3D12 resource sharing
 
-2. **Mouse drag region selection not implemented** (TODO)
-   - Currently: manually resize window
-   - Future: click-and-drag to define region
-
-3. **No cropping implemented** (TODO)
-   - Currently: captures entire monitor
-   - Future: crop to overlay window bounds
+2. **Production Mode**
+   - Destination window is positioned off-screen
+   - Prevents infinite mirror effect when sharing

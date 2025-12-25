@@ -2,17 +2,21 @@
 
 **A modern Windows screen region capture tool built with Rust, using Windows.Graphics.Capture API**
 
-RustFrame is a RegionToShare clone that allows you to select a region of your screen and mirror it to a separate window, perfect for sharing specific content on Teams, Zoom, or Discord without exposing your entire screen.
+RustFrame allows you to select a region of your screen and mirror it to a separate window, perfect for sharing specific content on Teams, Zoom, Google Meet or Discord without exposing your entire screen.
 
 ## 🎯 Features
 
 - ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
-- ✅ **Transparent Overlay**: Frameless, transparent selection window with Win32 styling
+- ✅ **Transparent Overlay**: Frameless, transparent selection window with visual border
 - ✅ **Real-time Mirroring**: Captured region displayed in a shareable window
 - ✅ **Drag-to-Move**: Click and drag the overlay window to reposition
 - ✅ **Resizable Selection**: Resize the overlay to select your desired region
 - ✅ **GPU Rendering**: wgpu-based rendering pipeline with Direct3D 12 backend
-- ✅ **Extensively Documented**: Every module includes detailed comments explaining the "why"
+- ✅ **Keyboard Shortcuts**: Quick adjustments with hotkeys (C, S, H, +/-)
+- ✅ **Settings Dialog**: Customize cursor visibility and border width
+- ✅ **System Tray**: Minimize to tray with quick access menu
+- ✅ **Production Mode**: Off-screen destination window for clean video sharing
+- ✅ **Help Overlay**: On-screen keyboard shortcut reference (H key)
 
 ## 🏗️ Architecture
 
@@ -84,15 +88,22 @@ cargo run --release
    - Position it over the content you want to share
 
 4. **Start capturing:**
-   - Press **ENTER** to start real-time capture
+   - Press **ENTER** or **Numpad Enter** to start real-time capture
    - The destination window will display the selected region
 
-5. **Share on Teams/Zoom:**
-   - Select "RustFrame - Captured Region" window in your screen sharing dialog
+5. **Keyboard Shortcuts (during selection):**
+   - **C**: Toggle cursor visibility in capture
+   - **S**: Open settings dialog
+   - **H**: Toggle help overlay
+   - **+/-**: Adjust border width
+
+6. **Share on Teams/Zoom/Google Meet:**
+   - Select "RustFrame Output" window in your screen sharing dialog
    - Only the captured region will be visible to participants
 
-6. **Exit:**
+7. **Exit:**
    - Press **ESC** to close the application
+   - Or right-click tray icon and select Exit
 
 ## 🛠️ Technical Details
 
@@ -167,37 +178,22 @@ SetLayeredWindowAttributes(hwnd, COLORREF(0), 200, LWA_ALPHA);
 
 See [Cargo.toml](Cargo.toml) for complete dependency list with explanations.
 
-## 🔧 Known Limitations & TODOs
+## 🔧 Known Limitations & Future Plans
 
 ### Current Limitations
 
-1. **Captures entire monitor** (not cropped to overlay region yet)
-   - WGC captures the whole monitor
-   - Cropping should happen in the renderer
-   - **TODO**: Implement texture cropping based on overlay bounds
-
-2. **CPU-side texture copying** (not zero-copy)
+1. **CPU-side texture copying** (not zero-copy)
    - Uses staging texture with Map/Unmap
    - Adds 2-5ms latency per frame
-   - **TODO**: Implement Direct3D 12 resource sharing
-
-3. **No visual border on overlay** (hard to see transparent window)
-   - **TODO**: Render a colored rectangle outline in overlay window
-
-4. **Resizing uses default Windows handles** (not ideal for borderless)
-   - **TODO**: Implement custom resize handles
+   - **Future**: Implement Direct3D 12 resource sharing
 
 ### Future Enhancements
 
-- [ ] Implement texture cropping (overlay region only)
-- [ ] Add visual border outline to overlay
-- [ ] Implement custom resize handles
-- [ ] Add hotkeys (F1 to show/hide overlay, etc.)
 - [ ] Support multi-monitor selection
 - [ ] Add window picker (capture specific window instead of monitor)
 - [ ] Implement zero-copy D3D12 texture sharing
-- [ ] Add settings UI (framerate, quality, etc.)
 - [ ] Save/load region presets
+- [ ] Add framerate control settings
 
 ## 📚 Learning Resources
 
@@ -224,15 +220,16 @@ This project is designed as a learning resource. Key concepts demonstrated:
 
 ## 🙏 Acknowledgments
 
-- **RegionToShare**: Original inspiration
 - **Microsoft**: Windows.Graphics.Capture API documentation
 - **wgpu Community**: Excellent graphics API and examples
 - **windows-rs**: Official Rust bindings for Windows
 
 ## 📄 License
 
-This project is for educational purposes. Use at your own risk.
+MIT License - See LICENSE file for details.
 
 ---
 
-**Built with ❤️ and Rust 🦀 for the Windows platform**
+**Developed by [Salih Cantekin](https://github.com/salihcantekin)**
+
+Built with ❤️ and Rust 🦀 for the Windows platform

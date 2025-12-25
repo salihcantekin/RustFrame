@@ -20,7 +20,7 @@ use log::{info, warn};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
-use windows::{Win32::Graphics::Direct3D11::*, core::Interface};
+use windows::Win32::Graphics::Direct3D11::*;
 
 use crate::capture::{CaptureEngine, CaptureRect};
 
