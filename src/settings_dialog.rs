@@ -1,7 +1,7 @@
 // settings_dialog.rs - Native Windows Settings Dialog
 //
-// A simple Win32 dialog for adjusting capture settings.
-// Uses raw Win32 API to avoid dependency conflicts with wgpu.
+// A Win32 dialog for adjusting capture settings.
+// Uses modern Windows controls with proper DPI scaling and Segoe UI font.
 
 use crate::capture::CaptureSettings;
 use log::info;
@@ -12,7 +12,9 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM, LRESULT},
     UI::WindowsAndMessaging::*,
     UI::Controls::*,
-    Graphics::Gdi::{GetSysColorBrush, COLOR_3DFACE},
+    Graphics::Gdi::{GetSysColorBrush, COLOR_3DFACE, CreateFontW, SelectObject, HFONT, GetDC, ReleaseDC, DeleteObject, HGDIOBJ,
+        FW_NORMAL, CLEARTYPE_QUALITY, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, FF_SWISS},
+    Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWM_SYSTEMBACKDROP_TYPE, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW},
     System::LibraryLoader::GetModuleHandleW,
 };
 
@@ -24,23 +26,23 @@ const ID_CHECK_CURSOR: i32 = 101;
 const ID_CHECK_BORDER: i32 = 102;
 const ID_CHECK_PROD_MODE: i32 = 103;
 const ID_EDIT_BORDER_WIDTH: i32 = 105;
-const ID_BTN_OK: i32 = 106;
+const ID_BTN_SAVE: i32 = 106;
 const ID_BTN_CANCEL: i32 = 107;
-const ID_BTN_APPLY: i32 = 108;
 
 // Dialog dimensions
-const DIALOG_WIDTH: i32 = 360;
-const DIALOG_HEIGHT: i32 = 250;
+const DIALOG_WIDTH: i32 = 420;
+const DIALOG_HEIGHT: i32 = 320;
 
-// Thread-local state for dialog (safer than static mut)
+// Thread-local state for dialog
 thread_local! {
     static DIALOG_SETTINGS: RefCell<Option<CaptureSettings>> = RefCell::new(None);
     static SETTINGS_CHANGED: RefCell<bool> = RefCell::new(false);
     static DIALOG_HWND: RefCell<isize> = RefCell::new(0);
+    static DIALOG_FONT: RefCell<isize> = RefCell::new(0);
 }
 
 /// Show the settings dialog
-/// Returns Some(CaptureSettings) if user clicked OK/Apply, None if cancelled
+/// Returns Some(CaptureSettings) if user clicked Save, None if cancelled
 #[cfg(windows)]
 pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<CaptureSettings> {
     use windows::core::PCWSTR;
@@ -56,6 +58,30 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
         // Store settings in thread-local state
         DIALOG_SETTINGS.with(|s| *s.borrow_mut() = Some(current_settings.clone()));
         SETTINGS_CHANGED.with(|c| *c.borrow_mut() = false);
+        
+        // Create modern font (Segoe UI, 10pt)
+        let font_name = wide_string("Segoe UI");
+        let hdc = GetDC(None);
+        let font_height = -((12.0 * GetDeviceCaps(hdc, windows::Win32::Graphics::Gdi::LOGPIXELSY) as f32) / 72.0) as i32;
+        let _ = ReleaseDC(None, hdc);
+        
+        let hfont = CreateFontW(
+            font_height,
+            0,
+            0,
+            0,
+            FW_NORMAL.0 as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_TT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            CLEARTYPE_QUALITY.0 as u32,
+            (FF_SWISS.0 | 0) as u32,
+            PCWSTR(font_name.as_ptr()),
+        );
+        DIALOG_FONT.with(|f| *f.borrow_mut() = hfont.0 as isize);
         
         // Generate unique class name
         let class_name = wide_string(&format!("RustFrameSettings_{}", std::process::id()));
@@ -99,11 +125,29 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
             None,
         ).unwrap();
         
+        // Enable Windows 11 Mica backdrop effect
+        let use_mica = DWMSBT_MAINWINDOW;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &use_mica as *const _ as *const c_void,
+            std::mem::size_of::<DWM_SYSTEMBACKDROP_TYPE>() as u32,
+        );
+        
+        // Enable dark mode
+        let use_dark: i32 = 1;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &use_dark as *const _ as *const c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        
         // Store hwnd for reference
         DIALOG_HWND.with(|h| *h.borrow_mut() = hwnd.0 as isize);
         
         // Create controls
-        create_controls(hwnd, current_settings);
+        create_controls(hwnd, current_settings, hfont);
         
         // Message loop - run until window is closed
         let mut msg = MSG::default();
@@ -125,6 +169,7 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
         }
         
         // Cleanup
+        let _ = DeleteObject(HGDIOBJ(hfont.0 as *mut c_void));
         let _ = UnregisterClassW(PCWSTR(class_name.as_ptr()), GetModuleHandleW(None).unwrap());
         
         // Return settings if changed
@@ -138,7 +183,10 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings) -> Option<Captur
 }
 
 #[cfg(windows)]
-unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
+use windows::Win32::Graphics::Gdi::GetDeviceCaps;
+
+#[cfg(windows)]
+unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT) {
     use windows::core::PCWSTR;
     
     let hinstance = GetModuleHandleW(None).unwrap();
@@ -146,14 +194,30 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
     let static_class = wide_string("STATIC");
     let edit_class = wide_string("EDIT");
     
-    let mut y_pos = 25;
-    let left_margin = 25;
-    let control_width = 290;
+    let mut y_pos = 20;
+    let left_margin = 30;
+    let control_width = 340;
     let control_height = 24;
-    let spacing = 35;
+    let spacing = 32;
+    
+    // Title label
+    let text = wide_string("Capture Settings");
+    let title_hwnd = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(static_class.as_ptr()),
+        PCWSTR(text.as_ptr()),
+        WS_CHILD | WS_VISIBLE,
+        left_margin, y_pos - 10, control_width, 28,
+        hwnd,
+        None,
+        hinstance,
+        None,
+    ).unwrap();
+    let _ = SendMessageW(title_hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
+    y_pos += spacing;
     
     // Checkbox: Show Cursor
-    let text = wide_string("Show cursor in capture");
+    let text = wide_string("  Show cursor in capture");
     let check_cursor = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(button_class.as_ptr()),
@@ -165,13 +229,14 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
         hinstance,
         None,
     ).unwrap();
+    let _ = SendMessageW(check_cursor, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     if settings.show_cursor {
         let _ = SendMessageW(check_cursor, BM_SETCHECK, WPARAM(BST_CHECKED.0 as usize), LPARAM(0));
     }
     y_pos += spacing;
     
     // Checkbox: Show Border
-    let text = wide_string("Show border frame");
+    let text = wide_string("  Show border frame");
     let check_border = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(button_class.as_ptr()),
@@ -183,41 +248,58 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
         hinstance,
         None,
     ).unwrap();
+    let _ = SendMessageW(check_border, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     if settings.show_border {
         let _ = SendMessageW(check_border, BM_SETCHECK, WPARAM(BST_CHECKED.0 as usize), LPARAM(0));
     }
     y_pos += spacing;
     
-    // Border width label and edit
-    let text = wide_string("Border width (pixels):");
-    let _ = CreateWindowExW(
+    // Border width label and edit (on same line)
+    let text = wide_string("       Border width:");
+    let label_hwnd = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(static_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE,
-        left_margin, y_pos + 3, 145, control_height,
+        left_margin, y_pos + 2, 120, control_height,
         hwnd,
         None,
         hinstance,
         None,
-    );
+    ).unwrap();
+    let _ = SendMessageW(label_hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     
     let text = wide_string(&settings.border_width.to_string());
-    let _ = CreateWindowExW(
+    let edit_hwnd = CreateWindowExW(
         WS_EX_CLIENTEDGE,
         PCWSTR(edit_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(ES_NUMBER as u32 | ES_CENTER as u32),
-        left_margin + 155, y_pos, 55, control_height,
+        left_margin + 125, y_pos, 50, control_height,
         hwnd,
         HMENU(ID_EDIT_BORDER_WIDTH as *mut c_void),
         hinstance,
         None,
-    );
+    ).unwrap();
+    let _ = SendMessageW(edit_hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
+    
+    let text = wide_string("px");
+    let px_hwnd = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(static_class.as_ptr()),
+        PCWSTR(text.as_ptr()),
+        WS_CHILD | WS_VISIBLE,
+        left_margin + 180, y_pos + 2, 25, control_height,
+        hwnd,
+        None,
+        hinstance,
+        None,
+    ).unwrap();
+    let _ = SendMessageW(px_hwnd, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     y_pos += spacing;
     
     // Checkbox: Production Mode
-    let text = wide_string("Production mode (hide destination window)");
+    let text = wide_string("  Production mode (hide destination window)");
     let check_prod = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(button_class.as_ptr()),
@@ -229,33 +311,35 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
         hinstance,
         None,
     ).unwrap();
+    let _ = SendMessageW(check_prod, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     if settings.exclude_from_capture {
         let _ = SendMessageW(check_prod, BM_SETCHECK, WPARAM(BST_CHECKED.0 as usize), LPARAM(0));
     }
-    y_pos += spacing + 15;
+    y_pos += spacing + 20;
     
-    // Buttons - centered
-    let btn_width = 90;
-    let btn_height = 30;
-    let btn_spacing = 12;
-    let total_btn_width = btn_width * 3 + btn_spacing * 2;
+    // Buttons - Save and Cancel
+    let btn_width = 100;
+    let btn_height = 32;
+    let btn_spacing = 20;
+    let total_btn_width = btn_width * 2 + btn_spacing;
     let btn_start_x = (DIALOG_WIDTH - total_btn_width) / 2;
     
-    let text = wide_string("OK");
-    let _ = CreateWindowExW(
+    let text = wide_string("Save");
+    let save_btn = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
         btn_start_x, y_pos, btn_width, btn_height,
         hwnd,
-        HMENU(ID_BTN_OK as *mut c_void),
+        HMENU(ID_BTN_SAVE as *mut c_void),
         hinstance,
         None,
-    );
+    ).unwrap();
+    let _ = SendMessageW(save_btn, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
     
     let text = wide_string("Cancel");
-    let _ = CreateWindowExW(
+    let cancel_btn = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
@@ -265,22 +349,8 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings) {
         HMENU(ID_BTN_CANCEL as *mut c_void),
         hinstance,
         None,
-    );
-    
-    let text = wide_string("Apply");
-    let _ = CreateWindowExW(
-        WINDOW_EX_STYLE::default(),
-        PCWSTR(button_class.as_ptr()),
-        PCWSTR(text.as_ptr()),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        btn_start_x + (btn_width + btn_spacing) * 2, y_pos, btn_width, btn_height,
-        hwnd,
-        HMENU(ID_BTN_APPLY as *mut c_void),
-        hinstance,
-        None,
-    );
-    
-    // Note: SetFocus removed - Tab key navigation still works with WS_TABSTOP
+    ).unwrap();
+    let _ = SendMessageW(cancel_btn, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
 }
 
 #[cfg(windows)]
@@ -295,19 +365,13 @@ unsafe extern "system" fn settings_dialog_proc(
             let control_id = (wparam.0 & 0xFFFF) as i32;
             
             match control_id {
-                ID_BTN_OK => {
+                ID_BTN_SAVE => {
                     save_settings_from_controls(hwnd);
                     SETTINGS_CHANGED.with(|c| *c.borrow_mut() = true);
                     let _ = DestroyWindow(hwnd);
                 }
                 ID_BTN_CANCEL => {
                     SETTINGS_CHANGED.with(|c| *c.borrow_mut() = false);
-                    let _ = DestroyWindow(hwnd);
-                }
-                ID_BTN_APPLY => {
-                    // Apply also closes the dialog and applies settings
-                    save_settings_from_controls(hwnd);
-                    SETTINGS_CHANGED.with(|c| *c.borrow_mut() = true);
                     let _ = DestroyWindow(hwnd);
                 }
                 _ => {}

@@ -52,6 +52,7 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_Controls",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
 
     # Security (needed for some COM operations)
