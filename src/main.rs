@@ -21,6 +21,7 @@ use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem};
 mod capture;
 mod window_manager;
 mod renderer;
+mod settings_dialog;
 
 use window_manager::{OverlayWindow, DestinationWindow};
 use capture::{CaptureEngine, CaptureSettings};
@@ -31,6 +32,7 @@ mod menu_ids {
     pub const TOGGLE_CURSOR: &str = "toggle_cursor";
     pub const TOGGLE_BORDER: &str = "toggle_border";
     pub const TOGGLE_EXCLUDE: &str = "toggle_exclude";
+    pub const SETTINGS: &str = "settings";
     pub const EXIT: &str = "exit";
 }
 
@@ -112,6 +114,7 @@ impl RustFrameApp {
             self.settings.exclude_from_capture,
             None,
         );
+        let menu_settings = MenuItem::with_id(menu_ids::SETTINGS, "Settings...", true, None);
         let menu_exit = MenuItem::with_id(menu_ids::EXIT, "Exit", true, None);
         
         // Build the menu
@@ -119,6 +122,8 @@ impl RustFrameApp {
         let _ = menu.append(&menu_cursor);
         let _ = menu.append(&menu_border);
         let _ = menu.append(&menu_exclude);
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&menu_settings);
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&menu_exit);
         
@@ -158,6 +163,15 @@ impl RustFrameApp {
                 }
                 info!("Cursor visibility: {}", self.settings.show_cursor);
                 self.update_overlay_title();
+                
+                // Update capture engine cursor visibility if active
+                if !self.is_selecting {
+                    if let Some(capture) = &self.capture_engine {
+                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor) {
+                            error!("Failed to update cursor visibility: {}", e);
+                        }
+                    }
+                }
             }
             id if id == menu_ids::TOGGLE_BORDER => {
                 self.settings.show_border = !self.settings.show_border;
@@ -200,6 +214,9 @@ impl RustFrameApp {
                         }
                     }
                 }
+            }
+            id if id == menu_ids::SETTINGS => {
+                self.show_settings_dialog();
             }
             id if id == menu_ids::EXIT => {
                 info!("Exit requested from tray menu");
@@ -437,6 +454,9 @@ impl ApplicationHandler for RustFrameApp {
                             info!("Exclude from capture: {}", self.settings.exclude_from_capture);
                             self.update_overlay_title();
                         }
+                        PhysicalKey::Code(KeyCode::KeyS) if self.is_selecting => {
+                            self.show_settings_dialog();
+                        }
                         _ => {}
                     }
                 }
@@ -566,10 +586,101 @@ impl RustFrameApp {
             let mode = if self.settings.exclude_from_capture { "PROD(single)" } else { "DEV(side-by-side)" };
             
             let title = format!(
-                "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} | ENTER=Start ESC=Exit",
+                "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} [S]ettings | ENTER=Start ESC=Exit",
                 cursor, border, mode
             );
             overlay.set_title(&title);
+        }
+    }
+    
+    /// Show the settings dialog and apply changes
+    fn show_settings_dialog(&mut self) {
+        info!("Opening settings dialog...");
+        
+        if let Some(new_settings) = settings_dialog::show_settings_dialog(&self.settings) {
+            info!("Settings changed, applying...");
+            
+            // Update cursor menu checkbox
+            if let Some(menu) = &self.menu_cursor {
+                menu.set_checked(new_settings.show_cursor);
+            }
+            
+            // Update border menu checkbox
+            if let Some(menu) = &self.menu_border {
+                menu.set_checked(new_settings.show_border);
+            }
+            
+            // Update exclude/production mode menu checkbox
+            if let Some(menu) = &self.menu_exclude {
+                menu.set_checked(new_settings.exclude_from_capture);
+            }
+            
+            // Store the old settings to detect changes
+            let cursor_changed = self.settings.show_cursor != new_settings.show_cursor;
+            let border_changed = self.settings.show_border != new_settings.show_border;
+            let mode_changed = self.settings.exclude_from_capture != new_settings.exclude_from_capture;
+            let border_width_changed = self.settings.border_width != new_settings.border_width;
+            
+            // Apply the new settings
+            self.settings = new_settings;
+            
+            // Update overlay title
+            self.update_overlay_title();
+            
+            // If capture is active, apply runtime changes
+            if !self.is_selecting {
+                // Handle cursor visibility change
+                if cursor_changed {
+                    if let Some(capture) = &self.capture_engine {
+                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor) {
+                            error!("Failed to update cursor visibility: {}", e);
+                        }
+                    }
+                }
+                
+                // Handle border visibility change
+                if border_changed {
+                    if let Some(overlay) = &self.overlay_window {
+                        if self.settings.show_border {
+                            overlay.make_hollow_frame(self.settings.border_width);
+                            overlay.show();
+                        } else {
+                            overlay.hide();
+                        }
+                    }
+                }
+                
+                // Handle border width change
+                if border_width_changed && self.settings.show_border {
+                    if let Some(overlay) = &self.overlay_window {
+                        overlay.update_hollow_frame(self.settings.border_width);
+                    }
+                    
+                    // Update capture region
+                    if let (Some(overlay), Some(capture)) = (&self.overlay_window, &mut self.capture_engine) {
+                        let rect = overlay.get_capture_rect_inner(self.settings.border_width);
+                        if let Err(e) = capture.update_region(rect) {
+                            error!("Failed to update capture region: {}", e);
+                        }
+                    }
+                }
+                
+                // Handle production mode change
+                if mode_changed {
+                    if let (Some(overlay), Some(dest)) = (&self.overlay_window, &self.destination_window) {
+                        let overlay_pos = overlay.get_outer_position();
+                        let size = overlay.get_inner_size();
+                        
+                        if self.settings.exclude_from_capture {
+                            dest.position_offscreen(size);
+                        } else {
+                            dest.position_beside_overlay(overlay_pos, size);
+                        }
+                    }
+                }
+            }
+        } else {
+            info!("Settings dialog cancelled");
         }
     }
 }

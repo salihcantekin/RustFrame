@@ -366,6 +366,13 @@ impl CaptureEngine {
 
         Ok(())
     }
+    
+    /// Update cursor visibility in the capture
+    pub fn update_cursor_visibility(&self, show_cursor: bool) -> Result<()> {
+        info!("Updating cursor visibility to: {}", show_cursor);
+        self.capture_session.SetIsCursorCaptureEnabled(show_cursor)?;
+        Ok(())
+    }
 
     /// Get the D3D11 device (needed by renderer)
     pub fn get_d3d_device(&self) -> &ID3D11Device {

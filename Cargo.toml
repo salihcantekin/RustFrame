@@ -50,7 +50,9 @@ windows = { version = "0.58", features = [
     # UI and Window Management
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    "Win32_UI_Controls",
     "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
 
     # Security (needed for some COM operations)
     "Win32_Security",
@@ -74,6 +76,9 @@ muda = "0.15"
 # Windows raw handle support
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [profile.release]
 # Optimize for performance
