@@ -15,12 +15,12 @@
 // - Efficient GPU rendering
 // - Easy integration with winit
 
-use anyhow::{Result, Context, anyhow};
+use anyhow::{anyhow, Context, Result};
 use log::{info, warn};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use winit::window::Window;
 use windows::Win32::Graphics::Direct3D11::*;
+use winit::window::Window;
 
 use crate::capture::{CaptureEngine, CaptureRect};
 
@@ -52,7 +52,7 @@ pub struct Renderer {
 
     /// Current window size
     window_size: (u32, u32),
-    
+
     /// Frame counter for debugging
     frame_count: u32,
 }
@@ -73,35 +73,36 @@ impl Renderer {
         // STEP 2: Create surface
         // The surface represents the window we're rendering to
         // SAFETY: We're passing a valid window handle from winit
-        let surface = instance.create_surface(window.clone())
+        let surface = instance
+            .create_surface(window.clone())
             .context("Failed to create surface")?;
         info!("Surface created");
 
         // STEP 3: Request adapter
         // The adapter represents a physical GPU
-        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        })) {
-            Ok(adapter) => adapter,
-            Err(e) => return Err(anyhow!("Failed to find suitable GPU adapter: {:?}", e)),
-        };
+        let adapter =
+            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })) {
+                Ok(adapter) => adapter,
+                Err(e) => return Err(anyhow!("Failed to find suitable GPU adapter: {:?}", e)),
+            };
 
         info!("Adapter acquired: {:?}", adapter.get_info());
 
         // STEP 4: Request device and queue
         // The device is our interface to the GPU, the queue submits commands
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("RustFrame Device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-                experimental_features: Default::default(),
-                trace: Default::default(),
-            },
-        )).context("Failed to create device and queue")?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("RustFrame Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .context("Failed to create device and queue")?;
 
         info!("Device and queue created");
 
@@ -220,7 +221,7 @@ impl Renderer {
         let vertices = QUAD_VERTICES;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
+            contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
         info!("Vertex buffer created");
@@ -268,16 +269,23 @@ impl Renderer {
         let d3d11_texture: ID3D11Texture2D = match self.cast_surface_to_texture(&frame_surface) {
             Ok(tex) => tex,
             Err(e) => {
-                warn!("Failed to cast surface to D3D11 texture: {:?}. Rendering clear color.", e);
+                warn!(
+                    "Failed to cast surface to D3D11 texture: {:?}. Rendering clear color.",
+                    e
+                );
                 return self.render_clear();
             }
         };
 
         // STEP 3: Get the current surface texture (what we're rendering to)
-        let output = self.surface.get_current_texture()
+        let output = self
+            .surface
+            .get_current_texture()
             .context("Failed to get surface texture")?;
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // STEP 4: Copy D3D11 texture to wgpu texture
         // This uses CPU-side copying via staging texture
@@ -306,9 +314,11 @@ impl Renderer {
         });
 
         // STEP 6: Create command encoder and render pass
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -346,7 +356,7 @@ impl Renderer {
 
         // Log every 60 frames to confirm rendering is working
         self.frame_count += 1;
-        if self.frame_count % 60 == 0 {
+        if self.frame_count.is_multiple_of(60) {
             info!("Rendered frame #{}", self.frame_count);
         }
 
@@ -355,35 +365,46 @@ impl Renderer {
 
     /// Cast WinRT IDirect3DSurface to COM ID3D11Texture2D using DXGI as bridge
     /// This properly handles the WinRT↔COM interface conversion
-    fn cast_surface_to_texture(&self, surface: &windows::Graphics::DirectX::Direct3D11::IDirect3DSurface) -> Result<ID3D11Texture2D> {
+    fn cast_surface_to_texture(
+        &self,
+        surface: &windows::Graphics::DirectX::Direct3D11::IDirect3DSurface,
+    ) -> Result<ID3D11Texture2D> {
         use windows::core::Interface;
         use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
-        
+
         // The correct way to get the underlying DXGI/D3D11 interface from a WinRT IDirect3DSurface
         // is through IDirect3DDxgiInterfaceAccess::GetInterface()
         unsafe {
             // Cast the WinRT surface to the interop interface
-            let interop: IDirect3DDxgiInterfaceAccess = surface.cast()
+            let interop: IDirect3DDxgiInterfaceAccess = surface
+                .cast()
                 .context("Failed to cast IDirect3DSurface to IDirect3DDxgiInterfaceAccess")?;
-            
+
             // Get the underlying D3D11 texture
-            let texture: ID3D11Texture2D = interop.GetInterface()
+            let texture: ID3D11Texture2D = interop
+                .GetInterface()
                 .context("Failed to get ID3D11Texture2D from IDirect3DDxgiInterfaceAccess")?;
-            
+
             Ok(texture)
         }
     }
 
     /// Render a clear frame (black screen)
     fn render_clear(&mut self) -> Result<()> {
-        let output = self.surface.get_current_texture()
+        let output = self
+            .surface
+            .get_current_texture()
             .context("Failed to get surface texture")?;
 
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Clear Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Clear Encoder"),
+            });
 
         {
             let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -465,8 +486,8 @@ impl Renderer {
                 .context("Failed to create staging texture")?;
         }
 
-        let staging_texture = staging_texture
-            .ok_or_else(|| anyhow!("Staging texture creation returned null"))?;
+        let staging_texture =
+            staging_texture.ok_or_else(|| anyhow!("Staging texture creation returned null"))?;
 
         // STEP 3: Copy from captured texture to staging texture (GPU -> GPU)
         unsafe {
@@ -479,9 +500,9 @@ impl Renderer {
             d3d_context
                 .Map(
                     &staging_texture,
-                    0, // Subresource index
+                    0,              // Subresource index
                     D3D11_MAP_READ, // Read-only access
-                    0, // No flags
+                    0,              // No flags
                     Some(&mut mapped),
                 )
                 .context("Failed to map staging texture")?;
@@ -503,16 +524,28 @@ impl Renderer {
 
         // Log crop calculation for debugging (only first frame)
         if self.frame_count == 0 {
-            info!("Crop calculation: monitor_origin=({},{}), crop_region=({},{} {}x{})",
-                monitor_origin.0, monitor_origin.1,
-                crop_region.x, crop_region.y, crop_region.width, crop_region.height);
-            info!("Computed: origin=({},{}) size={}x{}, texture_size={}x{}",
-                origin_x, origin_y, crop_width, crop_height, desc.Width, desc.Height);
+            info!(
+                "Crop calculation: monitor_origin=({},{}), crop_region=({},{} {}x{})",
+                monitor_origin.0,
+                monitor_origin.1,
+                crop_region.x,
+                crop_region.y,
+                crop_region.width,
+                crop_region.height
+            );
+            info!(
+                "Computed: origin=({},{}) size={}x{}, texture_size={}x{}",
+                origin_x, origin_y, crop_width, crop_height, desc.Width, desc.Height
+            );
         }
 
         if crop_width == 0 || crop_height == 0 {
-            unsafe { d3d_context.Unmap(&staging_texture, 0); }
-            return Err(anyhow!("Computed zero-sized crop region; check overlay position"));
+            unsafe {
+                d3d_context.Unmap(&staging_texture, 0);
+            }
+            return Err(anyhow!(
+                "Computed zero-sized crop region; check overlay position"
+            ));
         }
 
         // Allocate buffer for pixel data
@@ -587,7 +620,7 @@ impl Renderer {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    position: [f32; 2], // 2D position (x, y)
+    position: [f32; 2],   // 2D position (x, y)
     tex_coords: [f32; 2], // Texture coordinates (u, v)
 }
 

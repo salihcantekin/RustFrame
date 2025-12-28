@@ -13,38 +13,22 @@ use crate::constants::colors;
 /// and the lower 5 bits represent the pixel columns.
 static FONT_DATA: &[u8] = &[
     // Space (32)
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // ! (33)
-    0x04, 0x04, 0x04, 0x04, 0x00, 0x04, 0x00,
-    // " (34)
-    0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // # (35)
-    0x0A, 0x1F, 0x0A, 0x0A, 0x1F, 0x0A, 0x00,
-    // $ (36)
-    0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04,
-    // % (37)
-    0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03,
-    // & (38)
-    0x08, 0x14, 0x14, 0x08, 0x15, 0x12, 0x0D,
-    // ' (39)
-    0x04, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // ( (40)
-    0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02,
-    // ) (41)
-    0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08,
-    // * (42)
-    0x00, 0x04, 0x15, 0x0E, 0x15, 0x04, 0x00,
-    // + (43)
-    0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00,
-    // , (44)
-    0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08,
-    // - (45)
-    0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00,
-    // . (46)
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00,
-    // / (47)
-    0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10,
-    // 0-9 (48-57)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // ! (33)
+    0x04, 0x04, 0x04, 0x04, 0x00, 0x04, 0x00, // " (34)
+    0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, // # (35)
+    0x0A, 0x1F, 0x0A, 0x0A, 0x1F, 0x0A, 0x00, // $ (36)
+    0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04, // % (37)
+    0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03, // & (38)
+    0x08, 0x14, 0x14, 0x08, 0x15, 0x12, 0x0D, // ' (39)
+    0x04, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, // ( (40)
+    0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02, // ) (41)
+    0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08, // * (42)
+    0x00, 0x04, 0x15, 0x0E, 0x15, 0x04, 0x00, // + (43)
+    0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00, // , (44)
+    0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x08, // - (45)
+    0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00, // . (46)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, // / (47)
+    0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10, // 0-9 (48-57)
     0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E, // 0
     0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E, // 1
     0x0E, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1F, // 2
@@ -56,20 +40,13 @@ static FONT_DATA: &[u8] = &[
     0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E, // 8
     0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C, // 9
     // : (58)
-    0x00, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00,
-    // ; (59)
-    0x00, 0x00, 0x04, 0x00, 0x04, 0x04, 0x08,
-    // < (60)
-    0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02,
-    // = (61)
-    0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00,
-    // > (62)
-    0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08,
-    // ? (63)
-    0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04,
-    // @ (64)
-    0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E,
-    // A-Z (65-90)
+    0x00, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, // ; (59)
+    0x00, 0x00, 0x04, 0x00, 0x04, 0x04, 0x08, // < (60)
+    0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02, // = (61)
+    0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00, // > (62)
+    0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08, // ? (63)
+    0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04, // @ (64)
+    0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E, // A-Z (65-90)
     0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11, // A
     0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E, // B
     0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E, // C
@@ -97,18 +74,12 @@ static FONT_DATA: &[u8] = &[
     0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04, // Y
     0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F, // Z
     // [ (91)
-    0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E,
-    // \ (92)
-    0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01,
-    // ] (93)
-    0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E,
-    // ^ (94)
-    0x04, 0x0A, 0x11, 0x00, 0x00, 0x00, 0x00,
-    // _ (95)
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F,
-    // ` (96)
-    0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
-    // a-z (97-122)
+    0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E, // \ (92)
+    0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01, // ] (93)
+    0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E, // ^ (94)
+    0x04, 0x0A, 0x11, 0x00, 0x00, 0x00, 0x00, // _ (95)
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, // ` (96)
+    0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, // a-z (97-122)
     0x00, 0x00, 0x0E, 0x01, 0x0F, 0x11, 0x0F, // a
     0x10, 0x10, 0x1E, 0x11, 0x11, 0x11, 0x1E, // b
     0x00, 0x00, 0x0E, 0x11, 0x10, 0x11, 0x0E, // c
@@ -142,35 +113,47 @@ const CHAR_WIDTH: i32 = 5;
 const CHAR_HEIGHT: i32 = 7;
 const CHAR_SPACING: i32 = 2;
 
+/// Canvas dimensions and pixel buffer
+pub struct Canvas<'a> {
+    pub pixels: &'a mut [u32],
+    pub width: i32,
+    pub height: i32,
+}
+
+/// Text rendering parameters
+pub struct TextStyle {
+    pub color: u32,
+    pub scale: i32,
+}
+
 /// Draw a single character to the pixel buffer
 /// Returns the width of the character drawn (including spacing)
-fn draw_char(pixels: &mut [u32], img_width: i32, img_height: i32, 
-             x: i32, y: i32, ch: char, color: u32, scale: i32) -> i32 {
-    let char_index = if ch >= ' ' && ch <= 'z' {
+fn draw_char(canvas: &mut Canvas, x: i32, y: i32, ch: char, style: &TextStyle) -> i32 {
+    let char_index = if (' '..='z').contains(&ch) {
         (ch as usize) - 32
     } else {
         0 // Space for unknown characters
     };
-    
+
     let font_offset = char_index * 7;
-    
+
     for row in 0..CHAR_HEIGHT {
         if font_offset + row as usize >= FONT_DATA.len() {
             break;
         }
         let row_data = FONT_DATA[font_offset + row as usize];
-        
+
         for col in 0..CHAR_WIDTH {
             if (row_data >> (4 - col)) & 1 == 1 {
                 // Draw pixel with scaling
-                for sy in 0..scale {
-                    for sx in 0..scale {
-                        let px = x + col * scale + sx;
-                        let py = y + row * scale + sy;
-                        if px >= 0 && px < img_width && py >= 0 && py < img_height {
-                            let idx = (py * img_width + px) as usize;
-                            if idx < pixels.len() {
-                                pixels[idx] = color;
+                for sy in 0..style.scale {
+                    for sx in 0..style.scale {
+                        let px = x + col * style.scale + sx;
+                        let py = y + row * style.scale + sy;
+                        if px >= 0 && px < canvas.width && py >= 0 && py < canvas.height {
+                            let idx = (py * canvas.width + px) as usize;
+                            if idx < canvas.pixels.len() {
+                                canvas.pixels[idx] = style.color;
                             }
                         }
                     }
@@ -178,16 +161,15 @@ fn draw_char(pixels: &mut [u32], img_width: i32, img_height: i32,
             }
         }
     }
-    
-    (CHAR_WIDTH + CHAR_SPACING) * scale
+
+    (CHAR_WIDTH + CHAR_SPACING) * style.scale
 }
 
 /// Draw a line of text to the pixel buffer
-pub fn draw_text(pixels: &mut [u32], img_width: i32, img_height: i32,
-                 x: i32, y: i32, text: &str, color: u32, scale: i32) {
+pub fn draw_text(canvas: &mut Canvas, x: i32, y: i32, text: &str, style: &TextStyle) {
     let mut cursor_x = x;
     for ch in text.chars() {
-        cursor_x += draw_char(pixels, img_width, img_height, cursor_x, y, ch, color, scale);
+        cursor_x += draw_char(canvas, cursor_x, y, ch, style);
     }
 }
 
@@ -197,48 +179,112 @@ pub fn text_width(text: &str, scale: i32) -> i32 {
 }
 
 /// Draw centered help text for the selection overlay
-pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
+/// Shows current settings state (cursor, border, mode)
+pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32, 
+                      show_cursor: bool, show_border: bool, exclude_from_capture: bool) {
+    let mut canvas = Canvas {
+        pixels,
+        width,
+        height,
+    };
+
+    // Format settings status text
+    let cursor_status = if show_cursor { "ON" } else { "OFF" };
+    let border_status = if show_border { "ON" } else { "OFF" };
+    let mode_status = if exclude_from_capture { "PROD" } else { "DEV" };
+    
+    // Build dynamic text lines
+    let cursor_line = format!("[C] Cursor: {}", cursor_status);
+    let border_line = format!("[B] Border: {}", border_status);
+    let mode_line = format!("[E] Mode: {}", mode_status);
+
     // Help text content with color and scale
-    let lines: &[(&str, u32, i32)] = &[
+    // Using owned Strings for dynamic content
+    let lines: Vec<(&str, u32, i32)> = vec![
         ("RustFrame", colors::TEXT_BLUE, 2),
         ("", colors::TEXT_WHITE, 1),
         ("Drag borders to resize", colors::TEXT_GRAY, 1),
         ("Drag center to move", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("ENTER - Start capture", colors::TEXT_WHITE, 1),
-        ("ESC   - Exit", colors::TEXT_WHITE, 1),
+        ("ESC   - Stop / Exit", colors::TEXT_WHITE, 1),
         ("", colors::TEXT_WHITE, 1),
-        ("C - Toggle cursor", colors::TEXT_GRAY, 1),
-        ("B - Toggle border", colors::TEXT_GRAY, 1),
-        ("S - Settings", colors::TEXT_GRAY, 1),
+        ("[S] Settings", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("by Salih Cantekin", colors::TEXT_GRAY, 1),
     ];
-    
+
     // Calculate line heights
     const LINE_HEIGHT: i32 = 16;
     const TITLE_HEIGHT: i32 = 28;
     const EMPTY_LINE_HEIGHT: i32 = 8;
-    
-    let total_height: i32 = lines.iter().map(|(text, _, scale)| {
-        if text.is_empty() { EMPTY_LINE_HEIGHT } 
-        else if *scale > 1 { TITLE_HEIGHT } 
-        else { LINE_HEIGHT }
-    }).sum();
-    
+
+    // Calculate total height including dynamic settings lines
+    let settings_lines_height = LINE_HEIGHT * 3; // 3 settings lines
+    let total_height: i32 = lines
+        .iter()
+        .map(|(text, _, scale)| {
+            if text.is_empty() {
+                EMPTY_LINE_HEIGHT
+            } else if *scale > 1 {
+                TITLE_HEIGHT
+            } else {
+                LINE_HEIGHT
+            }
+        })
+        .sum::<i32>() + settings_lines_height;
+
     let mut y = (height - total_height) / 2;
-    
-    for (text, color, scale) in lines {
+
+    // Draw static lines up to settings section
+    for (i, (text, color, scale)) in lines.iter().enumerate() {
         if text.is_empty() {
             y += EMPTY_LINE_HEIGHT;
             continue;
         }
-        
+
+        let style = TextStyle {
+            color: *color,
+            scale: *scale,
+        };
         let text_w = text_width(text, *scale);
         let x = (width - text_w) / 2;
-        
-        draw_text(pixels, width, height, x, y, text, *color, *scale);
-        
-        y += if *scale > 1 { TITLE_HEIGHT } else { LINE_HEIGHT };
+
+        draw_text(&mut canvas, x, y, text, &style);
+
+        y += if *scale > 1 {
+            TITLE_HEIGHT
+        } else {
+            LINE_HEIGHT
+        };
+
+        // Insert dynamic settings lines after "ESC - Stop / Exit" (index 6)
+        if i == 6 {
+            y += EMPTY_LINE_HEIGHT; // Add spacing before settings
+            
+            // Draw cursor setting (green if ON, red if OFF)
+            let cursor_color = if show_cursor { colors::TEXT_GREEN } else { colors::TEXT_RED };
+            let cursor_style = TextStyle { color: cursor_color, scale: 1 };
+            let text_w = text_width(&cursor_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &cursor_line, &cursor_style);
+            y += LINE_HEIGHT;
+            
+            // Draw border setting
+            let border_color = if show_border { colors::TEXT_GREEN } else { colors::TEXT_RED };
+            let border_style = TextStyle { color: border_color, scale: 1 };
+            let text_w = text_width(&border_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &border_line, &border_style);
+            y += LINE_HEIGHT;
+            
+            // Draw mode setting
+            let mode_color = if exclude_from_capture { colors::TEXT_BLUE } else { colors::TEXT_YELLOW };
+            let mode_style = TextStyle { color: mode_color, scale: 1 };
+            let text_w = text_width(&mode_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &mode_line, &mode_style);
+            y += LINE_HEIGHT;
+        }
     }
 }

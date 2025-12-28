@@ -1,11 +1,18 @@
 [package]
 name = "RustFrame"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Salih Cantekin"]
-description = "A Windows screen region capture tool using Windows.Graphics.Capture API"
+authors = ["Salih Cantekin <salihcantekin@gmail.com>"]
+description = "A GPU-accelerated Windows screen region capture tool using Windows.Graphics.Capture API"
 repository = "https://github.com/salihcantekin/RustFrame"
+homepage = "https://github.com/salihcantekin/RustFrame"
+documentation = "https://github.com/salihcantekin/RustFrame#readme"
+readme = "README.md"
 license = "MIT"
+keywords = ["windows", "screen-capture", "wgpu", "directx", "screen-sharing"]
+categories = ["multimedia", "graphics", "os::windows-apis"]
+rust-version = "1.70"
+exclude = ["target/", ".git/", ".github/", "*.zip"]
 
 [profile.release]
 # Optimize for performance
@@ -23,7 +30,10 @@ opt-level = 1
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+embed-resource = "3.0.6"
+
+[build-dependencies]
+semver = "1.0.27"
 
 [dependencies]
 # Window management - cross-platform windowing library
@@ -82,6 +92,9 @@ anyhow = "1.0.100"
 # Additional utilities
 bytemuck = { version = "1.24.0", features = ["derive"] }
 pollster = "0.4.0"
+
+# Image loading for icons
+image = { version = "0.25", default-features = false, features = ["ico"] }
 
 # System tray icon
 tray-icon = "0.21.2"

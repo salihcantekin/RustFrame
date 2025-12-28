@@ -37,6 +37,23 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Update version in Cargo.toml
+        run: |
+          $version = "${{ github.event.inputs.version }}".TrimStart('v')
+          Write-Host "Setting version to: $version"
+          
+          # Read Cargo.toml
+          $content = Get-Content "Cargo.toml" -Raw
+          
+          # Update version line
+          $content = $content -replace 'version = "[^"]*"', "version = `"$version`""
+          
+          # Write back
+          Set-Content "Cargo.toml" -Value $content -NoNewline
+          
+          Write-Host "✅ Cargo.toml version updated to $version"
+          Select-String -Path "Cargo.toml" -Pattern "^version"
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
