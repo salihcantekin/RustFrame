@@ -302,6 +302,14 @@ impl ApplicationHandler for RustFrameApp {
             match OverlayWindow::new(event_loop) {
                 Ok(overlay) => {
                     info!("Overlay window created successfully");
+                    // Initialize the overlay with current settings state
+                    if let Err(e) = overlay.update_settings_display(
+                        self.settings.show_cursor,
+                        self.settings.show_border,
+                        self.settings.exclude_from_capture
+                    ) {
+                        error!("Failed to initialize overlay settings display: {}", e);
+                    }
                     self.overlay_window = Some(overlay);
                     // Set initial title with settings info
                     self.update_overlay_title();
@@ -652,7 +660,7 @@ impl RustFrameApp {
         }
     }
 
-    /// Update overlay title to show current settings
+    /// Update overlay title and visual display to show current settings
     fn update_overlay_title(&self) {
         if let Some(overlay) = &self.overlay_window {
             let cursor = if self.settings.show_cursor {
@@ -679,6 +687,17 @@ impl RustFrameApp {
                 cursor, border, mode
             );
             overlay.set_title(&title);
+            
+            // Update the visual display inside the overlay to reflect settings changes
+            if self.is_selecting {
+                if let Err(e) = overlay.update_settings_display(
+                    self.settings.show_cursor,
+                    self.settings.show_border,
+                    self.settings.exclude_from_capture
+                ) {
+                    error!("Failed to update overlay settings display: {}", e);
+                }
+            }
         }
     }
 

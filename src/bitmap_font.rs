@@ -179,26 +179,37 @@ pub fn text_width(text: &str, scale: i32) -> i32 {
 }
 
 /// Draw centered help text for the selection overlay
-pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
+/// Shows current settings state (cursor, border, mode)
+pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32, 
+                      show_cursor: bool, show_border: bool, exclude_from_capture: bool) {
     let mut canvas = Canvas {
         pixels,
         width,
         height,
     };
 
+    // Format settings status text
+    let cursor_status = if show_cursor { "ON" } else { "OFF" };
+    let border_status = if show_border { "ON" } else { "OFF" };
+    let mode_status = if exclude_from_capture { "PROD" } else { "DEV" };
+    
+    // Build dynamic text lines
+    let cursor_line = format!("[C] Cursor: {}", cursor_status);
+    let border_line = format!("[B] Border: {}", border_status);
+    let mode_line = format!("[E] Mode: {}", mode_status);
+
     // Help text content with color and scale
-    let lines: &[(&str, u32, i32)] = &[
+    // Using owned Strings for dynamic content
+    let lines: Vec<(&str, u32, i32)> = vec![
         ("RustFrame", colors::TEXT_BLUE, 2),
         ("", colors::TEXT_WHITE, 1),
         ("Drag borders to resize", colors::TEXT_GRAY, 1),
         ("Drag center to move", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("ENTER - Start capture", colors::TEXT_WHITE, 1),
-        ("ESC   - Exit", colors::TEXT_WHITE, 1),
+        ("ESC   - Stop / Exit", colors::TEXT_WHITE, 1),
         ("", colors::TEXT_WHITE, 1),
-        ("C - Toggle cursor", colors::TEXT_GRAY, 1),
-        ("B - Toggle border", colors::TEXT_GRAY, 1),
-        ("S - Settings", colors::TEXT_GRAY, 1),
+        ("[S] Settings", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("by Salih Cantekin", colors::TEXT_GRAY, 1),
     ];
@@ -208,6 +219,8 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
     const TITLE_HEIGHT: i32 = 28;
     const EMPTY_LINE_HEIGHT: i32 = 8;
 
+    // Calculate total height including dynamic settings lines
+    let settings_lines_height = LINE_HEIGHT * 3; // 3 settings lines
     let total_height: i32 = lines
         .iter()
         .map(|(text, _, scale)| {
@@ -219,11 +232,12 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
                 LINE_HEIGHT
             }
         })
-        .sum();
+        .sum::<i32>() + settings_lines_height;
 
     let mut y = (height - total_height) / 2;
 
-    for (text, color, scale) in lines {
+    // Draw static lines up to settings section
+    for (i, (text, color, scale)) in lines.iter().enumerate() {
         if text.is_empty() {
             y += EMPTY_LINE_HEIGHT;
             continue;
@@ -243,5 +257,34 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
         } else {
             LINE_HEIGHT
         };
+
+        // Insert dynamic settings lines after "ESC - Stop / Exit" (index 6)
+        if i == 6 {
+            y += EMPTY_LINE_HEIGHT; // Add spacing before settings
+            
+            // Draw cursor setting (green if ON, red if OFF)
+            let cursor_color = if show_cursor { colors::TEXT_GREEN } else { colors::TEXT_RED };
+            let cursor_style = TextStyle { color: cursor_color, scale: 1 };
+            let text_w = text_width(&cursor_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &cursor_line, &cursor_style);
+            y += LINE_HEIGHT;
+            
+            // Draw border setting
+            let border_color = if show_border { colors::TEXT_GREEN } else { colors::TEXT_RED };
+            let border_style = TextStyle { color: border_color, scale: 1 };
+            let text_w = text_width(&border_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &border_line, &border_style);
+            y += LINE_HEIGHT;
+            
+            // Draw mode setting
+            let mode_color = if exclude_from_capture { colors::TEXT_BLUE } else { colors::TEXT_YELLOW };
+            let mode_style = TextStyle { color: mode_color, scale: 1 };
+            let text_w = text_width(&mode_line, 1);
+            let x = (width - text_w) / 2;
+            draw_text(&mut canvas, x, y, &mode_line, &mode_style);
+            y += LINE_HEIGHT;
+        }
     }
 }

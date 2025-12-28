@@ -38,10 +38,12 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-// Thread-local storage for border width and overlay HWND
+// Thread-local storage for border width, overlay HWND, and settings state
 thread_local! {
     static BORDER_WIDTH: Cell<u32> = const { Cell::new(5) };
     static OVERLAY_HWND: Cell<isize> = const { Cell::new(0) };
+    // Settings state for display in overlay (show_cursor, show_border, exclude_from_capture)
+    static SETTINGS_STATE: Cell<(bool, bool, bool)> = const { Cell::new((true, true, true)) };
 }
 
 /// Wrapper for the overlay (selector) window
@@ -372,8 +374,11 @@ impl OverlayWindow {
             }
         }
 
-        // Draw help text using the bitmap font module
-        bitmap_font::draw_help_text(pixels, width, height);
+        // Get settings state from thread-local storage
+        let (show_cursor, show_border, exclude_from_capture) = SETTINGS_STATE.with(|s| s.get());
+        
+        // Draw help text using the bitmap font module with settings state
+        bitmap_font::draw_help_text(pixels, width, height, show_cursor, show_border, exclude_from_capture);
     }
 
     /// Draw the selection overlay with semi-transparent background, border, and help text
@@ -397,6 +402,17 @@ impl OverlayWindow {
     #[cfg(windows)]
     pub fn redraw_selection_overlay(&self) -> Result<()> {
         Self::draw_selection_overlay(&self.window)
+    }
+    
+    /// Update settings state and redraw the overlay to reflect changes
+    /// This is called when user changes settings via keyboard shortcuts
+    #[cfg(windows)]
+    pub fn update_settings_display(&self, show_cursor: bool, show_border: bool, exclude_from_capture: bool) -> Result<()> {
+        // Update thread-local storage with new settings
+        SETTINGS_STATE.with(|s| s.set((show_cursor, show_border, exclude_from_capture)));
+        
+        // Redraw the overlay to show updated settings
+        self.redraw_selection_overlay()
     }
 
     /// Get the window ID for event routing
