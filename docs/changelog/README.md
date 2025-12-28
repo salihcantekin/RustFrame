@@ -6,7 +6,7 @@ This directory contains release notes for each version of RustFrame.
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| [v0.2.0](v0.2.0.md) | 2025-12-28 | Multi-monitor support, custom tray icon, improved ESC behavior, real-time settings display |
+| [v1.1.0](v1.1.0.md) | 2025-12-28 | Multi-monitor support, custom tray icon, improved ESC behavior, real-time settings display, enhanced CI/CD |
 | v0.1.0 | 2025-12-27 | Initial release with basic screen capture functionality |
 
 ## How to Use
