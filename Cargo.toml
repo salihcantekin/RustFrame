@@ -1,11 +1,18 @@
 [package]
 name = "RustFrame"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Salih Cantekin"]
-description = "A Windows screen region capture tool using Windows.Graphics.Capture API"
+authors = ["Salih Cantekin <salihcantekin@gmail.com>"]
+description = "A GPU-accelerated Windows screen region capture tool using Windows.Graphics.Capture API"
 repository = "https://github.com/salihcantekin/RustFrame"
+homepage = "https://github.com/salihcantekin/RustFrame"
+documentation = "https://github.com/salihcantekin/RustFrame#readme"
+readme = "README.md"
 license = "MIT"
+keywords = ["windows", "screen-capture", "wgpu", "directx", "screen-sharing"]
+categories = ["multimedia", "graphics", "os::windows-apis"]
+rust-version = "1.70"
+exclude = ["target/", ".git/", ".github/", "*.zip"]
 
 [profile.release]
 # Optimize for performance
