@@ -4,20 +4,26 @@
 // Uses modern Windows controls with proper DPI scaling and Segoe UI font.
 
 use crate::capture::CaptureSettings;
-use crate::constants::{dialog, capture as capture_const};
+use crate::constants::{capture as capture_const, dialog};
 use crate::utils::wide_string;
 use log::info;
 use std::cell::RefCell;
 
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HWND, HINSTANCE, LPARAM, WPARAM, LRESULT},
-    UI::WindowsAndMessaging::*,
-    UI::Controls::*,
-    Graphics::Gdi::{GetSysColorBrush, COLOR_3DFACE, CreateFontW, HFONT, GetDC, ReleaseDC, DeleteObject, HGDIOBJ,
-                    FW_NORMAL, CLEARTYPE_QUALITY, DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, FF_SWISS},
-    Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWM_SYSTEMBACKDROP_TYPE, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW},
+    Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+    Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DWM_SYSTEMBACKDROP_TYPE,
+    },
+    Graphics::Gdi::{
+        CreateFontW, DeleteObject, GetDC, GetSysColorBrush, ReleaseDC, CLEARTYPE_QUALITY,
+        CLIP_DEFAULT_PRECIS, COLOR_3DFACE, DEFAULT_CHARSET, FF_SWISS, FW_NORMAL, HFONT, HGDIOBJ,
+        OUT_TT_PRECIS,
+    },
     System::LibraryLoader::GetModuleHandleW,
+    UI::Controls::*,
+    UI::WindowsAndMessaging::*,
 };
 
 #[cfg(windows)]
@@ -35,23 +41,26 @@ const SS_CENTER: u32 = 0x01;
 
 // Thread-local state for dialog
 thread_local! {
-    static DIALOG_SETTINGS: RefCell<Option<CaptureSettings>> = RefCell::new(None);
-    static SETTINGS_CHANGED: RefCell<bool> = RefCell::new(false);
-    static DIALOG_HWND: RefCell<Option<HWND>> = RefCell::new(None);
-    static DIALOG_FONT: RefCell<Option<HFONT>> = RefCell::new(None);
-    static DIALOG_DEV_MODE: RefCell<bool> = RefCell::new(false);
-    
-    static DLG_CHECK_CURSOR: RefCell<Option<HWND>> = RefCell::new(None);
-    static DLG_CHECK_BORDER: RefCell<Option<HWND>> = RefCell::new(None);
-    static DLG_CHECK_PROD: RefCell<Option<HWND>> = RefCell::new(None);
-    static DLG_EDIT_BORDER_WIDTH: RefCell<Option<HWND>> = RefCell::new(None);
+    static DIALOG_SETTINGS: RefCell<Option<CaptureSettings>> = const { RefCell::new(None) };
+    static SETTINGS_CHANGED: RefCell<bool> = const { RefCell::new(false) };
+    static DIALOG_HWND: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    static DIALOG_FONT: RefCell<Option<HFONT>> = const { RefCell::new(None) };
+    static DIALOG_DEV_MODE: RefCell<bool> = const { RefCell::new(false) };
+
+    static DLG_CHECK_CURSOR: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    static DLG_CHECK_BORDER: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    static DLG_CHECK_PROD: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    static DLG_EDIT_BORDER_WIDTH: RefCell<Option<HWND>> = const { RefCell::new(None) };
 }
 
 /// Show the settings dialog
 /// Returns Some(CaptureSettings) if user clicked Save, None if cancelled
 /// dev_mode: if true, shows production mode option
 #[cfg(windows)]
-pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) -> Option<CaptureSettings> {
+pub fn show_settings_dialog(
+    current_settings: &CaptureSettings,
+    dev_mode: bool,
+) -> Option<CaptureSettings> {
     use windows::core::PCWSTR;
 
     unsafe {
@@ -72,7 +81,9 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
         // Create modern font (Segoe UI, 10pt)
         let font_name = wide_string("Segoe UI");
         let hdc = GetDC(None);
-        let font_height = -((12.0 * GetDeviceCaps(Some(hdc), windows::Win32::Graphics::Gdi::LOGPIXELSY) as f32) / 72.0) as i32;
+        let font_height = -((12.0
+            * GetDeviceCaps(Some(hdc), windows::Win32::Graphics::Gdi::LOGPIXELSY) as f32)
+            / 72.0) as i32;
         let _ = ReleaseDC(None, hdc);
 
         // Create font using strongly-typed constants
@@ -119,7 +130,11 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
         // Get screen dimensions for centering
         let screen_width = GetSystemMetrics(SM_CXSCREEN);
         let screen_height = GetSystemMetrics(SM_CYSCREEN);
-        let dialog_height = if dev_mode { dialog::HEIGHT_DEV } else { dialog::HEIGHT_PROD };
+        let dialog_height = if dev_mode {
+            dialog::HEIGHT_DEV
+        } else {
+            dialog::HEIGHT_PROD
+        };
         let x = (screen_width - dialog::WIDTH) / 2;
         let y = (screen_height - dialog_height) / 2;
 
@@ -139,8 +154,9 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
             None,
             Some(hinstance),
             None,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         // Enable Windows 11 Mica backdrop effect
         let use_mica = DWMSBT_MAINWINDOW;
         let _ = DwmSetWindowAttribute(
@@ -149,7 +165,7 @@ pub fn show_settings_dialog(current_settings: &CaptureSettings, dev_mode: bool) 
             &use_mica as *const _ as *const c_void,
             size_of::<DWM_SYSTEMBACKDROP_TYPE>() as u32,
         );
-        
+
         // Enable dark mode
         let use_dark: i32 = 1;
         let _ = DwmSetWindowAttribute(
@@ -226,13 +242,22 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(static_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE,
-        left_margin, y_pos - 10, control_width, 28,
+        left_margin,
+        y_pos - 10,
+        control_width,
+        28,
         Some(hwnd),
         None,
         Some(hinstance),
         None,
-    ).unwrap();
-    let _ = SendMessageW(title_hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    )
+    .unwrap();
+    let _ = SendMessageW(
+        title_hwnd,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
     y_pos += spacing;
 
     // Checkbox: Show Cursor
@@ -242,16 +267,30 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-        left_margin, y_pos, control_width, control_height,
+        left_margin,
+        y_pos,
+        control_width,
+        control_height,
         Some(hwnd),
         Some(HMENU(ID_CHECK_CURSOR as isize as *mut c_void)),
         Some(hinstance),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     DLG_CHECK_CURSOR.with(|c| *c.borrow_mut() = Some(check_cursor));
-    let _ = SendMessageW(check_cursor, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    let _ = SendMessageW(
+        check_cursor,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
     if settings.show_cursor {
-        let _ = SendMessageW(check_cursor, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+        let _ = SendMessageW(
+            check_cursor,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            Some(LPARAM(0)),
+        );
     }
     y_pos += spacing;
 
@@ -262,16 +301,30 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-        left_margin, y_pos, control_width, control_height,
+        left_margin,
+        y_pos,
+        control_width,
+        control_height,
         Some(hwnd),
         Some(HMENU(ID_CHECK_BORDER as isize as *mut c_void)),
         Some(hinstance),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     DLG_CHECK_BORDER.with(|c| *c.borrow_mut() = Some(check_border));
-    let _ = SendMessageW(check_border, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    let _ = SendMessageW(
+        check_border,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
     if settings.show_border {
-        let _ = SendMessageW(check_border, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+        let _ = SendMessageW(
+            check_border,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            Some(LPARAM(0)),
+        );
     }
     y_pos += spacing;
 
@@ -282,28 +335,50 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(static_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE,
-        left_margin, y_pos + 2, 120, control_height,
+        left_margin,
+        y_pos + 2,
+        120,
+        control_height,
         Some(hwnd),
         None,
         Some(hinstance),
         None,
-    ).unwrap();
-    let _ = SendMessageW(label_hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    )
+    .unwrap();
+    let _ = SendMessageW(
+        label_hwnd,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
 
     let text = wide_string(&settings.border_width.to_string());
     let edit_hwnd = CreateWindowExW(
         WS_EX_CLIENTEDGE,
         PCWSTR(edit_class.as_ptr()),
         PCWSTR(text.as_ptr()),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(ES_NUMBER as u32) | WINDOW_STYLE(ES_CENTER as u32),
-        left_margin + 125, y_pos, 50, control_height,
+        WS_CHILD
+            | WS_VISIBLE
+            | WS_TABSTOP
+            | WINDOW_STYLE(ES_NUMBER as u32)
+            | WINDOW_STYLE(ES_CENTER as u32),
+        left_margin + 125,
+        y_pos,
+        50,
+        control_height,
         Some(hwnd),
         Some(HMENU(ID_EDIT_BORDER_WIDTH as isize as *mut c_void)),
         Some(hinstance),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     DLG_EDIT_BORDER_WIDTH.with(|c| *c.borrow_mut() = Some(edit_hwnd));
-    let _ = SendMessageW(edit_hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    let _ = SendMessageW(
+        edit_hwnd,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
 
     let text = wide_string("px");
     let px_hwnd = CreateWindowExW(
@@ -311,13 +386,22 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(static_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE,
-        left_margin + 180, y_pos + 2, 25, control_height,
+        left_margin + 180,
+        y_pos + 2,
+        25,
+        control_height,
         Some(hwnd),
         None,
         Some(hinstance),
         None,
-    ).unwrap();
-    let _ = SendMessageW(px_hwnd, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    )
+    .unwrap();
+    let _ = SendMessageW(
+        px_hwnd,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
     y_pos += spacing;
 
     // Checkbox: Production Mode (only in dev mode)
@@ -328,16 +412,30 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
             PCWSTR(button_class.as_ptr()),
             PCWSTR(text.as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
-            left_margin, y_pos, control_width, control_height,
+            left_margin,
+            y_pos,
+            control_width,
+            control_height,
             Some(hwnd),
             Some(HMENU(ID_CHECK_PROD_MODE as isize as *mut c_void)),
             Some(hinstance),
             None,
-        ).unwrap();
+        )
+        .unwrap();
         DLG_CHECK_PROD.with(|c| *c.borrow_mut() = Some(check_prod));
-        let _ = SendMessageW(check_prod, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+        let _ = SendMessageW(
+            check_prod,
+            WM_SETFONT,
+            Some(WPARAM(hfont.0 as usize)),
+            Some(LPARAM(1)),
+        );
         if settings.exclude_from_capture {
-            let _ = SendMessageW(check_prod, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), Some(LPARAM(0)));
+            let _ = SendMessageW(
+                check_prod,
+                BM_SETCHECK,
+                Some(WPARAM(BST_CHECKED.0 as usize)),
+                Some(LPARAM(0)),
+            );
         }
         y_pos += spacing;
     }
@@ -356,13 +454,22 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
-        btn_start_x, y_pos, btn_width, btn_height,
+        btn_start_x,
+        y_pos,
+        btn_width,
+        btn_height,
         Some(hwnd),
         Some(HMENU(ID_BTN_SAVE as isize as *mut c_void)),
         Some(hinstance),
         None,
-    ).unwrap();
-    let _ = SendMessageW(save_btn, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    )
+    .unwrap();
+    let _ = SendMessageW(
+        save_btn,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
 
     let text = wide_string("Cancel");
     let cancel_btn = CreateWindowExW(
@@ -370,33 +477,55 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         PCWSTR(button_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-        btn_start_x + btn_width + btn_spacing, y_pos, btn_width, btn_height,
+        btn_start_x + btn_width + btn_spacing,
+        y_pos,
+        btn_width,
+        btn_height,
         Some(hwnd),
         Some(HMENU(ID_BTN_CANCEL as isize as *mut c_void)),
         Some(hinstance),
         None,
-    ).unwrap();
-    let _ = SendMessageW(cancel_btn, WM_SETFONT, Some(WPARAM(hfont.0 as usize)), Some(LPARAM(1)));
+    )
+    .unwrap();
+    let _ = SendMessageW(
+        cancel_btn,
+        WM_SETFONT,
+        Some(WPARAM(hfont.0 as usize)),
+        Some(LPARAM(1)),
+    );
 
     // Credit label at bottom
-    let dialog_height = if dev_mode { dialog::HEIGHT_DEV } else { dialog::HEIGHT_PROD };
+    let dialog_height = if dev_mode {
+        dialog::HEIGHT_DEV
+    } else {
+        dialog::HEIGHT_PROD
+    };
     let text = wide_string("by Salih Cantekin");
     let credit_hwnd = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         PCWSTR(static_class.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_CENTER),
-        0, dialog_height - 55, dialog::WIDTH, 18,
+        0,
+        dialog_height - 55,
+        dialog::WIDTH,
+        18,
         Some(hwnd),
         None,
         Some(hinstance),
         None,
-    ).unwrap();
+    )
+    .unwrap();
     // Use smaller font for credit
     let small_font = CreateFontW(
-        14, 0, 0, 0,
+        14,
+        0,
+        0,
+        0,
         FW_NORMAL.0 as i32,
-        0, 0, 0,
+        0,
+        0,
+        0,
         DEFAULT_CHARSET,
         OUT_TT_PRECIS,
         CLIP_DEFAULT_PRECIS,
@@ -404,7 +533,12 @@ unsafe fn create_controls(hwnd: HWND, settings: &CaptureSettings, hfont: HFONT, 
         FF_SWISS.0 as u32,
         PCWSTR(wide_string("Segoe UI").as_ptr()),
     );
-    let _ = SendMessageW(credit_hwnd, WM_SETFONT, Some(WPARAM(small_font.0 as usize)), Some(LPARAM(1)));
+    let _ = SendMessageW(
+        credit_hwnd,
+        WM_SETFONT,
+        Some(WPARAM(small_font.0 as usize)),
+        Some(LPARAM(1)),
+    );
 }
 
 #[cfg(windows)]
@@ -471,7 +605,8 @@ unsafe fn save_settings_from_controls() {
             if dev_mode {
                 DLG_CHECK_PROD.with(|c| {
                     if let Some(h) = *c.borrow() {
-                        let state = SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0;
+                        let state =
+                            SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0;
                         settings.exclude_from_capture = state == BST_CHECKED.0 as isize;
                     }
                 });
@@ -485,23 +620,31 @@ unsafe fn save_settings_from_controls() {
                     if len > 0 {
                         let text: String = String::from_utf16_lossy(&buffer[..len as usize]);
                         if let Ok(width) = text.parse::<u32>() {
-                            settings.border_width = width
-                                .max(capture_const::MIN_BORDER_WIDTH)
-                                .min(capture_const::MAX_BORDER_WIDTH);
+                            settings.border_width = width.clamp(
+                                capture_const::MIN_BORDER_WIDTH,
+                                capture_const::MAX_BORDER_WIDTH,
+                            );
                         }
                     }
                 }
             });
 
-            info!("Settings saved: cursor={}, border={}, width={}, prod_mode={}",
-                  settings.show_cursor, settings.show_border,
-                  settings.border_width, settings.exclude_from_capture);
+            info!(
+                "Settings saved: cursor={}, border={}, width={}, prod_mode={}",
+                settings.show_cursor,
+                settings.show_border,
+                settings.border_width,
+                settings.exclude_from_capture
+            );
         }
     });
 }
 
 #[cfg(not(windows))]
-pub fn show_settings_dialog(_current_settings: &CaptureSettings, _dev_mode: bool) -> Option<CaptureSettings> {
+pub fn show_settings_dialog(
+    _current_settings: &CaptureSettings,
+    _dev_mode: bool,
+) -> Option<CaptureSettings> {
     // Settings dialog not supported on non-Windows platforms
     None
 }

@@ -16,14 +16,13 @@
 // 4. Create a GraphicsCaptureSession and start it
 // 5. Handle FrameArrived events to get new frames
 
-use anyhow::{Result, anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use log::{info, warn};
+use std::sync::Arc;
 use windows::{
     Foundation::TypedEventHandler,
     Graphics::{
-        Capture::{
-            Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
-        },
+        Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession},
         DirectX::{
             Direct3D11::{IDirect3DDevice, IDirect3DSurface},
             DirectXPixelFormat,
@@ -41,13 +40,12 @@ use windows::{
             Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY},
         },
         System::{
-            WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
             Com::{CoInitializeEx, COINIT_MULTITHREADED},
+            WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
         UI::WindowsAndMessaging::GetDesktopWindow,
     },
 };
-use std::sync::Arc;
 
 /// Represents a rectangular region on the screen
 #[derive(Debug, Clone, Copy)]
@@ -148,8 +146,10 @@ impl CaptureEngine {
     /// Create a new capture engine for a specific screen region
     pub fn new(region: CaptureRect, settings: &CaptureSettings) -> Result<Self> {
         info!("Initializing CaptureEngine for region: {:?}", region);
-        info!("Capture settings: show_cursor={}, exclude_from_capture={}", 
-              settings.show_cursor, settings.exclude_from_capture);
+        info!(
+            "Capture settings: show_cursor={}, exclude_from_capture={}",
+            settings.show_cursor, settings.exclude_from_capture
+        );
 
         // STEP 1: Initialize COM (Component Object Model)
         // This is REQUIRED before using any Windows COM APIs (including D3D11 and WGC)
@@ -162,7 +162,10 @@ impl CaptureEngine {
                 let code = hr.0;
                 // Ignore RPC_E_CHANGED_MODE - COM already initialized
                 if code != 0x80010106u32 as i32 {
-                    return Err(anyhow!("Failed to initialize COM: HRESULT 0x{:08X}", code as u32));
+                    return Err(anyhow!(
+                        "Failed to initialize COM: HRESULT 0x{:08X}",
+                        code as u32
+                    ));
                 }
                 info!("COM already initialized (different apartment type)");
             } else {
@@ -192,8 +195,8 @@ impl CaptureEngine {
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             DirectXPixelFormat::B8G8R8A8UIntNormalized, // Standard BGRA format
-            2, // Number of buffers (2 = double buffering)
-            capture_item.Size()?, // Size of the capture
+            2,                                          // Number of buffers (2 = double buffering)
+            capture_item.Size()?,                       // Size of the capture
         )?;
         info!("Frame pool created with 2 buffers");
 
@@ -211,12 +214,10 @@ impl CaptureEngine {
         let frame_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let frame_ready_clone = Arc::clone(&frame_ready);
 
-        frame_pool.FrameArrived(&TypedEventHandler::new(
-            move |_pool, _args| {
-                frame_ready_clone.store(true, std::sync::atomic::Ordering::Release);
-                Ok(())
-            },
-        ))?;
+        frame_pool.FrameArrived(&TypedEventHandler::new(move |_pool, _args| {
+            frame_ready_clone.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        }))?;
         info!("Frame arrival event handler registered");
 
         // STEP 8: Start the capture!
@@ -246,15 +247,15 @@ impl CaptureEngine {
         // We're using hardware acceleration (GPU) and BGRA support for better compatibility
         unsafe {
             D3D11CreateDevice(
-                None, // Use default adapter (primary GPU)
-                D3D_DRIVER_TYPE_HARDWARE, // Use hardware acceleration
+                None,                                           // Use default adapter (primary GPU)
+                D3D_DRIVER_TYPE_HARDWARE,                       // Use hardware acceleration
                 windows::Win32::Foundation::HMODULE::default(), // No software rasterizer
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, // Enable BGRA format (needed for WGC)
-                None, // Use default feature levels
-                D3D11_SDK_VERSION, // SDK version
-                Some(&mut device), // Output device
-                None, // Don't care about feature level
-                Some(&mut context), // Output context
+                None,                             // Use default feature levels
+                D3D11_SDK_VERSION,                // SDK version
+                Some(&mut device),                // Output device
+                None,                             // Don't care about feature level
+                Some(&mut context),               // Output context
             )
             .context("D3D11CreateDevice failed")?;
         }
@@ -269,9 +270,9 @@ impl CaptureEngine {
     /// This bridges Win32 D3D11 and WinRT APIs
     fn create_direct3d_device(d3d_device: &ID3D11Device) -> Result<IDirect3DDevice> {
         use windows::core::Interface;
-        use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
         use windows::core::PCWSTR;
-        
+        use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
         // Cast the D3D11 device to a DXGI device
         let dxgi_device: IDXGIDevice = d3d_device
             .cast()
@@ -282,42 +283,42 @@ impl CaptureEngine {
         unsafe {
             // Load d3d11.dll
             let dll_name = windows::core::w!("d3d11.dll");
-            let module = LoadLibraryW(PCWSTR(dll_name.as_ptr()))
-                .context("Failed to load d3d11.dll")?;
-            
+            let module =
+                LoadLibraryW(PCWSTR(dll_name.as_ptr())).context("Failed to load d3d11.dll")?;
+
             // Get the function pointer (ANSI name for GetProcAddress)
             let func_name = windows::core::s!("CreateDirect3D11DeviceFromDXGIDevice");
             let func_ptr = GetProcAddress(module, windows::core::PCSTR(func_name.as_ptr()))
-                .ok_or_else(|| anyhow!("CreateDirect3D11DeviceFromDXGIDevice not found in d3d11.dll"))?;
-
+                .ok_or_else(|| {
+                    anyhow!("CreateDirect3D11DeviceFromDXGIDevice not found in d3d11.dll")
+                })?;
 
             // Define the function signature
-            type CreateDirect3D11DeviceFromDXGIDeviceFn = unsafe extern "system" fn(
-                dxgi_device: *mut std::ffi::c_void,
-                result: *mut *mut std::ffi::c_void,
-            ) -> windows::core::HRESULT;
-            
-            let create_fn: CreateDirect3D11DeviceFromDXGIDeviceFn = 
-                std::mem::transmute(func_ptr);
-            
+            type CreateDirect3D11DeviceFromDXGIDeviceFn =
+                unsafe extern "system" fn(
+                    dxgi_device: *mut std::ffi::c_void,
+                    result: *mut *mut std::ffi::c_void,
+                ) -> windows::core::HRESULT;
+
+            let create_fn: CreateDirect3D11DeviceFromDXGIDeviceFn = std::mem::transmute(func_ptr);
+
             // Call the function
             let mut result_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = create_fn(
-                dxgi_device.as_raw() as *mut _,
-                &mut result_ptr,
-            );
-            
+            let hr = create_fn(dxgi_device.as_raw() as *mut _, &mut result_ptr);
+
             if hr.is_err() {
                 return Err(anyhow!(
                     "CreateDirect3D11DeviceFromDXGIDevice failed: HRESULT 0x{:08X}",
                     hr.0 as u32
                 ));
             }
-            
+
             if result_ptr.is_null() {
-                return Err(anyhow!("CreateDirect3D11DeviceFromDXGIDevice returned null"));
+                return Err(anyhow!(
+                    "CreateDirect3D11DeviceFromDXGIDevice returned null"
+                ));
             }
-            
+
             // Wrap the result in IDirect3DDevice
             Ok(IDirect3DDevice::from_raw(result_ptr))
         }
@@ -333,9 +334,7 @@ impl CaptureEngine {
         // Get the primary monitor
         // SAFETY: These are standard Win32 API calls
         let hwnd = unsafe { GetDesktopWindow() };
-        let monitor = unsafe {
-            MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY)
-        };
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
 
         if monitor.is_invalid() {
             return Err(anyhow!("Failed to get primary monitor"));
@@ -359,7 +358,10 @@ impl CaptureEngine {
 
         let item = unsafe { interop.CreateForMonitor(monitor)? };
 
-        Ok((item, (monitor_info.rcMonitor.left, monitor_info.rcMonitor.top)))
+        Ok((
+            item,
+            (monitor_info.rcMonitor.left, monitor_info.rcMonitor.top),
+        ))
     }
 
     /// Update the capture region (when the overlay window is moved/resized)
@@ -374,11 +376,12 @@ impl CaptureEngine {
 
         Ok(())
     }
-    
+
     /// Update cursor visibility in the capture
     pub fn update_cursor_visibility(&self, show_cursor: bool) -> Result<()> {
         info!("Updating cursor visibility to: {}", show_cursor);
-        self.capture_session.SetIsCursorCaptureEnabled(show_cursor)?;
+        self.capture_session
+            .SetIsCursorCaptureEnabled(show_cursor)?;
         Ok(())
     }
 
@@ -398,17 +401,16 @@ impl CaptureEngine {
         if self.frame_ready.load(std::sync::atomic::Ordering::Acquire) {
             // Try to get the next frame from the pool
             match self.frame_pool.TryGetNextFrame() {
-                Ok(frame) => {
-                    match frame.Surface() {
-                        Ok(surface) => {
-                            self.frame_ready.store(false, std::sync::atomic::Ordering::Release);
-                            return Some(surface);
-                        }
-                        Err(e) => {
-                            warn!("Failed to get surface from frame: {}", e);
-                        }
+                Ok(frame) => match frame.Surface() {
+                    Ok(surface) => {
+                        self.frame_ready
+                            .store(false, std::sync::atomic::Ordering::Release);
+                        return Some(surface);
                     }
-                }
+                    Err(e) => {
+                        warn!("Failed to get surface from frame: {}", e);
+                    }
+                },
                 Err(_e) => {
                     // No frame ready
                 }
