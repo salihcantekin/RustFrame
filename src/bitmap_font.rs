@@ -206,7 +206,7 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32) {
         ("Drag center to move", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("ENTER - Start capture", colors::TEXT_WHITE, 1),
-        ("ESC   - Exit", colors::TEXT_WHITE, 1),
+        ("ESC   - Stop / Exit", colors::TEXT_WHITE, 1),
         ("", colors::TEXT_WHITE, 1),
         ("C - Toggle cursor", colors::TEXT_GRAY, 1),
         ("B - Toggle border", colors::TEXT_GRAY, 1),
