@@ -499,8 +499,15 @@ impl ApplicationHandler for RustFrameApp {
 
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
-                            info!("ESC pressed, exiting");
-                            event_loop.exit();
+                            if self.is_selecting {
+                                // In selection/idle mode: exit application
+                                info!("ESC pressed in selection mode, exiting");
+                                event_loop.exit();
+                            } else {
+                                // In capture mode: stop capture and return to selection mode
+                                info!("ESC pressed in capture mode, stopping capture");
+                                self.stop_capture();
+                            }
                         }
                         PhysicalKey::Code(KeyCode::Enter)
                         | PhysicalKey::Code(KeyCode::NumpadEnter)
@@ -658,6 +665,37 @@ impl RustFrameApp {
                 }
             }
         }
+    }
+    
+    /// Stop capture and return to selection/idle mode
+    fn stop_capture(&mut self) {
+        info!("Stopping capture, returning to selection mode");
+        
+        // Drop the capture engine to stop capturing
+        self.capture_engine = None;
+        
+        // Drop the renderer
+        self.renderer = None;
+        
+        // Return to selection mode
+        self.is_selecting = true;
+        
+        // Restore overlay window to selection mode
+        if let Some(overlay) = &self.overlay_window {
+            // Restore to full selection overlay (not hollow frame)
+            overlay.restore_selection_mode();
+            overlay.show();
+        }
+        
+        // Hide destination window
+        if let Some(dest) = &self.destination_window {
+            dest.hide();
+        }
+        
+        // Update overlay title
+        self.update_overlay_title();
+        
+        info!("Capture stopped, ready for new selection");
     }
 
     /// Update overlay title and visual display to show current settings

@@ -17,7 +17,7 @@
 // - Can be shared on Teams/Zoom/Discord
 
 use anyhow::{Context, Result};
-use log::info;
+use log::{info, error};
 use std::cell::Cell;
 use std::sync::Arc;
 use winit::{
@@ -747,6 +747,57 @@ impl OverlayWindow {
     pub fn make_hollow_frame(&self, _border_width: u32) {
         info!("Hollow frame not supported on this platform");
     }
+    
+    /// Restore overlay window to selection mode (from hollow frame mode)
+    /// This reverses the changes made by make_hollow_frame()
+    #[cfg(windows)]
+    pub fn restore_selection_mode(&self) {
+        use windows::Win32::Graphics::Gdi::SetWindowRgn;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SetWindowLongPtrW,
+            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, HWND_TOPMOST, SWP_NOACTIVATE,
+            GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TOOLWINDOW,
+        };
+        use windows::Win32::Foundation::HWND;
+        
+        let handle = match self.window.window_handle() {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+            unsafe {
+                let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
+
+                // Remove the hollow region - pass None to restore full window
+                SetWindowRgn(hwnd, None, true);
+                
+                // Restore layered window style for selection overlay
+                let ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style.0 as isize);
+                
+                // Force window to update
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+
+                info!("Overlay restored to selection mode");
+            }
+        }
+        
+        // Redraw the selection overlay
+        if let Err(e) = self.redraw_selection_overlay() {
+            error!("Failed to redraw selection overlay: {}", e);
+        }
+    }
+    
+    #[cfg(not(windows))]
+    pub fn restore_selection_mode(&self) {
+        info!("Restore selection mode not supported on this platform");
+    }
 }
 
 /// Wrapper for the destination (mirror/display) window
@@ -970,6 +1021,12 @@ impl DestinationWindow {
     #[allow(dead_code)]
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+    
+    /// Hide the destination window
+    pub fn hide(&self) {
+        self.window.set_visible(false);
+        info!("Destination window hidden");
     }
 
     /// Resize the destination window
