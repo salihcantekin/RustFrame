@@ -21,6 +21,12 @@ pub mod colors {
     pub const TEXT_BLUE: u32 = 0xFF00D4FF;
     /// Gray text (for secondary info)
     pub const TEXT_GRAY: u32 = 0xFFB0B0B0;
+    /// Green text (for enabled settings)
+    pub const TEXT_GREEN: u32 = 0xFF00DD00;
+    /// Red text (for disabled settings)
+    pub const TEXT_RED: u32 = 0xFFFF4444;
+    /// Yellow text (for dev mode indicator)
+    pub const TEXT_YELLOW: u32 = 0xFFFFCC00;
 }
 
 /// Overlay window dimensions
