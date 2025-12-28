@@ -173,10 +173,10 @@ jobs:
           } else {
             Write-Host "Changelog not found for $versionInput; using default body"
             $content = @(
-              "## RustFrame ${{ github.event.inputs.version }}",
+              "## RustFrame $versionInput",
               "",
               "### 📥 Download",
-              "Download `RustFrame-${{ github.event.inputs.version }}-windows-x64.zip`, extract and run `RustFrame.exe`.",
+              "Download `RustFrame-$versionInput-windows-x64.zip`, extract and run `RustFrame.exe`.",
               "",
               "### ✨ Highlights",
               "- GPU-accelerated screen capture using Windows.Graphics.Capture API",
@@ -186,17 +186,15 @@ jobs:
             ) -join "`n"
           }
 
-          # Export body for next step
-          "RELEASE_BODY<<'EOF'" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          $content | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Write release notes to file for action-gh-release body_path
+          $content | Out-File -FilePath "release-notes.md" -Encoding utf8
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_INPUT }}
           name: ${{ env.RELEASE_NAME }} - ${{ env.VERSION_INPUT }}
-          body: ${{ env.RELEASE_BODY }}
+          body_path: release-notes.md
           draft: false
           prerelease: ${{ env.IS_PRERELEASE }}
           files: |
