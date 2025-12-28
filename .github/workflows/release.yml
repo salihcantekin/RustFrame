@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0)'
+        description: 'Release version (e.g., v1.0.0 or v1.1.0-rc.1)'
         required: true
         default: 'v1.0.0'
       release_name:
@@ -16,6 +16,10 @@ on:
         required: false
         type: boolean
         default: false
+  push:
+    tags:
+      - 'v*'
+      - '*.*.*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,6 +35,35 @@ jobs:
     runs-on: windows-latest
     
     steps:
+      - name: Compute version variables
+        shell: pwsh
+        run: |
+          # Figure out version source: workflow_dispatch input or tag name
+          $versionInput = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($versionInput)) {
+            $versionInput = "${{ github.ref_name }}"  # e.g. v1.1.0 or v1.1.0-rc.1
+          }
+
+          # Trim leading 'v' for Cargo.toml
+          $versionTrim = $versionInput.TrimStart('v')
+
+          # Release name (fallback)
+          $releaseName = "${{ github.event.inputs.release_name }}"
+          if ([string]::IsNullOrWhiteSpace($releaseName)) { $releaseName = "RustFrame" }
+
+          # Determine prerelease: explicit input or inferred from hyphen in version (semver prerelease)
+          $preInput = "${{ github.event.inputs.prerelease }}"
+          if ([string]::IsNullOrWhiteSpace($preInput)) {
+            $isPrerelease = $versionTrim.Contains('-')
+          } else {
+            $isPrerelease = [System.Convert]::ToBoolean($preInput)
+          }
+
+          "VERSION_INPUT=$versionInput" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VERSION_TRIM=$versionTrim"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_NAME=$releaseName"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "IS_PRERELEASE=$isPrerelease"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -39,7 +72,7 @@ jobs:
 
       - name: Update version in Cargo.toml
         run: |
-          $version = "${{ github.event.inputs.version }}".TrimStart('v')
+          $version = "${{ env.VERSION_TRIM }}"
           Write-Host "Setting version to: $version"
           
           # Read Cargo.toml
@@ -102,15 +135,15 @@ jobs:
           }
           
           # Create ZIP archive
-          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip"
+          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip"
           
           Write-Host "✅ Release package created!"
-          Get-ChildItem "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip" | Format-List
+          Get-ChildItem "RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip" | Format-List
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustFrame-${{ github.event.inputs.version }}-windows-x64
+          name: RustFrame-${{ env.VERSION_INPUT }}-windows-x64
           path: |
             release-package/RustFrame.exe
             release-package/README.md
@@ -120,8 +153,8 @@ jobs:
       - name: Prepare release notes (from changelog if available)
         shell: pwsh
         run: |
-          $versionInput = "${{ github.event.inputs.version }}"            # e.g., v1.2.3
-          $versionTrim  = $versionInput.TrimStart('v')                    # e.g., 1.2.3
+          $versionInput = "${{ env.VERSION_INPUT }}"            # e.g., v1.2.3
+          $versionTrim  = "${{ env.VERSION_TRIM }}"             # e.g., 1.2.3
 
           # Candidate changelog paths
           $paths = @(
@@ -161,13 +194,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: ${{ github.event.inputs.release_name }} - ${{ github.event.inputs.version }}
+          tag_name: ${{ env.VERSION_INPUT }}
+          name: ${{ env.RELEASE_NAME }} - ${{ env.VERSION_INPUT }}
           body: ${{ env.RELEASE_BODY }}
           draft: false
-          prerelease: ${{ github.event.inputs.prerelease }}
+          prerelease: ${{ env.IS_PRERELEASE }}
           files: |
-            RustFrame-${{ github.event.inputs.version }}-windows-x64.zip
+            RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip
             target/release/RustFrame.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
