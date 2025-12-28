@@ -22,6 +22,9 @@ use winit::window::WindowId;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
+// Image loading for tray icon
+use image::GenericImageView;
+
 mod bitmap_font;
 mod capture;
 mod constants;
@@ -167,9 +170,12 @@ impl RustFrameApp {
         self.menu_border = Some(menu_border);
         self.menu_exclude = menu_exclude;
 
-        // Create a simple icon (16x16 blue square)
-        let icon_rgba = create_default_icon();
-        let icon = Icon::from_rgba(icon_rgba, 16, 16).expect("Failed to create icon");
+        // Load application icon from icon.ico file
+        let icon = load_app_icon().unwrap_or_else(|e| {
+            error!("Failed to load icon.ico, using fallback: {}", e);
+            let icon_rgba = create_default_icon();
+            Icon::from_rgba(icon_rgba, 16, 16).expect("Failed to create fallback icon")
+        });
 
         // Build tray icon
         match TrayIconBuilder::new()
@@ -268,7 +274,36 @@ impl RustFrameApp {
     }
 }
 
-/// Create a simple 16x16 icon (blue square with frame border)
+/// Load the application icon from icon.ico file
+fn load_app_icon() -> Result<Icon, Box<dyn std::error::Error>> {
+    // Try to load icon.ico from the executable directory first, then current directory
+    let icon_paths = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("icon.ico"))),
+        Some(std::path::PathBuf::from("icon.ico")),
+    ];
+
+    for path_opt in icon_paths.iter().flatten() {
+        if path_opt.exists() {
+            info!("Loading icon from: {:?}", path_opt);
+            let img = image::open(path_opt)?;
+            
+            // Find the best size for tray icon (prefer 32x32 or 16x16)
+            let (width, height) = img.dimensions();
+            info!("Icon dimensions: {}x{}", width, height);
+            
+            // Convert to RGBA
+            let rgba = img.to_rgba8();
+            let icon = Icon::from_rgba(rgba.into_raw(), width, height)?;
+            return Ok(icon);
+        }
+    }
+
+    Err("icon.ico not found".into())
+}
+
+/// Create a simple 16x16 icon (blue square with frame border) - fallback
 fn create_default_icon() -> Vec<u8> {
     let mut rgba = Vec::with_capacity(16 * 16 * 4);
     for y in 0..16 {

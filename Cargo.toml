@@ -86,6 +86,9 @@ anyhow = "1.0.100"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 pollster = "0.4.0"
 
+# Image loading for icons
+image = { version = "0.25", default-features = false, features = ["ico"] }
+
 # System tray icon
 tray-icon = "0.21.2"
 muda = "0.17.1"
