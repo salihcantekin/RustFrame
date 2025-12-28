@@ -37,13 +37,13 @@ use windows::{
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
             },
             Dxgi::IDXGIDevice,
-            Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY},
+            Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST},
         },
         System::{
             Com::{CoInitializeEx, COINIT_MULTITHREADED},
             WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
-        UI::WindowsAndMessaging::GetDesktopWindow,
+        Foundation::POINT,
     },
 };
 
@@ -144,8 +144,14 @@ pub struct CaptureEngine {
 
 impl CaptureEngine {
     /// Create a new capture engine for a specific screen region
-    pub fn new(region: CaptureRect, settings: &CaptureSettings) -> Result<Self> {
+    /// 
+    /// # Arguments
+    /// * `region` - The rectangular region to capture
+    /// * `settings` - Capture settings (cursor visibility, etc.)
+    /// * `overlay_position` - Position of overlay window, used to detect which monitor to capture
+    pub fn new(region: CaptureRect, settings: &CaptureSettings, overlay_position: (i32, i32)) -> Result<Self> {
         info!("Initializing CaptureEngine for region: {:?}", region);
+        info!("Overlay position for monitor detection: {:?}", overlay_position);
         info!(
             "Capture settings: show_cursor={}, exclude_from_capture={}",
             settings.show_cursor, settings.exclude_from_capture
@@ -183,11 +189,10 @@ impl CaptureEngine {
         let direct3d_device = Self::create_direct3d_device(&d3d_device)?;
         info!("WinRT Direct3D device created");
 
-        // STEP 4: Create GraphicsCaptureItem for the primary monitor
-        // In a full implementation, you'd want to capture a specific window
-        // or allow the user to pick. For now, we capture the entire primary monitor.
-        let (capture_item, monitor_origin) = Self::create_capture_item_for_monitor()?;
-        info!("GraphicsCaptureItem created for primary monitor");
+        // STEP 4: Create GraphicsCaptureItem for the monitor containing the overlay
+        // This enables multi-monitor support by detecting which monitor the user selected
+        let (capture_item, monitor_origin) = Self::create_capture_item_for_monitor(overlay_position)?;
+        info!("GraphicsCaptureItem created for monitor at {:?}", monitor_origin);
 
         // STEP 5: Create the frame pool
         // This allocates GPU textures that will hold captured frames
@@ -324,21 +329,23 @@ impl CaptureEngine {
         }
     }
 
-    /// Create a GraphicsCaptureItem for the primary monitor
+    /// Create a GraphicsCaptureItem for the monitor containing the given point
     ///
-    /// NOTE: In a production app, you might want to:
-    /// - Let the user pick a window/monitor using GraphicsCapturePicker
-    /// - Capture a specific HWND
-    /// - Support multi-monitor setups
-    fn create_capture_item_for_monitor() -> Result<(GraphicsCaptureItem, (i32, i32))> {
-        // Get the primary monitor
-        // SAFETY: These are standard Win32 API calls
-        let hwnd = unsafe { GetDesktopWindow() };
-        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
+    /// This enables multi-monitor support by detecting which monitor the overlay
+    /// window is on and capturing from that specific monitor.
+    ///
+    /// # Arguments
+    /// * `point` - A point (x, y) used to determine which monitor to capture
+    fn create_capture_item_for_monitor(point: (i32, i32)) -> Result<(GraphicsCaptureItem, (i32, i32))> {
+        // Get the monitor containing the given point
+        // MONITOR_DEFAULTTONEAREST: If the point is not on any monitor, use the nearest one
+        let pt = POINT { x: point.0, y: point.1 };
+        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
 
         if monitor.is_invalid() {
-            return Err(anyhow!("Failed to get primary monitor"));
+            return Err(anyhow!("Failed to get monitor for point {:?}", point));
         }
+        info!("Detected monitor for point {:?}", point);
 
         // Create a GraphicsCaptureItem from the monitor
         // SAFETY: This uses the IGraphicsCaptureItemInterop COM interface

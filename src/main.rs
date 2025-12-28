@@ -676,7 +676,9 @@ impl RustFrameApp {
             }
 
             // Initialize Windows.Graphics.Capture engine with settings
-            match CaptureEngine::new(rect, &self.settings) {
+            // Pass overlay position for multi-monitor detection
+            let overlay_pos = (overlay_position.x, overlay_position.y);
+            match CaptureEngine::new(rect, &self.settings, overlay_pos) {
                 Ok(engine) => {
                     info!("Capture engine initialized");
                     self.capture_engine = Some(engine);
