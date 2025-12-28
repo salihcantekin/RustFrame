@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g., v1.0.0)'
+        description: 'Release version (e.g., v1.0.0 or v1.1.0-rc.1)'
         required: true
         default: 'v1.0.0'
       release_name:
@@ -16,6 +16,10 @@ on:
         required: false
         type: boolean
         default: false
+  push:
+    tags:
+      - 'v*'
+      - '*.*.*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,6 +35,36 @@ jobs:
     runs-on: windows-latest
     
     steps:
+      - name: Compute version variables
+        id: compute
+        shell: pwsh
+        run: |
+          # Figure out version source: workflow_dispatch input or tag name
+          $versionInput = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($versionInput)) {
+            $versionInput = "${{ github.ref_name }}"  # e.g. v1.1.0 or v1.1.0-rc.1
+          }
+
+          # Trim leading 'v' for Cargo.toml
+          $versionTrim = $versionInput.TrimStart('v')
+
+          # Release name (fallback)
+          $releaseName = "${{ github.event.inputs.release_name }}"
+          if ([string]::IsNullOrWhiteSpace($releaseName)) { $releaseName = "RustFrame" }
+
+          # Determine prerelease: explicit input or inferred from hyphen in version (semver prerelease)
+          $preInput = "${{ github.event.inputs.prerelease }}"
+          if ([string]::IsNullOrWhiteSpace($preInput)) {
+            $isPrerelease = $versionTrim.Contains('-')
+          } else {
+            $isPrerelease = [System.Convert]::ToBoolean($preInput)
+          }
+          
+          "version_input=$versionInput"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version_trim=$versionTrim"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_name=$releaseName"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "is_prerelease=$isPrerelease"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -38,21 +72,25 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Update version in Cargo.toml
+        env:
+          VERSION_TRIM: ${{ steps.compute.outputs.version_trim }}
         run: |
-          $version = "${{ github.event.inputs.version }}".TrimStart('v')
+          $version = "$env:VERSION_TRIM"
           Write-Host "Setting version to: $version"
           
           # Read Cargo.toml
           $content = Get-Content "Cargo.toml" -Raw
           
-          # Update version line
-          $content = $content -replace 'version = "[^"]*"', "version = `"$version`""
+          # Update only the top-level package version line (not rust-version)
+          # Use multiline regex anchored to line start to avoid matching 'rust-version'
+          $content = $content -replace '(?m)^\s*version\s*=\s*"[^"]*"', "version = `"$version`""
           
           # Write back
           Set-Content "Cargo.toml" -Value $content -NoNewline
           
           Write-Host "✅ Cargo.toml version updated to $version"
-          Select-String -Path "Cargo.toml" -Pattern "^version"
+          # Show the updated lines for verification
+          Select-String -Path "Cargo.toml" -Pattern '^(\s*version\s*=|\s*rust-version\s*=)'
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -79,6 +117,8 @@ jobs:
           }
 
       - name: Create release package
+        env:
+          VERSION_INPUT: ${{ steps.compute.outputs.version_input }}
         run: |
           # Create release directory
           New-Item -ItemType Directory -Force -Path "release-package"
@@ -102,59 +142,73 @@ jobs:
           }
           
           # Create ZIP archive
-          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip"
+          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-$env:VERSION_INPUT-windows-x64.zip"
           
           Write-Host "✅ Release package created!"
-          Get-ChildItem "RustFrame-${{ github.event.inputs.version }}-windows-x64.zip" | Format-List
+          Get-ChildItem "RustFrame-$env:VERSION_INPUT-windows-x64.zip" | Format-List
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustFrame-${{ github.event.inputs.version }}-windows-x64
+          name: RustFrame-${{ steps.compute.outputs.version_input }}-windows-x64
           path: |
             release-package/RustFrame.exe
             release-package/README.md
             release-package/QUICK_START.md
           retention-days: 30
 
+      - name: Prepare release notes (from changelog if available)
+        env:
+          VERSION_INPUT: ${{ steps.compute.outputs.version_input }}
+          VERSION_TRIM:  ${{ steps.compute.outputs.version_trim }}
+        shell: pwsh
+        run: |
+          $versionInput = "$env:VERSION_INPUT"            # e.g., v1.2.3
+          $versionTrim  = "$env:VERSION_TRIM"             # e.g., 1.2.3
+
+          # Candidate changelog paths
+          $paths = @(
+            "docs/changelog/$versionInput.md",
+            "docs/changelog/$versionTrim.md"
+          )
+
+          $changelog = $null
+          foreach ($p in $paths) {
+            if (Test-Path $p) { $changelog = $p; break }
+          }
+
+          if ($changelog) {
+            Write-Host "Using changelog: $changelog"
+            $content = Get-Content $changelog -Raw
+          } else {
+            Write-Host "Changelog not found for $versionInput; using default body"
+            $content = @(
+              "## RustFrame $versionInput",
+              "",
+              "### 📥 Download",
+              "Download `RustFrame-$versionInput-windows-x64.zip`, extract and run `RustFrame.exe`.",
+              "",
+              "### ✨ Highlights",
+              "- GPU-accelerated screen capture using Windows.Graphics.Capture API",
+              "- Adjustable frame overlay for precise region selection",
+              "- Keyboard shortcuts for quick adjustments",
+              "- Great for video conferencing screen sharing"
+            ) -join "`n"
+          }
+
+          # Write release notes to file for action-gh-release body_path
+          $content | Out-File -FilePath "release-notes.md" -Encoding utf8
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: ${{ github.event.inputs.release_name }} - ${{ github.event.inputs.version }}
-          body: |
-            ## RustFrame ${{ github.event.inputs.version }}
-            
-            ### 📥 Download
-            Download `RustFrame-${{ github.event.inputs.version }}-windows-x64.zip`, extract and run `RustFrame.exe`.
-            
-            ### ✨ Features
-            - GPU-accelerated screen capture using Windows.Graphics.Capture API
-            - Adjustable frame overlay for precise region selection
-            - Perfect for video conferencing screen sharing
-            - Keyboard shortcuts for quick adjustments
-            
-            ### 🎮 Quick Start
-            1. Run `RustFrame.exe`
-            2. Resize/move the overlay to select capture region
-            3. Press `Enter` to start capture
-            4. Share the "RustFrame Output" window in your video call
-            5. Press `Escape` to exit
-            
-            ### ⌨️ Keyboard Shortcuts
-            - `Enter` / `Numpad Enter`: Start capture
-            - `Escape`: Exit application
-            - `C`: Toggle cursor visibility
-            - `S`: Open settings
-            - `H`: Toggle help overlay
-            - `+/-`: Adjust border width
-            
-            ---
-            Built with ❤️ using Rust
+          tag_name: ${{ steps.compute.outputs.version_input }}
+          name: ${{ steps.compute.outputs.release_name }} - ${{ steps.compute.outputs.version_input }}
+          body_path: release-notes.md
           draft: false
-          prerelease: ${{ github.event.inputs.prerelease }}
+          prerelease: ${{ steps.compute.outputs.is_prerelease }}
           files: |
-            RustFrame-${{ github.event.inputs.version }}-windows-x64.zip
+            RustFrame-${{ steps.compute.outputs.version_input }}-windows-x64.zip
             target/release/RustFrame.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
