@@ -23,7 +23,10 @@ opt-level = 1
 windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(windows)'.build-dependencies]
-winres = "0.1"
+embed-resource = "3.0.6"
+
+[build-dependencies]
+semver = "1.0.27"
 
 [dependencies]
 # Window management - cross-platform windowing library
