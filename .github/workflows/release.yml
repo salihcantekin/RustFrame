@@ -81,14 +81,16 @@ jobs:
           # Read Cargo.toml
           $content = Get-Content "Cargo.toml" -Raw
           
-          # Update version line
-          $content = $content -replace 'version = "[^"]*"', "version = `"$version`""
+          # Update only the top-level package version line (not rust-version)
+          # Use multiline regex anchored to line start to avoid matching 'rust-version'
+          $content = $content -replace '(?m)^\s*version\s*=\s*"[^"]*"', "version = `"$version`""
           
           # Write back
           Set-Content "Cargo.toml" -Value $content -NoNewline
           
           Write-Host "✅ Cargo.toml version updated to $version"
-          Select-String -Path "Cargo.toml" -Pattern "^version"
+          # Show the updated lines for verification
+          Select-String -Path "Cargo.toml" -Pattern '^(\s*version\s*=|\s*rust-version\s*=)'
 
       - name: Cache cargo registry
         uses: actions/cache@v4
