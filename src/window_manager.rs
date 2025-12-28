@@ -168,7 +168,7 @@ impl OverlayWindow {
             
             if let Some(id) = cursor_id {
                 if let Ok(cur) = LoadCursorW(None, id) {
-                    let _ = SetCursor(cur);
+                    let _ = SetCursor(Some(cur));
                 }
                 return LRESULT(1);
             }
@@ -223,8 +223,8 @@ impl OverlayWindow {
             
             // Get screen DC
             let screen_dc = GetDC(None);
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            
+            let mem_dc = CreateCompatibleDC(Some(screen_dc));
+
             // Create 32-bit ARGB bitmap for alpha blending
             let bmi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
@@ -240,7 +240,7 @@ impl OverlayWindow {
             };
             
             let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            let bitmap = match CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+            let bitmap = match CreateDIBSection(Some(mem_dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
                 Ok(b) => b,
                 Err(_) => {
                     let _ = DeleteDC(mem_dc);
@@ -248,41 +248,41 @@ impl OverlayWindow {
                     return;
                 }
             };
-            let old_bitmap = SelectObject(mem_dc, bitmap);
-            
-            // Draw the overlay content to the bitmap
-            let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
-            Self::render_overlay_pixels(pixels, width, height);
-            
-            // Update the layered window with our bitmap
-            let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
-                BlendOp: 0, // AC_SRC_OVER
-                BlendFlags: 0,
-                SourceConstantAlpha: 255,
-                AlphaFormat: 1, // AC_SRC_ALPHA
-            };
-            
-            let size_struct = windows::Win32::Foundation::SIZE { cx: width, cy: height };
-            let point_src = POINT { x: 0, y: 0 };
-            
-            let _ = UpdateLayeredWindow(
-                hwnd,
-                screen_dc,
-                None,
-                Some(&size_struct),
-                mem_dc,
-                Some(&point_src),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-            
-            // Cleanup
+            let old_bitmap = SelectObject(mem_dc, bitmap.into());
+
+                 // Draw the overlay content to the bitmap
+                 let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
+                 Self::render_overlay_pixels(pixels, width, height);
+
+                 // Update the layered window with our bitmap
+                 let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
+                     BlendOp: 0, // AC_SRC_OVER
+                     BlendFlags: 0,
+                     SourceConstantAlpha: 255,
+                     AlphaFormat: 1, // AC_SRC_ALPHA
+                 };
+
+                 let size_struct = windows::Win32::Foundation::SIZE { cx: width, cy: height };
+                 let point_src = POINT { x: 0, y: 0 };
+
+                 let _ = UpdateLayeredWindow(
+                     hwnd,
+                     Some(screen_dc),
+                     None,
+                     Some(&size_struct),
+                     Some(mem_dc),
+                     Some(&point_src),
+                     COLORREF(0),
+                     Some(&blend),
+                     ULW_ALPHA,
+                 );
+
+                 // Cleanup
             SelectObject(mem_dc, old_bitmap);
-            let _ = DeleteObject(bitmap);
-            let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(None, screen_dc);
-        }
+            let _ = DeleteObject(bitmap.into());
+             let _ = DeleteDC(mem_dc);
+             let _ = ReleaseDC(None, screen_dc);
+         }
     }
     
     /// Render the overlay content to a pixel buffer (shared by all overlay drawing methods)
@@ -503,18 +503,18 @@ impl OverlayWindow {
                 let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
                 
                 // Subtract inner from outer to create hollow frame with resize margins
-                let _ = CombineRgn(outer_rgn, outer_rgn, inner_rgn, RGN_DIFF);
-                
+                let _ = CombineRgn(Some(outer_rgn), Some(outer_rgn), Some(inner_rgn), RGN_DIFF);
+
                 // Apply the region
-                SetWindowRgn(hwnd, outer_rgn, true);
-                
+                SetWindowRgn(hwnd, Some(outer_rgn), true);
+
                 // Install window subclass for custom hit testing
                 Self::install_subclass(hwnd, border_width);
                 
                 // Force window to update
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    Some(HWND_TOPMOST),
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
@@ -559,7 +559,7 @@ impl OverlayWindow {
                 
                 if let Some(id) = cursor_id {
                     if let Ok(cur) = LoadCursorW(None, id) {
-                        let _ = SetCursor(cur);
+                        let _ = SetCursor(Some(cur));
                     }
                     return LRESULT(1); // Cursor handled
                 }
@@ -661,12 +661,12 @@ impl OverlayWindow {
                 let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
                 
                 // Subtract inner from outer
-                let _ = CombineRgn(outer_rgn, outer_rgn, inner_rgn, RGN_DIFF);
-                
+                let _ = CombineRgn(Some(outer_rgn), Some(outer_rgn), Some(inner_rgn), RGN_DIFF);
+
                 // Apply the updated region
-                SetWindowRgn(hwnd, outer_rgn, true);
-            }
-        }
+                SetWindowRgn(hwnd, Some(outer_rgn), true);
+             }
+         }
     }
 
     #[cfg(not(windows))]
@@ -860,7 +860,7 @@ impl DestinationWindow {
                 // Use SetWindowPos to make it TOPMOST
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOPMOST,
+                    Some(HWND_TOPMOST),
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
@@ -962,7 +962,7 @@ impl DestinationWindow {
     pub fn position_beside_overlay(&self, overlay_position: PhysicalPosition<i32>, size: PhysicalSize<u32>) {
         use windows::Win32::UI::WindowsAndMessaging::*;
         use windows::Win32::Foundation::HWND;
-        
+
         // Position to the right of overlay
         let dest_position = PhysicalPosition::new(
             overlay_position.x + size.width as i32 + 20,
@@ -971,7 +971,7 @@ impl DestinationWindow {
         let _ = self.window.request_inner_size(size);
         self.window.set_outer_position(dest_position);
         self.window.set_visible(true);
-        
+
         // Restore title bar and normal window style (in case we're coming from PROD mode)
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -981,22 +981,22 @@ impl DestinationWindow {
         if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
             unsafe {
                 let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
-                
+
                 // Restore title bar and frame
                 let style = GetWindowLongW(hwnd, GWL_STYLE);
                 let new_style = style | WS_CAPTION.0 as i32 | WS_THICKFRAME.0 as i32 | WS_SYSMENU.0 as i32 | WS_MINIMIZEBOX.0 as i32;
                 SetWindowLongW(hwnd, GWL_STYLE, new_style);
-                
+
                 // Remove WS_EX_TOOLWINDOW to show in taskbar again
                 let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
                 let new_ex_style = ex_style & !(WS_EX_TOOLWINDOW.0 as i32);
                 SetWindowLongW(hwnd, GWL_EXSTYLE, new_ex_style);
-                
+
                 // Force window to recalculate frame and redraw completely
                 // Use the current client size to recalc with new frame
                 let _ = SetWindowPos(
                     hwnd,
-                    HWND_TOP,
+                    Option::from(HWND_TOP),
                     dest_position.x,
                     dest_position.y,
                     size.width as i32,
@@ -1005,10 +1005,10 @@ impl DestinationWindow {
                 );
             }
         }
-        
+
         info!("Destination window positioned BESIDE overlay at {:?} (with title bar)", dest_position);
     }
-    
+
     #[cfg(not(windows))]
     pub fn position_beside_overlay(&self, overlay_position: PhysicalPosition<i32>, size: PhysicalSize<u32>) {
         let dest_position = PhysicalPosition::new(

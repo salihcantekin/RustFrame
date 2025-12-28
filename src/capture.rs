@@ -212,7 +212,7 @@ impl CaptureEngine {
         let frame_ready_clone = Arc::clone(&frame_ready);
 
         frame_pool.FrameArrived(&TypedEventHandler::new(
-            move |_pool: &Option<Direct3D11CaptureFramePool>, _args| {
+            move |_pool, _args| {
                 frame_ready_clone.store(true, std::sync::atomic::Ordering::Release);
                 Ok(())
             },

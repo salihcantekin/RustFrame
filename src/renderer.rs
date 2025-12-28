@@ -64,7 +64,7 @@ impl Renderer {
 
         // STEP 1: Create wgpu instance
         // This is the entry point to wgpu, similar to creating a D3D11 device
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::DX12, // Use DirectX 12 on Windows
             ..Default::default()
         });
@@ -79,12 +79,14 @@ impl Renderer {
 
         // STEP 3: Request adapter
         // The adapter represents a physical GPU
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance, // Prefer discrete GPU
+        let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
-        }))
-        .ok_or_else(|| anyhow!("Failed to find suitable GPU adapter"))?;
+        })) {
+            Ok(adapter) => adapter,
+            Err(e) => return Err(anyhow!("Failed to find suitable GPU adapter: {:?}", e)),
+        };
 
         info!("Adapter acquired: {:?}", adapter.get_info());
 
@@ -96,10 +98,10 @@ impl Renderer {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: Default::default(),
             },
-            None,
-        ))
-        .context("Failed to create device and queue")?;
+        )).context("Failed to create device and queue")?;
 
         info!("Device and queue created");
 
@@ -156,7 +158,7 @@ impl Renderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: Default::default(),
         });
 
         // STEP 9: Create render pipeline
@@ -195,7 +197,7 @@ impl Renderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         info!("Render pipeline created");
@@ -209,7 +211,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear, // Smooth scaling
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -323,10 +325,12 @@ impl Renderer {
                         }),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             // Draw the quad with the captured texture
@@ -391,10 +395,12 @@ impl Renderer {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
         }
 
@@ -552,14 +558,14 @@ impl Renderer {
 
         // Upload pixel data to GPU
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &pixel_data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(crop_width as u32 * 4),
                 rows_per_image: Some(crop_height as u32),
