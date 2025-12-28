@@ -139,18 +139,18 @@ jobs:
             $content = Get-Content $changelog -Raw
           } else {
             Write-Host "Changelog not found for $versionInput; using default body"
-            $content = @'
-## RustFrame ${{ github.event.inputs.version }}
-
-### 📥 Download
-Download `RustFrame-${{ github.event.inputs.version }}-windows-x64.zip`, extract and run `RustFrame.exe`.
-
-### ✨ Highlights
-- GPU-accelerated screen capture using Windows.Graphics.Capture API
-- Adjustable frame overlay for precise region selection
-- Keyboard shortcuts for quick adjustments
-- Great for video conferencing screen sharing
-@'
+            $content = @(
+              "## RustFrame ${{ github.event.inputs.version }}",
+              "",
+              "### 📥 Download",
+              "Download `RustFrame-${{ github.event.inputs.version }}-windows-x64.zip`, extract and run `RustFrame.exe`.",
+              "",
+              "### ✨ Highlights",
+              "- GPU-accelerated screen capture using Windows.Graphics.Capture API",
+              "- Adjustable frame overlay for precise region selection",
+              "- Keyboard shortcuts for quick adjustments",
+              "- Great for video conferencing screen sharing"
+            ) -join "`n"
           }
 
           # Export body for next step
