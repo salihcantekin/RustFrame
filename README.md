@@ -7,14 +7,17 @@ RustFrame allows you to select a region of your screen and mirror it to a separa
 ## 🎯 Features
 
 - ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
+- ✅ **Multi-Monitor Support**: Capture works on any connected monitor, not just primary
 - ✅ **Transparent Overlay**: Frameless, transparent selection window with visual border
 - ✅ **Real-time Mirroring**: Captured region displayed in a shareable window
 - ✅ **Drag-to-Move**: Click and drag the overlay window to reposition
 - ✅ **Resizable Selection**: Resize the overlay to select your desired region
 - ✅ **GPU Rendering**: wgpu-based rendering pipeline with Direct3D 12 backend
-- ✅ **Keyboard Shortcuts**: Quick adjustments with hotkeys (C, S, H, +/-)
+- ✅ **Keyboard Shortcuts**: Quick adjustments with hotkeys (C, B, E, S, H, +/-)
+- ✅ **Real-time Settings Display**: Live status indicators in overlay (color-coded)
 - ✅ **Settings Dialog**: Customize cursor visibility and border width
-- ✅ **System Tray**: Minimize to tray with quick access menu
+- ✅ **System Tray**: Minimize to tray with quick access menu and custom app icon
+- ✅ **Smart ESC Behavior**: ESC stops capture first, then exits (prevents accidental closure)
 - ✅ **Production Mode**: Off-screen destination window for clean video sharing
 - ✅ **Help Overlay**: On-screen keyboard shortcut reference (H key)
 
@@ -93,6 +96,8 @@ cargo run --release
 
 5. **Keyboard Shortcuts (during selection):**
    - **C**: Toggle cursor visibility in capture
+   - **B**: Toggle border visibility
+   - **E**: Toggle exclude from capture mode
    - **S**: Open settings dialog
    - **H**: Toggle help overlay
    - **+/-**: Adjust border width
@@ -102,7 +107,8 @@ cargo run --release
    - Only the captured region will be visible to participants
 
 7. **Exit:**
-   - Press **ESC** to close the application
+   - Press **ESC** once to stop capture (returns to selection mode)
+   - Press **ESC** again to close the application
    - Or right-click tray icon and select Exit
 
 ## 🛠️ Technical Details
@@ -189,11 +195,12 @@ See [Cargo.toml](Cargo.toml) for complete dependency list with explanations.
 
 ### Future Enhancements
 
-- [ ] Support multi-monitor selection
+- [x] ~~Support multi-monitor selection~~ ✅ Implemented in v0.2.0
 - [ ] Add window picker (capture specific window instead of monitor)
 - [ ] Implement zero-copy D3D12 texture sharing
 - [ ] Save/load region presets
 - [ ] Add framerate control settings
+- [ ] Global hotkey support for starting/stopping capture
 
 ## 📚 Learning Resources
 
