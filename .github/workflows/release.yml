@@ -36,6 +36,7 @@ jobs:
     
     steps:
       - name: Compute version variables
+        id: compute
         shell: pwsh
         run: |
           # Figure out version source: workflow_dispatch input or tag name
@@ -58,11 +59,11 @@ jobs:
           } else {
             $isPrerelease = [System.Convert]::ToBoolean($preInput)
           }
-
-          "VERSION_INPUT=$versionInput" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "VERSION_TRIM=$versionTrim"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "RELEASE_NAME=$releaseName"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "IS_PRERELEASE=$isPrerelease"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          
+          "version_input=$versionInput"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version_trim=$versionTrim"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_name=$releaseName"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "is_prerelease=$isPrerelease"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -71,8 +72,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Update version in Cargo.toml
+        env:
+          VERSION_TRIM: ${{ steps.compute.outputs.version_trim }}
         run: |
-          $version = "${{ env.VERSION_TRIM }}"
+          $version = "$env:VERSION_TRIM"
           Write-Host "Setting version to: $version"
           
           # Read Cargo.toml
@@ -112,6 +115,8 @@ jobs:
           }
 
       - name: Create release package
+        env:
+          VERSION_INPUT: ${{ steps.compute.outputs.version_input }}
         run: |
           # Create release directory
           New-Item -ItemType Directory -Force -Path "release-package"
@@ -135,15 +140,15 @@ jobs:
           }
           
           # Create ZIP archive
-          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip"
+          Compress-Archive -Path "release-package/*" -DestinationPath "RustFrame-$env:VERSION_INPUT-windows-x64.zip"
           
           Write-Host "✅ Release package created!"
-          Get-ChildItem "RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip" | Format-List
+          Get-ChildItem "RustFrame-$env:VERSION_INPUT-windows-x64.zip" | Format-List
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustFrame-${{ env.VERSION_INPUT }}-windows-x64
+          name: RustFrame-${{ steps.compute.outputs.version_input }}-windows-x64
           path: |
             release-package/RustFrame.exe
             release-package/README.md
@@ -151,10 +156,13 @@ jobs:
           retention-days: 30
 
       - name: Prepare release notes (from changelog if available)
+        env:
+          VERSION_INPUT: ${{ steps.compute.outputs.version_input }}
+          VERSION_TRIM:  ${{ steps.compute.outputs.version_trim }}
         shell: pwsh
         run: |
-          $versionInput = "${{ env.VERSION_INPUT }}"            # e.g., v1.2.3
-          $versionTrim  = "${{ env.VERSION_TRIM }}"             # e.g., 1.2.3
+          $versionInput = "$env:VERSION_INPUT"            # e.g., v1.2.3
+          $versionTrim  = "$env:VERSION_TRIM"             # e.g., 1.2.3
 
           # Candidate changelog paths
           $paths = @(
@@ -192,13 +200,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.VERSION_INPUT }}
-          name: ${{ env.RELEASE_NAME }} - ${{ env.VERSION_INPUT }}
+          tag_name: ${{ steps.compute.outputs.version_input }}
+          name: ${{ steps.compute.outputs.release_name }} - ${{ steps.compute.outputs.version_input }}
           body_path: release-notes.md
           draft: false
-          prerelease: ${{ env.IS_PRERELEASE }}
+          prerelease: ${{ steps.compute.outputs.is_prerelease }}
           files: |
-            RustFrame-${{ env.VERSION_INPUT }}-windows-x64.zip
+            RustFrame-${{ steps.compute.outputs.version_input }}-windows-x64.zip
             target/release/RustFrame.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
