@@ -1,0 +1,39 @@
+// RustFrame.rc - Windows Resource File
+// This file defines the application icon, version info, and manifest
+
+#include <windows.h>
+
+// Application Icon
+1 ICON "icon.ico"
+
+// Embed the manifest file
+1 RT_MANIFEST "RustFrame.exe.manifest"
+
+// Version Information
+// Note: CARGO_PKG_VERSION_MAJOR/MINOR/PATCH are set by build.rs
+1 VERSIONINFO
+FILEVERSION     CARGO_PKG_VERSION_MAJOR,CARGO_PKG_VERSION_MINOR,CARGO_PKG_VERSION_PATCH,0
+PRODUCTVERSION  CARGO_PKG_VERSION_MAJOR,CARGO_PKG_VERSION_MINOR,CARGO_PKG_VERSION_PATCH,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"  // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Salih Cantekin"
+            VALUE "FileDescription",  "RustFrame - Screen Region Capture Tool"
+            VALUE "FileVersion",      CARGO_PKG_VERSION
+            VALUE "InternalName",     "RustFrame"
+            VALUE "LegalCopyright",   "Copyright © 2024-2025 Salih Cantekin"
+            VALUE "OriginalFilename", "RustFrame.exe"
+            VALUE "ProductName",      "RustFrame"
+            VALUE "ProductVersion",   CARGO_PKG_VERSION
+            VALUE "Comments",         "GPU-accelerated screen capture using Windows.Graphics.Capture API"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0  // US English, Unicode
+    END
+END
