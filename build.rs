@@ -23,6 +23,7 @@ fn main() {
         .manifest_required()
         {
             panic!("Failed to compile Windows resources: {}", e);
+
         }
     }
 }

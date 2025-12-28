@@ -10,7 +10,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use anyhow::Result;
-use log::{info, error};
+use log::{error, info};
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -19,8 +19,8 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
 // Tray icon and menu
-use tray_icon::{TrayIconBuilder, TrayIcon, Icon};
-use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 mod bitmap_font;
 mod capture;
@@ -30,9 +30,9 @@ mod settings_dialog;
 mod utils;
 mod window_manager;
 
-use window_manager::{OverlayWindow, DestinationWindow};
 use capture::{CaptureEngine, CaptureSettings};
 use renderer::Renderer;
+use window_manager::{DestinationWindow, OverlayWindow};
 
 /// Menu item IDs for tray icon context menu
 mod menu_ids {
@@ -72,15 +72,15 @@ struct RustFrameApp {
 
     /// System tray icon
     tray_icon: Option<TrayIcon>,
-    
+
     /// Menu items for updating check state
     menu_cursor: Option<CheckMenuItem>,
     menu_border: Option<CheckMenuItem>,
     menu_exclude: Option<CheckMenuItem>,
-    
+
     /// Development mode flag (shows extra options)
     dev_mode: bool,
-    
+
     /// Startup time - used to ignore Enter key for first 500ms
     startup_time: Instant,
 }
@@ -94,7 +94,7 @@ impl RustFrameApp {
             info!("Starting in PRODUCTION mode (destination hidden)");
             CaptureSettings::default()
         };
-        
+
         Self {
             overlay_window: None,
             destination_window: None,
@@ -112,7 +112,7 @@ impl RustFrameApp {
             startup_time: Instant::now(),
         }
     }
-    
+
     /// Create and show the system tray icon with context menu
     fn create_tray_icon(&mut self) {
         // Create menu items
@@ -130,7 +130,7 @@ impl RustFrameApp {
             self.settings.show_border,
             None,
         );
-        
+
         // Production mode option only visible in dev mode
         let menu_exclude = if self.dev_mode {
             Some(CheckMenuItem::with_id(
@@ -143,34 +143,34 @@ impl RustFrameApp {
         } else {
             None
         };
-        
+
         let menu_settings = MenuItem::with_id(menu_ids::SETTINGS, "Settings...", true, None);
         let menu_exit = MenuItem::with_id(menu_ids::EXIT, "Exit", true, None);
-        
+
         // Build the menu
         let menu = Menu::new();
         let _ = menu.append(&menu_cursor);
         let _ = menu.append(&menu_border);
-        
+
         // Only add production mode option in dev mode
         if let Some(ref exclude_item) = menu_exclude {
             let _ = menu.append(exclude_item);
         }
-        
+
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&menu_settings);
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&menu_exit);
-        
+
         // Store menu items for later updates
         self.menu_cursor = Some(menu_cursor);
         self.menu_border = Some(menu_border);
         self.menu_exclude = menu_exclude;
-        
+
         // Create a simple icon (16x16 blue square)
         let icon_rgba = create_default_icon();
         let icon = Icon::from_rgba(icon_rgba, 16, 16).expect("Failed to create icon");
-        
+
         // Build tray icon
         match TrayIconBuilder::new()
             .with_tooltip("RustFrame - Screen Capture")
@@ -187,7 +187,7 @@ impl RustFrameApp {
             }
         }
     }
-    
+
     /// Handle tray menu events
     fn handle_menu_event(&mut self, event: &MenuEvent) {
         match event.id().as_ref() {
@@ -198,11 +198,12 @@ impl RustFrameApp {
                 }
                 info!("Cursor visibility: {}", self.settings.show_cursor);
                 self.update_overlay_title();
-                
+
                 // Update capture engine cursor visibility if active
                 if !self.is_selecting {
                     if let Some(capture) = &self.capture_engine {
-                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor) {
+                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor)
+                        {
                             error!("Failed to update cursor visibility: {}", e);
                         }
                     }
@@ -215,7 +216,7 @@ impl RustFrameApp {
                 }
                 info!("Border visibility: {}", self.settings.show_border);
                 self.update_overlay_title();
-                
+
                 // Toggle hollow frame if capture is active
                 if !self.is_selecting {
                     if let Some(overlay) = &self.overlay_window {
@@ -233,15 +234,20 @@ impl RustFrameApp {
                 if let Some(menu) = &self.menu_exclude {
                     menu.set_checked(self.settings.exclude_from_capture);
                 }
-                info!("Production mode (dest behind overlay): {}", self.settings.exclude_from_capture);
+                info!(
+                    "Production mode (dest behind overlay): {}",
+                    self.settings.exclude_from_capture
+                );
                 self.update_overlay_title();
-                
+
                 // Reposition destination window if capture is active
                 if !self.is_selecting {
-                    if let (Some(overlay), Some(dest)) = (&self.overlay_window, &self.destination_window) {
+                    if let (Some(overlay), Some(dest)) =
+                        (&self.overlay_window, &self.destination_window)
+                    {
                         let overlay_pos = overlay.get_outer_position();
                         let size = overlay.get_inner_size();
-                        
+
                         if self.settings.exclude_from_capture {
                             dest.position_offscreen(size);
                         } else {
@@ -270,7 +276,7 @@ fn create_default_icon() -> Vec<u8> {
             // Create a simple frame icon
             let is_border = x == 0 || x == 15 || y == 0 || y == 15;
             let is_inner_border = x == 1 || x == 14 || y == 1 || y == 14;
-            
+
             if is_border {
                 // Dark blue border
                 rgba.extend_from_slice(&[0, 100, 180, 255]);
@@ -318,7 +324,7 @@ impl ApplicationHandler for RustFrameApp {
                 }
             }
         }
-        
+
         // Create tray icon
         if self.tray_icon.is_none() {
             self.create_tray_icon();
@@ -331,7 +337,7 @@ impl ApplicationHandler for RustFrameApp {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             self.handle_menu_event(&event);
         }
-        
+
         // During selection mode, just wait for user input
         if self.is_selecting {
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -373,12 +379,14 @@ impl ApplicationHandler for RustFrameApp {
                         }
                     }
                 }
-                
+
                 // Handle redraw for destination during capture
                 if !self.is_selecting {
                     if let Some(dest) = &self.destination_window {
                         if dest.window_id() == window_id {
-                            if let (Some(renderer), Some(capture)) = (&mut self.renderer, &mut self.capture_engine) {
+                            if let (Some(renderer), Some(capture)) =
+                                (&mut self.renderer, &mut self.capture_engine)
+                            {
                                 if let Err(e) = renderer.render(capture) {
                                     error!("Render error: {}", e);
                                 }
@@ -407,7 +415,7 @@ impl ApplicationHandler for RustFrameApp {
                         if self.settings.show_border {
                             overlay.update_hollow_frame(self.settings.border_width);
                         }
-                        
+
                         // Update capture region (inside border if border is shown)
                         if let Some(capture) = &mut self.capture_engine {
                             let rect = if self.settings.show_border {
@@ -419,13 +427,17 @@ impl ApplicationHandler for RustFrameApp {
                                 error!("Failed to update capture region: {}", e);
                             }
                         }
-                        
+
                         // Resize destination window to match (minus border if shown)
                         if let Some(dest) = &self.destination_window {
                             let inner_size = if self.settings.show_border {
                                 PhysicalSize::new(
-                                    new_size.width.saturating_sub(self.settings.border_width * 2),
-                                    new_size.height.saturating_sub(self.settings.border_width * 2)
+                                    new_size
+                                        .width
+                                        .saturating_sub(self.settings.border_width * 2),
+                                    new_size
+                                        .height
+                                        .saturating_sub(self.settings.border_width * 2),
                                 )
                             } else {
                                 new_size
@@ -463,7 +475,10 @@ impl ApplicationHandler for RustFrameApp {
                                 error!("Failed to update capture region after move: {}", e);
                             }
                         }
-                        info!("Overlay moved to {:?}, capture region updated", new_position);
+                        info!(
+                            "Overlay moved to {:?}, capture region updated",
+                            new_position
+                        );
                     }
                 }
             }
@@ -471,15 +486,18 @@ impl ApplicationHandler for RustFrameApp {
             WindowEvent::KeyboardInput { event, .. } => {
                 // Only handle key press events (not release)
                 if event.state == winit::event::ElementState::Pressed {
-                    use winit::keyboard::{PhysicalKey, KeyCode};
                     use std::time::Duration;
-                    
+                    use winit::keyboard::{KeyCode, PhysicalKey};
+
                     match event.physical_key {
                         PhysicalKey::Code(KeyCode::Escape) => {
                             info!("ESC pressed, exiting");
                             event_loop.exit();
                         }
-                        PhysicalKey::Code(KeyCode::Enter) | PhysicalKey::Code(KeyCode::NumpadEnter) if self.is_selecting => {
+                        PhysicalKey::Code(KeyCode::Enter)
+                        | PhysicalKey::Code(KeyCode::NumpadEnter)
+                            if self.is_selecting =>
+                        {
                             // Ignore Enter for first 500ms after startup
                             // This prevents accidental capture when launching with Enter key
                             if self.startup_time.elapsed() < Duration::from_millis(500) {
@@ -501,8 +519,12 @@ impl ApplicationHandler for RustFrameApp {
                             self.update_overlay_title();
                         }
                         PhysicalKey::Code(KeyCode::KeyE) if self.is_selecting => {
-                            self.settings.exclude_from_capture = !self.settings.exclude_from_capture;
-                            info!("Exclude from capture: {}", self.settings.exclude_from_capture);
+                            self.settings.exclude_from_capture =
+                                !self.settings.exclude_from_capture;
+                            info!(
+                                "Exclude from capture: {}",
+                                self.settings.exclude_from_capture
+                            );
                             self.update_overlay_title();
                         }
                         PhysicalKey::Code(KeyCode::KeyS) if self.is_selecting => {
@@ -562,19 +584,23 @@ impl RustFrameApp {
         if let Some(overlay) = &self.overlay_window {
             let overlay_position = overlay.get_outer_position();
             let full_size = overlay.get_inner_size();
-            
+
             // Calculate capture rect - if border is shown, capture INSIDE the border
             let (rect, inner_size) = if self.settings.show_border {
                 let r = overlay.get_capture_rect_inner(self.settings.border_width);
                 let s = PhysicalSize::new(
-                    full_size.width.saturating_sub(self.settings.border_width * 2),
-                    full_size.height.saturating_sub(self.settings.border_width * 2)
+                    full_size
+                        .width
+                        .saturating_sub(self.settings.border_width * 2),
+                    full_size
+                        .height
+                        .saturating_sub(self.settings.border_width * 2),
                 );
                 (r, s)
             } else {
                 (overlay.get_capture_rect(), full_size)
             };
-            
+
             info!("Starting capture for region: {:?}", rect);
 
             // Convert overlay to hollow frame (click-through interior)
@@ -588,7 +614,7 @@ impl RustFrameApp {
             // Use inner_size (without border) for destination
             if let Some(dest) = &self.destination_window {
                 dest.set_title("RustFrame Casting - Share THIS window in Google Meet");
-                
+
                 // Position based on mode:
                 // - exclude_from_capture=true (prod mode): off-screen, user doesn't see it
                 // - exclude_from_capture=false (dev mode): beside overlay, both visible
@@ -629,13 +655,25 @@ impl RustFrameApp {
     /// Update overlay title to show current settings
     fn update_overlay_title(&self) {
         if let Some(overlay) = &self.overlay_window {
-            let cursor = if self.settings.show_cursor { "ON" } else { "OFF" };
-            let border = if self.settings.show_border { "ON" } else { "OFF" };
+            let cursor = if self.settings.show_cursor {
+                "ON"
+            } else {
+                "OFF"
+            };
+            let border = if self.settings.show_border {
+                "ON"
+            } else {
+                "OFF"
+            };
             // E = Production mode: destination window behind overlay (single window view)
             // OFF = Dev mode: two windows side by side
             // ON = Prod mode: destination hidden behind overlay
-            let mode = if self.settings.exclude_from_capture { "PROD(single)" } else { "DEV(side-by-side)" };
-            
+            let mode = if self.settings.exclude_from_capture {
+                "PROD(single)"
+            } else {
+                "DEV(side-by-side)"
+            };
+
             let title = format!(
                 "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} [S]ettings | ENTER=Start ESC=Exit",
                 cursor, border, mode
@@ -643,52 +681,56 @@ impl RustFrameApp {
             overlay.set_title(&title);
         }
     }
-    
+
     /// Show the settings dialog and apply changes
     fn show_settings_dialog(&mut self) {
         info!("Opening settings dialog...");
-        
-        if let Some(new_settings) = settings_dialog::show_settings_dialog(&self.settings, self.dev_mode) {
+
+        if let Some(new_settings) =
+            settings_dialog::show_settings_dialog(&self.settings, self.dev_mode)
+        {
             info!("Settings changed, applying...");
-            
+
             // Update cursor menu checkbox
             if let Some(menu) = &self.menu_cursor {
                 menu.set_checked(new_settings.show_cursor);
             }
-            
+
             // Update border menu checkbox
             if let Some(menu) = &self.menu_border {
                 menu.set_checked(new_settings.show_border);
             }
-            
+
             // Update exclude/production mode menu checkbox
             if let Some(menu) = &self.menu_exclude {
                 menu.set_checked(new_settings.exclude_from_capture);
             }
-            
+
             // Store the old settings to detect changes
             let cursor_changed = self.settings.show_cursor != new_settings.show_cursor;
             let border_changed = self.settings.show_border != new_settings.show_border;
-            let mode_changed = self.settings.exclude_from_capture != new_settings.exclude_from_capture;
+            let mode_changed =
+                self.settings.exclude_from_capture != new_settings.exclude_from_capture;
             let border_width_changed = self.settings.border_width != new_settings.border_width;
-            
+
             // Apply the new settings
             self.settings = new_settings;
-            
+
             // Update overlay title
             self.update_overlay_title();
-            
+
             // If capture is active, apply runtime changes
             if !self.is_selecting {
                 // Handle cursor visibility change
                 if cursor_changed {
                     if let Some(capture) = &self.capture_engine {
-                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor) {
+                        if let Err(e) = capture.update_cursor_visibility(self.settings.show_cursor)
+                        {
                             error!("Failed to update cursor visibility: {}", e);
                         }
                     }
                 }
-                
+
                 // Handle border visibility change
                 if border_changed {
                     if let Some(overlay) = &self.overlay_window {
@@ -700,28 +742,32 @@ impl RustFrameApp {
                         }
                     }
                 }
-                
+
                 // Handle border width change
                 if border_width_changed && self.settings.show_border {
                     if let Some(overlay) = &self.overlay_window {
                         overlay.update_hollow_frame(self.settings.border_width);
                     }
-                    
+
                     // Update capture region
-                    if let (Some(overlay), Some(capture)) = (&self.overlay_window, &mut self.capture_engine) {
+                    if let (Some(overlay), Some(capture)) =
+                        (&self.overlay_window, &mut self.capture_engine)
+                    {
                         let rect = overlay.get_capture_rect_inner(self.settings.border_width);
                         if let Err(e) = capture.update_region(rect) {
                             error!("Failed to update capture region: {}", e);
                         }
                     }
                 }
-                
+
                 // Handle production mode change
                 if mode_changed {
-                    if let (Some(overlay), Some(dest)) = (&self.overlay_window, &self.destination_window) {
+                    if let (Some(overlay), Some(dest)) =
+                        (&self.overlay_window, &self.destination_window)
+                    {
                         let overlay_pos = overlay.get_outer_position();
                         let size = overlay.get_inner_size();
-                        
+
                         if self.settings.exclude_from_capture {
                             dest.position_offscreen(size);
                         } else {
@@ -738,8 +784,7 @@ impl RustFrameApp {
 
 fn main() -> Result<()> {
     // Initialize logging
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("RustFrame starting...");
     info!("Using Windows.Graphics.Capture API (not GDI/BitBlt)");
@@ -750,13 +795,13 @@ fn main() -> Result<()> {
     // 3. Otherwise, run in PRODUCTION mode
     let args: Vec<String> = std::env::args().collect();
     let has_dev_flag = args.iter().any(|arg| arg == "--dev" || arg == "-d");
-    
+
     #[cfg(debug_assertions)]
     let dev_mode = true; // Always DEV mode in debug builds
-    
+
     #[cfg(not(debug_assertions))]
     let dev_mode = has_dev_flag; // Only DEV mode if --dev flag is passed
-    
+
     if has_dev_flag && cfg!(not(debug_assertions)) {
         info!("--dev flag detected, forcing development mode");
     }
