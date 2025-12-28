@@ -4,6 +4,8 @@
 
 RustFrame allows you to select a region of your screen and mirror it to a separate window, perfect for sharing specific content on Teams, Zoom, Google Meet or Discord without exposing your entire screen.
 
+**Project Links:** [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [License](LICENSE)
+
 ## 🎯 Features
 
 - ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
