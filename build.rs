@@ -6,6 +6,10 @@
 use semver::Version;
 
 fn main() {
+    // Instruct Cargo to rerun this build script if the resource files change
+    println!("cargo:rerun-if-changed=RustFrame.exe.rc");
+    println!("cargo:rerun-if-changed=RustFrame.exe.manifest");
+
     #[cfg(windows)]
     {
         let version_str = env!("CARGO_PKG_VERSION");
@@ -23,7 +27,6 @@ fn main() {
         .manifest_required()
         {
             panic!("Failed to compile Windows resources: {}", e);
-
         }
     }
 }
