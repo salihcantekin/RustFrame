@@ -29,6 +29,7 @@ use windows::{
         },
     },
     Win32::{
+        Foundation::POINT,
         Foundation::RECT,
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
@@ -43,7 +44,6 @@ use windows::{
             Com::{CoInitializeEx, COINIT_MULTITHREADED},
             WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
-        Foundation::POINT,
     },
 };
 
@@ -144,14 +144,21 @@ pub struct CaptureEngine {
 
 impl CaptureEngine {
     /// Create a new capture engine for a specific screen region
-    /// 
+    ///
     /// # Arguments
     /// * `region` - The rectangular region to capture
     /// * `settings` - Capture settings (cursor visibility, etc.)
     /// * `overlay_position` - Position of overlay window, used to detect which monitor to capture
-    pub fn new(region: CaptureRect, settings: &CaptureSettings, overlay_position: (i32, i32)) -> Result<Self> {
+    pub fn new(
+        region: CaptureRect,
+        settings: &CaptureSettings,
+        overlay_position: (i32, i32),
+    ) -> Result<Self> {
         info!("Initializing CaptureEngine for region: {:?}", region);
-        info!("Overlay position for monitor detection: {:?}", overlay_position);
+        info!(
+            "Overlay position for monitor detection: {:?}",
+            overlay_position
+        );
         info!(
             "Capture settings: show_cursor={}, exclude_from_capture={}",
             settings.show_cursor, settings.exclude_from_capture
@@ -191,8 +198,12 @@ impl CaptureEngine {
 
         // STEP 4: Create GraphicsCaptureItem for the monitor containing the overlay
         // This enables multi-monitor support by detecting which monitor the user selected
-        let (capture_item, monitor_origin) = Self::create_capture_item_for_monitor(overlay_position)?;
-        info!("GraphicsCaptureItem created for monitor at {:?}", monitor_origin);
+        let (capture_item, monitor_origin) =
+            Self::create_capture_item_for_monitor(overlay_position)?;
+        info!(
+            "GraphicsCaptureItem created for monitor at {:?}",
+            monitor_origin
+        );
 
         // STEP 5: Create the frame pool
         // This allocates GPU textures that will hold captured frames
@@ -336,10 +347,15 @@ impl CaptureEngine {
     ///
     /// # Arguments
     /// * `point` - A point (x, y) used to determine which monitor to capture
-    fn create_capture_item_for_monitor(point: (i32, i32)) -> Result<(GraphicsCaptureItem, (i32, i32))> {
+    fn create_capture_item_for_monitor(
+        point: (i32, i32),
+    ) -> Result<(GraphicsCaptureItem, (i32, i32))> {
         // Get the monitor containing the given point
         // MONITOR_DEFAULTTONEAREST: If the point is not on any monitor, use the nearest one
-        let pt = POINT { x: point.0, y: point.1 };
+        let pt = POINT {
+            x: point.0,
+            y: point.1,
+        };
         let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
 
         if monitor.is_invalid() {
@@ -354,7 +370,7 @@ impl CaptureEngine {
 
         // Query monitor origin for cropping math
         let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            cbSize: size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
 

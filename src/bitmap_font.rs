@@ -180,8 +180,14 @@ pub fn text_width(text: &str, scale: i32) -> i32 {
 
 /// Draw centered help text for the selection overlay
 /// Shows current settings state (cursor, border, mode)
-pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32, 
-                      show_cursor: bool, show_border: bool, exclude_from_capture: bool) {
+pub fn draw_help_text(
+    pixels: &mut [u32],
+    width: i32,
+    height: i32,
+    show_cursor: bool,
+    show_border: bool,
+    exclude_from_capture: bool,
+) {
     let mut canvas = Canvas {
         pixels,
         width,
@@ -192,7 +198,7 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32,
     let cursor_status = if show_cursor { "ON" } else { "OFF" };
     let border_status = if show_border { "ON" } else { "OFF" };
     let mode_status = if exclude_from_capture { "PROD" } else { "DEV" };
-    
+
     // Build dynamic text lines
     let cursor_line = format!("[C] Cursor: {}", cursor_status);
     let border_line = format!("[B] Border: {}", border_status);
@@ -232,7 +238,8 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32,
                 LINE_HEIGHT
             }
         })
-        .sum::<i32>() + settings_lines_height;
+        .sum::<i32>()
+        + settings_lines_height;
 
     let mut y = (height - total_height) / 2;
 
@@ -261,26 +268,47 @@ pub fn draw_help_text(pixels: &mut [u32], width: i32, height: i32,
         // Insert dynamic settings lines after "ESC - Stop / Exit" (index 6)
         if i == 6 {
             y += EMPTY_LINE_HEIGHT; // Add spacing before settings
-            
+
             // Draw cursor setting (green if ON, red if OFF)
-            let cursor_color = if show_cursor { colors::TEXT_GREEN } else { colors::TEXT_RED };
-            let cursor_style = TextStyle { color: cursor_color, scale: 1 };
+            let cursor_color = if show_cursor {
+                colors::TEXT_GREEN
+            } else {
+                colors::TEXT_RED
+            };
+            let cursor_style = TextStyle {
+                color: cursor_color,
+                scale: 1,
+            };
             let text_w = text_width(&cursor_line, 1);
             let x = (width - text_w) / 2;
             draw_text(&mut canvas, x, y, &cursor_line, &cursor_style);
             y += LINE_HEIGHT;
-            
+
             // Draw border setting
-            let border_color = if show_border { colors::TEXT_GREEN } else { colors::TEXT_RED };
-            let border_style = TextStyle { color: border_color, scale: 1 };
+            let border_color = if show_border {
+                colors::TEXT_GREEN
+            } else {
+                colors::TEXT_RED
+            };
+            let border_style = TextStyle {
+                color: border_color,
+                scale: 1,
+            };
             let text_w = text_width(&border_line, 1);
             let x = (width - text_w) / 2;
             draw_text(&mut canvas, x, y, &border_line, &border_style);
             y += LINE_HEIGHT;
-            
+
             // Draw mode setting
-            let mode_color = if exclude_from_capture { colors::TEXT_BLUE } else { colors::TEXT_YELLOW };
-            let mode_style = TextStyle { color: mode_color, scale: 1 };
+            let mode_color = if exclude_from_capture {
+                colors::TEXT_BLUE
+            } else {
+                colors::TEXT_YELLOW
+            };
+            let mode_style = TextStyle {
+                color: mode_color,
+                scale: 1,
+            };
             let text_w = text_width(&mode_line, 1);
             let x = (width - text_w) / 2;
             draw_text(&mut canvas, x, y, &mode_line, &mode_style);
