@@ -11,7 +11,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["windows", "screen-capture", "wgpu", "directx", "screen-sharing"]
 categories = ["multimedia", "graphics", "os::windows-apis"]
-rust-version = "1.70"
+rust-version = "1.87.0"
 exclude = ["target/", ".git/", ".github/", "*.zip"]
 
 [profile.release]

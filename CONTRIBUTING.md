@@ -26,7 +26,7 @@ This project follows a simple code of conduct:
 ### Prerequisites
 
 - **Windows 10/11** (required for Windows.Graphics.Capture API)
-- **Rust 1.70+** with MSVC toolchain
+- **Rust 1.87.0+** with MSVC toolchain
 - **Visual Studio Build Tools** (for Windows SDK)
 
 ### Development Setup
