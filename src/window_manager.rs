@@ -17,7 +17,7 @@
 // - Can be shared on Teams/Zoom/Discord
 
 use anyhow::{Context, Result};
-use log::{info, error};
+use log::{error, info};
 use std::cell::Cell;
 use std::sync::Arc;
 use winit::{
@@ -112,7 +112,7 @@ impl OverlayWindow {
                 let hwnd = HWND(win32_handle.hwnd.get() as *mut std::ffi::c_void);
 
                 // Store HWND for subclass to redraw on resize
-                OVERLAY_HWND.with(|h| h.set(hwnd.0 as isize));
+                OVERLAY_HWND.set(hwnd.0 as isize);
 
                 // Add layered style for transparency
                 let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -252,7 +252,7 @@ impl OverlayWindow {
             // Create 32-bit ARGB bitmap for alpha blending
             let bmi = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
                     biWidth: width,
                     biHeight: -height, // Top-down
                     biPlanes: 1,
@@ -375,10 +375,17 @@ impl OverlayWindow {
         }
 
         // Get settings state from thread-local storage
-        let (show_cursor, show_border, exclude_from_capture) = SETTINGS_STATE.with(|s| s.get());
-        
+        let (show_cursor, show_border, exclude_from_capture) = SETTINGS_STATE.get();
+
         // Draw help text using the bitmap font module with settings state
-        bitmap_font::draw_help_text(pixels, width, height, show_cursor, show_border, exclude_from_capture);
+        bitmap_font::draw_help_text(
+            pixels,
+            width,
+            height,
+            show_cursor,
+            show_border,
+            exclude_from_capture,
+        );
     }
 
     /// Draw the selection overlay with semi-transparent background, border, and help text
@@ -403,14 +410,19 @@ impl OverlayWindow {
     pub fn redraw_selection_overlay(&self) -> Result<()> {
         Self::draw_selection_overlay(&self.window)
     }
-    
+
     /// Update settings state and redraw the overlay to reflect changes
     /// This is called when user changes settings via keyboard shortcuts
     #[cfg(windows)]
-    pub fn update_settings_display(&self, show_cursor: bool, show_border: bool, exclude_from_capture: bool) -> Result<()> {
+    pub fn update_settings_display(
+        &self,
+        show_cursor: bool,
+        show_border: bool,
+        exclude_from_capture: bool,
+    ) -> Result<()> {
         // Update thread-local storage with new settings
-        SETTINGS_STATE.with(|s| s.set((show_cursor, show_border, exclude_from_capture)));
-        
+        SETTINGS_STATE.set((show_cursor, show_border, exclude_from_capture));
+
         // Redraw the overlay to show updated settings
         self.redraw_selection_overlay()
     }
@@ -522,7 +534,7 @@ impl OverlayWindow {
         };
 
         self.border_width.set(border_width);
-        BORDER_WIDTH.with(|b| b.set(border_width));
+        BORDER_WIDTH.set(border_width);
 
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -641,7 +653,7 @@ impl OverlayWindow {
                 let mut rect = RECT::default();
                 let _ = GetWindowRect(hwnd, &mut rect);
 
-                let border = BORDER_WIDTH.with(|b| b.get()) as i32;
+                let border = BORDER_WIDTH.get() as i32;
                 let resize_margin = border.max(8); // At least 8px for resize
 
                 // Check if on edges for resize
@@ -703,7 +715,7 @@ impl OverlayWindow {
         use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, SetWindowRgn, RGN_DIFF};
 
         self.border_width.set(border_width);
-        BORDER_WIDTH.with(|b| b.set(border_width));
+        BORDER_WIDTH.set(border_width);
 
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -747,19 +759,18 @@ impl OverlayWindow {
     pub fn make_hollow_frame(&self, _border_width: u32) {
         info!("Hollow frame not supported on this platform");
     }
-    
+
     /// Restore overlay window to selection mode (from hollow frame mode)
     /// This reverses the changes made by make_hollow_frame()
     #[cfg(windows)]
     pub fn restore_selection_mode(&self) {
+        use windows::Win32::Foundation::HWND;
         use windows::Win32::Graphics::Gdi::SetWindowRgn;
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SetWindowLongPtrW,
-            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, HWND_TOPMOST, SWP_NOACTIVATE,
-            GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TOOLWINDOW,
+            SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         };
-        use windows::Win32::Foundation::HWND;
-        
+
         let handle = match self.window.window_handle() {
             Ok(h) => h,
             Err(_) => return,
@@ -767,33 +778,36 @@ impl OverlayWindow {
 
         if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
             unsafe {
-                let hwnd = HWND(win32_handle.hwnd.get() as isize as *mut std::ffi::c_void);
+                let hwnd = HWND(win32_handle.hwnd.get() as *mut std::ffi::c_void);
 
                 // Remove the hollow region - pass None to restore full window
                 SetWindowRgn(hwnd, None, true);
-                
+
                 // Restore layered window style for selection overlay
                 let ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style.0 as isize);
-                
+
                 // Force window to update
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOPMOST),
-                    0, 0, 0, 0,
+                    0,
+                    0,
+                    0,
+                    0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
                 );
 
                 info!("Overlay restored to selection mode");
             }
         }
-        
+
         // Redraw the selection overlay
         if let Err(e) = self.redraw_selection_overlay() {
             error!("Failed to redraw selection overlay: {}", e);
         }
     }
-    
+
     #[cfg(not(windows))]
     pub fn restore_selection_mode(&self) {
         info!("Restore selection mode not supported on this platform");
@@ -1022,7 +1036,7 @@ impl DestinationWindow {
     pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
-    
+
     /// Hide the destination window
     pub fn hide(&self) {
         self.window.set_visible(false);

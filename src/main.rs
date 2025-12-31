@@ -11,6 +11,7 @@
 
 use anyhow::Result;
 use log::{error, info};
+use std::error;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -36,6 +37,9 @@ mod window_manager;
 use capture::{CaptureEngine, CaptureSettings};
 use renderer::Renderer;
 use window_manager::{DestinationWindow, OverlayWindow};
+
+/// Embedded icon bytes for tray icon
+const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icon.ico"));
 
 /// Menu item IDs for tray icon context menu
 mod menu_ids {
@@ -274,33 +278,22 @@ impl RustFrameApp {
     }
 }
 
-/// Load the application icon from icon.ico file
-fn load_app_icon() -> Result<Icon, Box<dyn std::error::Error>> {
-    // Try to load icon.ico from the executable directory first, then current directory
-    let icon_paths = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("icon.ico"))),
-        Some(std::path::PathBuf::from("icon.ico")),
-    ];
+/// Load application icon from embedded resource
+fn load_app_icon() -> Result<Icon, Box<dyn error::Error>> {
+    info!("Loading icon from embedded resource");
 
-    for path_opt in icon_paths.iter().flatten() {
-        if path_opt.exists() {
-            info!("Loading icon from: {:?}", path_opt);
-            let img = image::open(path_opt)?;
-            
-            // Find the best size for tray icon (prefer 32x32 or 16x16)
-            let (width, height) = img.dimensions();
-            info!("Icon dimensions: {}x{}", width, height);
-            
-            // Convert to RGBA
-            let rgba = img.to_rgba8();
-            let icon = Icon::from_rgba(rgba.into_raw(), width, height)?;
-            return Ok(icon);
-        }
-    }
+    // Load from embedded bytes
+    let img = image::load_from_memory_with_format(ICON_BYTES, image::ImageFormat::Ico)?;
 
-    Err("icon.ico not found".into())
+    // Get dimensions
+    let (width, height) = img.dimensions();
+    info!("Icon dimensions: {}x{}", width, height);
+
+    // Convert to RGBA
+    let rgba = img.to_rgba8();
+    let icon = Icon::from_rgba(rgba.into_raw(), width, height)?;
+
+    Ok(icon)
 }
 
 /// Create a simple 16x16 icon (blue square with frame border) - fallback
@@ -341,7 +334,7 @@ impl ApplicationHandler for RustFrameApp {
                     if let Err(e) = overlay.update_settings_display(
                         self.settings.show_cursor,
                         self.settings.show_border,
-                        self.settings.exclude_from_capture
+                        self.settings.exclude_from_capture,
                     ) {
                         error!("Failed to initialize overlay settings display: {}", e);
                     }
@@ -371,29 +364,6 @@ impl ApplicationHandler for RustFrameApp {
         // Create tray icon
         if self.tray_icon.is_none() {
             self.create_tray_icon();
-        }
-    }
-
-    /// Called when the event loop is about to block waiting for events
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Check for tray menu events
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
-            self.handle_menu_event(&event);
-        }
-
-        // During selection mode, just wait for user input
-        if self.is_selecting {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
-        }
-
-        // Capture is active - use Poll for continuous rendering
-        event_loop.set_control_flow(ControlFlow::Poll);
-
-        if let (Some(renderer), Some(capture)) = (&mut self.renderer, &mut self.capture_engine) {
-            if let Err(e) = renderer.render(capture) {
-                error!("Render error in about_to_wait: {}", e);
-            }
         }
     }
 
@@ -626,6 +596,29 @@ impl ApplicationHandler for RustFrameApp {
             _ => {}
         }
     }
+
+    /// Called when the event loop is about to block waiting for events
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Check for tray menu events
+        if let Ok(event) = MenuEvent::receiver().try_recv() {
+            self.handle_menu_event(&event);
+        }
+
+        // During selection mode, just wait for user input
+        if self.is_selecting {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        // Capture is active - use Poll for continuous rendering
+        event_loop.set_control_flow(ControlFlow::Poll);
+
+        if let (Some(renderer), Some(capture)) = (&mut self.renderer, &mut self.capture_engine) {
+            if let Err(e) = renderer.render(capture) {
+                error!("Render error in about_to_wait: {}", e);
+            }
+        }
+    }
 }
 
 impl RustFrameApp {
@@ -703,35 +696,35 @@ impl RustFrameApp {
             }
         }
     }
-    
+
     /// Stop capture and return to selection/idle mode
     fn stop_capture(&mut self) {
         info!("Stopping capture, returning to selection mode");
-        
+
         // Drop the capture engine to stop capturing
         self.capture_engine = None;
-        
+
         // Drop the renderer
         self.renderer = None;
-        
+
         // Return to selection mode
         self.is_selecting = true;
-        
+
         // Restore overlay window to selection mode
         if let Some(overlay) = &self.overlay_window {
             // Restore to full selection overlay (not hollow frame)
             overlay.restore_selection_mode();
             overlay.show();
         }
-        
+
         // Hide destination window
         if let Some(dest) = &self.destination_window {
             dest.hide();
         }
-        
+
         // Update overlay title
         self.update_overlay_title();
-        
+
         info!("Capture stopped, ready for new selection");
     }
 
@@ -762,13 +755,13 @@ impl RustFrameApp {
                 cursor, border, mode
             );
             overlay.set_title(&title);
-            
+
             // Update the visual display inside the overlay to reflect settings changes
             if self.is_selecting {
                 if let Err(e) = overlay.update_settings_display(
                     self.settings.show_cursor,
                     self.settings.show_border,
-                    self.settings.exclude_from_capture
+                    self.settings.exclude_from_capture,
                 ) {
                     error!("Failed to update overlay settings display: {}", e);
                 }
