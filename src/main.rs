@@ -36,7 +36,7 @@ mod window_manager;
 
 use capture::{CaptureEngine, CaptureSettings};
 use renderer::Renderer;
-use window_manager::{DestinationWindow, OverlayWindow};
+use window_manager::{ContextMenuItem, DestinationWindow, OverlayWindow};
 
 /// Embedded icon bytes for tray icon
 const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/icon.ico"));
@@ -74,8 +74,17 @@ struct RustFrameApp {
     /// Track if the overlay window is being dragged/moved
     is_dragging: bool,
 
+    /// Track if window actually moved during drag (to distinguish click from drag)
+    did_move: bool,
+
     /// Last mouse position during drag (for calculating delta)
     last_mouse_pos: Option<(f64, f64)>,
+
+    /// Last known cursor position (for hit testing UI elements)
+    cursor_pos: Option<(f64, f64)>,
+
+    /// Flag to prevent keyboard actions while dialog is open
+    dialog_open: bool,
 
     /// System tray icon
     tray_icon: Option<TrayIcon>,
@@ -110,7 +119,10 @@ impl RustFrameApp {
             settings,
             is_selecting: true,
             is_dragging: false,
+            did_move: false,
             last_mouse_pos: None,
+            cursor_pos: None,
+            dialog_open: false,
             tray_icon: None,
             menu_cursor: None,
             menu_border: None,
@@ -327,7 +339,15 @@ impl ApplicationHandler for RustFrameApp {
 
         // Create the overlay window first (for region selection)
         if self.overlay_window.is_none() {
-            match OverlayWindow::new(event_loop) {
+            match OverlayWindow::new(
+                event_loop,
+                (
+                    self.settings.show_cursor,
+                    self.settings.show_border,
+                    self.settings.exclude_from_capture,
+                ),
+                self.dev_mode,
+            ) {
                 Ok(overlay) => {
                     info!("Overlay window created successfully");
                     // Initialize the overlay with current settings state
@@ -335,6 +355,8 @@ impl ApplicationHandler for RustFrameApp {
                         self.settings.show_cursor,
                         self.settings.show_border,
                         self.settings.exclude_from_capture,
+                        self.dev_mode,
+                        false,
                     ) {
                         error!("Failed to initialize overlay settings display: {}", e);
                     }
@@ -518,9 +540,11 @@ impl ApplicationHandler for RustFrameApp {
                         | PhysicalKey::Code(KeyCode::NumpadEnter)
                             if self.is_selecting =>
                         {
-                            // Ignore Enter for first 500ms after startup
-                            // This prevents accidental capture when launching with Enter key
-                            if self.startup_time.elapsed() < Duration::from_millis(500) {
+                            // Ignore Enter if dialog was just closed or during startup
+                            if self.dialog_open {
+                                self.dialog_open = false;
+                                info!("Enter ignored (dialog just closed)");
+                            } else if self.startup_time.elapsed() < Duration::from_millis(500) {
                                 info!("Enter ignored (startup cooldown)");
                             } else {
                                 info!("Region selection confirmed, starting capture");
@@ -538,7 +562,7 @@ impl ApplicationHandler for RustFrameApp {
                             info!("Border visibility: {}", self.settings.show_border);
                             self.update_overlay_title();
                         }
-                        PhysicalKey::Code(KeyCode::KeyE) if self.is_selecting => {
+                        PhysicalKey::Code(KeyCode::KeyE) if self.dev_mode && self.is_selecting => {
                             self.settings.exclude_from_capture =
                                 !self.settings.exclude_from_capture;
                             info!(
@@ -558,36 +582,99 @@ impl ApplicationHandler for RustFrameApp {
             WindowEvent::MouseInput { state, button, .. } => {
                 // Handle mouse clicks for dragging the overlay window
                 if self.is_selecting {
-                    if let Some(overlay) = &self.overlay_window {
-                        if overlay.window_id() == window_id {
-                            use winit::event::{ElementState, MouseButton};
+                    use winit::event::{ElementState, MouseButton};
 
+                    let action = if let Some(overlay) = &self.overlay_window {
+                        if overlay.window_id() == window_id {
+                            let cursor_physical = self
+                                .cursor_pos;
                             match (button, state) {
                                 (MouseButton::Left, ElementState::Pressed) => {
-                                    self.is_dragging = true;
+                                    // Don't start drag or hide menu yet - wait for release to check hits
+                                    if !overlay.is_context_menu_visible() {
+                                        self.is_dragging = true;
+                                        self.did_move = false; // Reset move tracking
+                                        self.last_mouse_pos = None; // Will be set on first CursorMoved
+                                    }
+                                    None
                                 }
                                 (MouseButton::Left, ElementState::Released) => {
+                                    let actually_moved = self.did_move;
                                     self.is_dragging = false;
+                                    self.did_move = false;
                                     self.last_mouse_pos = None;
+
+                                    if let Some((x, y)) = cursor_physical {
+                                        let px = x as i32;
+                                        let py = y as i32;
+
+                                        if overlay.is_context_menu_visible() {
+                                            // Menu is open - check for item click
+                                            let hit = overlay.context_menu_hit_test(px, py);
+                                            let _ = overlay.hide_context_menu();
+                                            hit
+                                        } else if !actually_moved && overlay.play_button_hit_test(px, py) {
+                                            // Only trigger play if we didn't drag
+                                            Some(ContextMenuItem::StartCapture)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
                                 }
-                                _ => {}
+                                (MouseButton::Right, ElementState::Pressed) => {
+                                    if let Some((x, y)) = cursor_physical {
+                                        if let Err(e) =
+                                            overlay.show_context_menu(x as i32, y as i32)
+                                        {
+                                            error!("Failed to show context menu: {}", e);
+                                        }
+                                    }
+                                    None
+                                }
+                                _ => None,
                             }
+                        } else {
+                            None
                         }
+                    } else {
+                        None
+                    };
+
+                    match action {
+                        Some(ContextMenuItem::StartCapture) => self.start_capture(),
+                        Some(ContextMenuItem::OpenSettings) => self.show_settings_dialog(),
+                        Some(ContextMenuItem::ShowHelp) => self.show_help_dialog(),
+                        None => {}
                     }
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
-                // Handle mouse movement for dragging
-                if self.is_selecting && self.is_dragging {
-                    if let Some(overlay) = &mut self.overlay_window {
-                        if overlay.window_id() == window_id {
+                if let Some(overlay) = &mut self.overlay_window {
+                    if overlay.window_id() == window_id {
+                        // Track cursor position for hit testing (winit gives physical coords)
+                        self.cursor_pos = Some((position.x, position.y));
+
+                        // Handle mouse movement for dragging
+                        // Note: position is in window-local coordinates
+                        // When we move the window, the cursor stays at the same window-local position
+                        // So we should NOT update last_mouse_pos after moving - it stays fixed
+                        if self.is_selecting && self.is_dragging {
                             if let Some((last_x, last_y)) = self.last_mouse_pos {
                                 let delta_x = position.x - last_x;
                                 let delta_y = position.y - last_y;
-                                overlay.move_by(delta_x as i32, delta_y as i32);
+                                // Only move if delta is significant (small threshold for smoothness)
+                                if delta_x.abs() > 1.0 || delta_y.abs() > 1.0 {
+                                    overlay.move_by(delta_x as i32, delta_y as i32);
+                                    self.did_move = true; // Mark that we actually moved
+                                    // Don't update last_mouse_pos - cursor stays fixed in window coords
+                                }
+                            } else {
+                                // First move event after press - initialize reference point
+                                self.last_mouse_pos = Some((position.x, position.y));
                             }
-                            self.last_mouse_pos = Some((position.x, position.y));
                         }
                     }
                 }
@@ -625,6 +712,9 @@ impl RustFrameApp {
     /// Transition from "selection mode" to "capture mode"
     fn start_capture(&mut self) {
         if let Some(overlay) = &self.overlay_window {
+            if overlay.is_context_menu_visible() {
+                let _ = overlay.hide_context_menu();
+            }
             let overlay_position = overlay.get_outer_position();
             let full_size = overlay.get_inner_size();
 
@@ -689,6 +779,9 @@ impl RustFrameApp {
                             }
                         }
                     }
+
+                    // Update overlay visuals for capture state (color change)
+                    self.update_overlay_title();
                 }
                 Err(e) => {
                     error!("Failed to initialize capture engine: {}", e);
@@ -712,6 +805,9 @@ impl RustFrameApp {
 
         // Restore overlay window to selection mode
         if let Some(overlay) = &self.overlay_window {
+            if overlay.is_context_menu_visible() {
+                let _ = overlay.hide_context_menu();
+            }
             // Restore to full selection overlay (not hollow frame)
             overlay.restore_selection_mode();
             overlay.show();
@@ -741,30 +837,37 @@ impl RustFrameApp {
             } else {
                 "OFF"
             };
-            // E = Production mode: destination window behind overlay (single window view)
-            // OFF = Dev mode: two windows side by side
-            // ON = Prod mode: destination hidden behind overlay
-            let mode = if self.settings.exclude_from_capture {
-                "PROD(single)"
-            } else {
-                "DEV(side-by-side)"
-            };
+            let title = if self.dev_mode {
+                // E = Production mode: destination window behind overlay (single window view)
+                // OFF = Dev mode: two windows side by side
+                // ON = Prod mode: destination hidden behind overlay
+                let mode = if self.settings.exclude_from_capture {
+                    "PROD(single)"
+                } else {
+                    "DEV(side-by-side)"
+                };
 
-            let title = format!(
-                "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} [S]ettings | ENTER=Start ESC=Exit",
-                cursor, border, mode
-            );
+                format!(
+                    "RustFrame | [C]ursor:{} [B]order:{} [E]mode:{} [S]ettings | ENTER=Start ESC=Exit",
+                    cursor, border, mode
+                )
+            } else {
+                format!(
+                    "RustFrame | [C]ursor:{} [B]order:{} [S]ettings | ENTER=Start ESC=Exit",
+                    cursor, border
+                )
+            };
             overlay.set_title(&title);
 
             // Update the visual display inside the overlay to reflect settings changes
-            if self.is_selecting {
-                if let Err(e) = overlay.update_settings_display(
-                    self.settings.show_cursor,
-                    self.settings.show_border,
-                    self.settings.exclude_from_capture,
-                ) {
-                    error!("Failed to update overlay settings display: {}", e);
-                }
+            if let Err(e) = overlay.update_settings_display(
+                self.settings.show_cursor,
+                self.settings.show_border,
+                self.settings.exclude_from_capture,
+                self.dev_mode,
+                !self.is_selecting,
+            ) {
+                error!("Failed to update overlay settings display: {}", e);
             }
         }
     }
@@ -865,6 +968,45 @@ impl RustFrameApp {
             }
         } else {
             info!("Settings dialog cancelled");
+        }
+    }
+
+    fn show_help_dialog(&mut self) {
+        #[cfg(windows)]
+        {
+            use windows::core::PCWSTR;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                MessageBoxW, MB_ICONINFORMATION, MB_OK, MB_TOPMOST,
+            };
+
+            let body = "Press ENTER or click the play icon to start capture.\n\nRight-click for menu with Settings, Help, or Start Capture options.\n\nKeyboard shortcuts:\n  C - Toggle cursor visibility\n  B - Toggle border visibility\n  S - Open settings\n  ESC - Exit (or stop capture)";
+            let title = "RustFrame Help";
+
+            self.dialog_open = true;
+
+            let parent_hwnd = self
+                .overlay_window
+                .as_ref()
+                .and_then(|o| utils::get_hwnd_arc(o.get_window()));
+
+            let body_w = utils::wide_string(body);
+            let title_w = utils::wide_string(title);
+
+            unsafe {
+                let _ = MessageBoxW(
+                    parent_hwnd,
+                    PCWSTR(body_w.as_ptr()),
+                    PCWSTR(title_w.as_ptr()),
+                    MB_OK | MB_ICONINFORMATION | MB_TOPMOST,
+                );
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            info!(
+                "Help: Press Enter or click the play icon to start capture. Right-click for menu."
+            );
         }
     }
 }

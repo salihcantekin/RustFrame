@@ -18,7 +18,7 @@
 
 use anyhow::{Context, Result};
 use log::{error, info};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use winit::{
     dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
@@ -42,8 +42,143 @@ use windows::Win32::{
 thread_local! {
     static BORDER_WIDTH: Cell<u32> = const { Cell::new(5) };
     static OVERLAY_HWND: Cell<isize> = const { Cell::new(0) };
-    // Settings state for display in overlay (show_cursor, show_border, exclude_from_capture)
-    static SETTINGS_STATE: Cell<(bool, bool, bool)> = const { Cell::new((true, true, true)) };
+    // Settings state for display in overlay (show_cursor, show_border, exclude_from_capture, mode_enabled, is_capturing)
+    static SETTINGS_STATE: Cell<(bool, bool, bool, bool, bool)> =
+        const { Cell::new((true, true, true, true, false)) };
+    static CONTEXT_MENU_STATE: RefCell<Option<ContextMenuState>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct RectI {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl RectI {
+    fn width(&self) -> i32 {
+        (self.right - self.left).max(0)
+    }
+
+    fn height(&self) -> i32 {
+        (self.bottom - self.top).max(0)
+    }
+
+    fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayLayout {
+    ui_scale: i32,
+    text_box: RectI,
+    play_rect: RectI,
+}
+
+impl OverlayLayout {
+    fn for_size(width: i32, height: i32) -> Self {
+        // Scale UI elements as window grows
+        let scale_w = width as f32 / overlay::DEFAULT_WIDTH as f32;
+        let scale_h = height as f32 / overlay::DEFAULT_HEIGHT as f32;
+        let ui_scale = (scale_w.min(scale_h).clamp(1.0, 3.0).round() as i32).max(1);
+
+        let max_tb_w = (width - 8).max(text_box::WIDTH);
+        let max_tb_h = (height - 8).max(text_box::HEIGHT);
+        let tb_width = (text_box::WIDTH * ui_scale).clamp(text_box::WIDTH, max_tb_w);
+        let tb_height = (text_box::HEIGHT * ui_scale).clamp(text_box::HEIGHT, max_tb_h);
+        let tb_left = (width - tb_width) / 2;
+        let tb_top = (height - tb_height) / 2;
+        let tb_right = tb_left + tb_width;
+        let tb_bottom = tb_top + tb_height;
+
+        // Play button placed below the text box so it doesn't overlap text
+        let mut play_size = (32 * ui_scale).clamp(16, (width.min(height) / 3).max(16));
+        let margin = 12 * ui_scale;
+        let mut play_top = tb_bottom + margin;
+        if play_top + play_size + margin > height {
+            // If not enough space below, shrink and nudge up just below the box
+            play_size = play_size.clamp(16, (height - tb_bottom - margin * 2).max(16));
+            play_top = (tb_bottom + margin).min(height - play_size - margin);
+        }
+        let play_left = (width - play_size) / 2;
+
+        Self {
+            ui_scale,
+            text_box: RectI {
+                left: tb_left,
+                top: tb_top,
+                right: tb_right,
+                bottom: tb_bottom,
+            },
+            play_rect: RectI {
+                left: play_left,
+                top: play_top,
+                right: play_left + play_size,
+                bottom: play_top + play_size,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ContextMenuState {
+    x: i32,
+    y: i32,
+    width: i32,
+    item_height: i32,
+    padding: i32,
+}
+
+impl ContextMenuState {
+    fn height(&self) -> i32 {
+        self.padding * 2 + self.item_height * 3
+    }
+
+    fn item_rect(&self, index: usize) -> RectI {
+        let top = self.y + self.padding + self.item_height * index as i32;
+        RectI {
+            left: self.x + self.padding,
+            top,
+            right: self.x + self.width - self.padding,
+            bottom: top + self.item_height,
+        }
+    }
+
+    fn hit_test(&self, x: i32, y: i32) -> Option<ContextMenuItem> {
+        if !(RectI {
+            left: self.x,
+            top: self.y,
+            right: self.x + self.width,
+            bottom: self.y + self.height(),
+        })
+        .contains(x, y)
+        {
+            return None;
+        }
+
+        for (idx, item) in [
+            ContextMenuItem::StartCapture,
+            ContextMenuItem::OpenSettings,
+            ContextMenuItem::ShowHelp,
+        ]
+        .iter()
+        .enumerate()
+        {
+            if self.item_rect(idx).contains(x, y) {
+                return Some(*item);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextMenuItem {
+    StartCapture,
+    OpenSettings,
+    ShowHelp,
 }
 
 /// Wrapper for the overlay (selector) window
@@ -55,7 +190,11 @@ pub struct OverlayWindow {
 impl OverlayWindow {
     /// Create a new overlay window for region selection
     /// The window is semi-transparent with a visible border and help text
-    pub fn new(event_loop: &ActiveEventLoop) -> Result<Self> {
+    pub fn new(
+        event_loop: &ActiveEventLoop,
+        initial_settings: (bool, bool, bool),
+        mode_enabled: bool,
+    ) -> Result<Self> {
         info!("Creating overlay window");
 
         // Configure window attributes for the overlay
@@ -78,6 +217,16 @@ impl OverlayWindow {
             .context("Failed to create overlay window")?;
 
         info!("Overlay window created with ID: {:?}", window.id());
+
+        // Seed settings used by the first draw so the UI reflects the current mode immediately
+        let (show_cursor, show_border, exclude_from_capture) = initial_settings;
+        SETTINGS_STATE.set((
+            show_cursor,
+            show_border,
+            exclude_from_capture,
+            mode_enabled,
+            false,
+        ));
 
         // Apply Windows-specific styling for layered window with alpha
         #[cfg(windows)]
@@ -144,8 +293,8 @@ impl OverlayWindow {
     ) -> LRESULT {
         use windows::Win32::UI::Shell::DefSubclassProc;
         use windows::Win32::UI::WindowsAndMessaging::{
-            LoadCursorW, SetCursor, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT,
-            HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+            LoadCursorW, SetCursor, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT,
+            HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_SIZENESW, IDC_SIZENS,
             IDC_SIZENWSE, IDC_SIZEWE,
         };
 
@@ -166,7 +315,7 @@ impl OverlayWindow {
             let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
 
             let cursor_id = match hit_test {
-                x if x == HTCAPTION => Some(IDC_SIZEALL),
+                x if x == HTCLIENT => Some(IDC_ARROW),
                 x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
                 x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
                 x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
@@ -223,8 +372,9 @@ impl OverlayWindow {
                 return LRESULT(HTBOTTOM as isize);
             }
 
-            // Inside the window - treat as caption for dragging
-            return LRESULT(HTCAPTION as isize);
+            // Inside the window - treat as client area for normal mouse events
+            // Dragging is handled in Rust code via is_dragging flag
+            return LRESULT(HTCLIENT as isize);
         }
 
         DefSubclassProc(hwnd, msg, wparam, lparam)
@@ -317,17 +467,34 @@ impl OverlayWindow {
     /// Render the overlay content to a pixel buffer (shared by all overlay drawing methods)
     #[cfg(windows)]
     fn render_overlay_pixels(pixels: &mut [u32], width: i32, height: i32) {
+        let layout = OverlayLayout::for_size(width, height);
         let border_width = overlay::BORDER_WIDTH;
         let corner_size = overlay::CORNER_SIZE;
 
-        // Calculate text box dimensions (centered, clamped to window size)
-        let tb_width = text_box::WIDTH.min(width - 20);
-        let tb_height = text_box::HEIGHT.min(height - 20);
-        let tb_left = (width - tb_width) / 2;
-        let tb_top = (height - tb_height) / 2;
-        let tb_right = tb_left + tb_width;
-        let tb_bottom = tb_top + tb_height;
-        let tb_border = text_box::BORDER_WIDTH;
+        let tb_left = layout.text_box.left;
+        let tb_top = layout.text_box.top;
+        let tb_right = layout.text_box.right;
+        let tb_bottom = layout.text_box.bottom;
+        let tb_border = text_box::BORDER_WIDTH * layout.ui_scale;
+
+        let (show_cursor, show_border, exclude_from_capture, mode_enabled, is_capturing) =
+            SETTINGS_STATE.get();
+
+        let border_color = if is_capturing {
+            colors::BORDER_ACTIVE
+        } else {
+            colors::BORDER
+        };
+        let corner_color = if is_capturing {
+            colors::CORNER_ACTIVE
+        } else {
+            colors::CORNER
+        };
+        let text_border_color = if is_capturing {
+            colors::TEXT_BORDER_ACTIVE
+        } else {
+            colors::TEXT_BORDER
+        };
 
         for y in 0..height {
             for x in 0..width {
@@ -361,11 +528,11 @@ impl OverlayWindow {
                         || y >= tb_bottom - tb_border);
 
                 pixels[idx] = if in_corner {
-                    colors::CORNER
+                    corner_color
                 } else if on_border {
-                    colors::BORDER
+                    border_color
                 } else if on_text_box_border {
-                    colors::TEXT_BORDER
+                    text_border_color
                 } else if in_text_box {
                     colors::TEXT_BG
                 } else {
@@ -373,9 +540,6 @@ impl OverlayWindow {
                 };
             }
         }
-
-        // Get settings state from thread-local storage
-        let (show_cursor, show_border, exclude_from_capture) = SETTINGS_STATE.get();
 
         // Draw help text using the bitmap font module with settings state
         bitmap_font::draw_help_text(
@@ -385,7 +549,120 @@ impl OverlayWindow {
             show_cursor,
             show_border,
             exclude_from_capture,
+            mode_enabled,
+            layout.ui_scale,
         );
+
+        // Draw play button (triangle) to highlight starting capture
+        Self::draw_play_button(pixels, layout.play_rect, colors::PLAY, width, height);
+
+        // Draw context menu if visible
+        if let Some(menu_state) = CONTEXT_MENU_STATE.with(|c| *c.borrow()) {
+            Self::draw_context_menu(
+                pixels,
+                width,
+                height,
+                layout.ui_scale,
+                menu_state,
+                is_capturing,
+            );
+        }
+    }
+
+    fn draw_play_button(pixels: &mut [u32], rect: RectI, color: u32, width: i32, height: i32) {
+        // Right-pointing triangle centered in the rect (base on the left, tip on the right)
+        let tri_width = rect.width().max(1);
+        let tri_height = rect.height().max(1);
+
+        for x in rect.left..rect.right {
+            let col_progress = (x - rect.left) as f32 / tri_width as f32; // 0.0 at base, 1.0 at tip
+            let col_height = ((tri_height as f32) * (1.0 - col_progress)).round() as i32;
+            let start_y = rect.top + ((tri_height - col_height) / 2);
+            let end_y = start_y + col_height;
+
+            for y in start_y..end_y {
+                if x >= 0 && x < width && y >= 0 && y < height {
+                    let idx = (y * width + x) as usize;
+                    if idx < pixels.len() {
+                        pixels[idx] = color;
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_context_menu(
+        pixels: &mut [u32],
+        width: i32,
+        height: i32,
+        ui_scale: i32,
+        state: ContextMenuState,
+        is_capturing: bool,
+    ) {
+        let menu_rect = RectI {
+            left: state.x,
+            top: state.y,
+            right: (state.x + state.width).min(width),
+            bottom: (state.y + state.height()).min(height),
+        };
+
+        let border_color = if is_capturing {
+            colors::TEXT_BORDER_ACTIVE
+        } else {
+            colors::TEXT_BORDER
+        };
+
+        // Fill background
+        for y in menu_rect.top..menu_rect.bottom {
+            for x in menu_rect.left..menu_rect.right {
+                let idx = (y * width + x) as usize;
+                if idx < pixels.len() {
+                    pixels[idx] = colors::TEXT_BG;
+                }
+            }
+        }
+
+        // Draw border
+        for y in menu_rect.top..menu_rect.bottom {
+            for x in menu_rect.left..menu_rect.right {
+                if x == menu_rect.left
+                    || x == menu_rect.right - 1
+                    || y == menu_rect.top
+                    || y == menu_rect.bottom - 1
+                {
+                    let idx = (y * width + x) as usize;
+                    if idx < pixels.len() {
+                        pixels[idx] = border_color;
+                    }
+                }
+            }
+        }
+
+        // Render menu items
+        let label_scale = ui_scale.max(1);
+        let items = ["Start Capture", "Settings", "Help"];
+
+        for (idx, label) in items.iter().enumerate() {
+            let item_rect = state.item_rect(idx);
+            let style = bitmap_font::TextStyle {
+                color: colors::TEXT_WHITE,
+                scale: label_scale,
+            };
+            let text_w = bitmap_font::text_width(label, label_scale);
+            let text_x = item_rect.left + ((item_rect.width() - text_w) / 2);
+            let text_y = item_rect.top + (item_rect.height() - (7 * label_scale)) / 2;
+            bitmap_font::draw_text(
+                &mut bitmap_font::Canvas {
+                    pixels,
+                    width,
+                    height,
+                },
+                text_x,
+                text_y,
+                label,
+                &style,
+            );
+        }
     }
 
     /// Draw the selection overlay with semi-transparent background, border, and help text
@@ -419,12 +696,68 @@ impl OverlayWindow {
         show_cursor: bool,
         show_border: bool,
         exclude_from_capture: bool,
+        mode_enabled: bool,
+        is_capturing: bool,
     ) -> Result<()> {
         // Update thread-local storage with new settings
-        SETTINGS_STATE.set((show_cursor, show_border, exclude_from_capture));
+        SETTINGS_STATE.set((
+            show_cursor,
+            show_border,
+            exclude_from_capture,
+            mode_enabled,
+            is_capturing,
+        ));
 
         // Redraw the overlay to show updated settings
         self.redraw_selection_overlay()
+    }
+
+    pub fn layout(&self) -> OverlayLayout {
+        let size = self.window.inner_size();
+        OverlayLayout::for_size(size.width as i32, size.height as i32)
+    }
+
+    pub fn play_button_hit_test(&self, x: i32, y: i32) -> bool {
+        let layout = self.layout();
+        layout.play_rect.contains(x, y)
+    }
+
+    pub fn show_context_menu(&self, x: i32, y: i32) -> Result<()> {
+        let layout = self.layout();
+        let size = self.window.inner_size();
+
+        let width = (220 * layout.ui_scale).min(size.width as i32 - 8);
+        let item_height = 28 * layout.ui_scale;
+        let padding = 8 * layout.ui_scale;
+        let total_height = padding * 2 + item_height * 3;
+
+        let clamped_x = x.clamp(4, (size.width as i32 - width - 4).max(4));
+        let clamped_y = y.clamp(4, (size.height as i32 - total_height - 4).max(4));
+
+        CONTEXT_MENU_STATE.with(|c| {
+            *c.borrow_mut() = Some(ContextMenuState {
+                x: clamped_x,
+                y: clamped_y,
+                width,
+                item_height,
+                padding,
+            });
+        });
+
+        self.redraw_selection_overlay()
+    }
+
+    pub fn hide_context_menu(&self) -> Result<()> {
+        CONTEXT_MENU_STATE.with(|c| *c.borrow_mut() = None);
+        self.redraw_selection_overlay()
+    }
+
+    pub fn is_context_menu_visible(&self) -> bool {
+        CONTEXT_MENU_STATE.with(|c| c.borrow().is_some())
+    }
+
+    pub fn context_menu_hit_test(&self, x: i32, y: i32) -> Option<ContextMenuItem> {
+        CONTEXT_MENU_STATE.with(|c| c.borrow().as_ref().and_then(|state| state.hit_test(x, y)))
     }
 
     /// Get the window ID for event routing
@@ -602,110 +935,108 @@ impl OverlayWindow {
         }
     }
 
-    /// Install a window subclass for custom WM_NCHITTEST handling
+    /// Subclass proc for hollow frame mode - interior is click-through
     #[cfg(windows)]
-    unsafe fn install_subclass(hwnd: HWND, _border_width: u32) {
-        use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    unsafe extern "system" fn hollow_frame_subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _uidsubclass: usize,
+        _dwrefdata: usize,
+    ) -> LRESULT {
+        use windows::Win32::UI::Shell::DefSubclassProc;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            LoadCursorW, SetCursor, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+            HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT,
+            IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+        };
 
-        // Subclass procedure for custom hit testing
-        unsafe extern "system" fn subclass_proc(
-            hwnd: HWND,
-            msg: u32,
-            wparam: WPARAM,
-            lparam: LPARAM,
-            _uidsubclass: usize,
-            _dwrefdata: usize,
-        ) -> LRESULT {
-            // Handle cursor changes
-            if msg == WM_SETCURSOR {
-                use windows::Win32::UI::WindowsAndMessaging::{
-                    LoadCursorW, SetCursor, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
-                    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_SIZEALL, IDC_SIZENESW,
-                    IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-                };
+        // Handle cursor changes
+        if msg == WM_SETCURSOR {
+            let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
 
-                let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
+            let cursor_id = match hit_test {
+                x if x == HTCAPTION => Some(IDC_SIZEALL),
+                x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
+                x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
+                x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
+                x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
+                _ => None,
+            };
 
-                let cursor_id = match hit_test {
-                    x if x == HTCAPTION => Some(IDC_SIZEALL),
-                    x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
-                    x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
-                    x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
-                    x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
-                    _ => None,
-                };
-
-                if let Some(id) = cursor_id {
-                    if let Ok(cur) = LoadCursorW(None, id) {
-                        let _ = SetCursor(Some(cur));
-                    }
-                    return LRESULT(1); // Cursor handled
+            if let Some(id) = cursor_id {
+                if let Ok(cur) = LoadCursorW(None, id) {
+                    let _ = SetCursor(Some(cur));
                 }
-                return DefSubclassProc(hwnd, msg, wparam, lparam);
+                return LRESULT(1);
             }
-
-            if msg == WM_NCHITTEST {
-                // Get cursor position
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-
-                // Get window rect
-                let mut rect = RECT::default();
-                let _ = GetWindowRect(hwnd, &mut rect);
-
-                let border = BORDER_WIDTH.get() as i32;
-                let resize_margin = border.max(8); // At least 8px for resize
-
-                // Check if on edges for resize
-                let on_left = x >= rect.left - 4 && x < rect.left + resize_margin;
-                let on_right = x >= rect.right - resize_margin && x < rect.right + 4;
-                let on_top = y >= rect.top - 4 && y < rect.top + resize_margin;
-                let on_bottom = y >= rect.bottom - resize_margin && y < rect.bottom + 4;
-
-                // Determine hit test result
-                if on_top && on_left {
-                    return LRESULT(HTTOPLEFT as isize);
-                } else if on_top && on_right {
-                    return LRESULT(HTTOPRIGHT as isize);
-                } else if on_bottom && on_left {
-                    return LRESULT(HTBOTTOMLEFT as isize);
-                } else if on_bottom && on_right {
-                    return LRESULT(HTBOTTOMRIGHT as isize);
-                } else if on_left {
-                    return LRESULT(HTLEFT as isize);
-                } else if on_right {
-                    return LRESULT(HTRIGHT as isize);
-                } else if on_top {
-                    // Top center = caption (for dragging)
-                    let center_start = rect.left + (rect.right - rect.left) / 3;
-                    let center_end = rect.right - (rect.right - rect.left) / 3;
-                    if x >= center_start && x <= center_end {
-                        return LRESULT(HTCAPTION as isize);
-                    }
-                    return LRESULT(HTTOP as isize);
-                } else if on_bottom {
-                    return LRESULT(HTBOTTOM as isize);
-                }
-
-                // Check if in border area (for dragging)
-                let in_border = (x >= rect.left && x < rect.left + border)
-                    || (x >= rect.right - border && x < rect.right)
-                    || (y >= rect.top && y < rect.top + border)
-                    || (y >= rect.bottom - border && y < rect.bottom);
-
-                if in_border {
-                    return LRESULT(HTCAPTION as isize); // Allow dragging from border
-                }
-
-                // Interior is transparent (click-through)
-                return LRESULT(HTTRANSPARENT as isize);
-            }
-
-            DefSubclassProc(hwnd, msg, wparam, lparam)
+            return DefSubclassProc(hwnd, msg, wparam, lparam);
         }
 
-        // Install the subclass
-        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, 0);
+        if msg == WM_NCHITTEST {
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+
+            let mut rect = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut rect);
+
+            let border = BORDER_WIDTH.get() as i32;
+            let resize_margin = border.max(8);
+
+            let on_left = x >= rect.left - 4 && x < rect.left + resize_margin;
+            let on_right = x >= rect.right - resize_margin && x < rect.right + 4;
+            let on_top = y >= rect.top - 4 && y < rect.top + resize_margin;
+            let on_bottom = y >= rect.bottom - resize_margin && y < rect.bottom + 4;
+
+            if on_top && on_left {
+                return LRESULT(HTTOPLEFT as isize);
+            } else if on_top && on_right {
+                return LRESULT(HTTOPRIGHT as isize);
+            } else if on_bottom && on_left {
+                return LRESULT(HTBOTTOMLEFT as isize);
+            } else if on_bottom && on_right {
+                return LRESULT(HTBOTTOMRIGHT as isize);
+            } else if on_left {
+                return LRESULT(HTLEFT as isize);
+            } else if on_right {
+                return LRESULT(HTRIGHT as isize);
+            } else if on_top {
+                // Top center = caption (for dragging), edges = resize
+                let center_start = rect.left + (rect.right - rect.left) / 3;
+                let center_end = rect.right - (rect.right - rect.left) / 3;
+                if x >= center_start && x <= center_end {
+                    return LRESULT(HTCAPTION as isize);
+                }
+                return LRESULT(HTTOP as isize);
+            } else if on_bottom {
+                return LRESULT(HTBOTTOM as isize);
+            }
+
+            // Border area allows dragging
+            let in_border = (x >= rect.left && x < rect.left + border)
+                || (x >= rect.right - border && x < rect.right)
+                || (y >= rect.top && y < rect.top + border)
+                || (y >= rect.bottom - border && y < rect.bottom);
+
+            if in_border {
+                return LRESULT(HTCAPTION as isize);
+            }
+
+            // Interior is click-through
+            return LRESULT(HTTRANSPARENT as isize);
+        }
+
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+
+    /// Install hollow frame subclass
+    #[cfg(windows)]
+    unsafe fn install_subclass(hwnd: HWND, _border_width: u32) {
+        use windows::Win32::UI::Shell::SetWindowSubclass;
+
+        // Install the subclass with ID 2 for hollow frame mode
+        let _ = SetWindowSubclass(hwnd, Some(Self::hollow_frame_subclass_proc), 2, 0);
     }
 
     /// Update the hollow frame region after resize
@@ -770,6 +1101,7 @@ impl OverlayWindow {
             SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
             SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         };
+        use windows::Win32::UI::Shell::{RemoveWindowSubclass, SetWindowSubclass};
 
         let handle = match self.window.window_handle() {
             Ok(h) => h,
@@ -786,6 +1118,14 @@ impl OverlayWindow {
                 // Restore layered window style for selection overlay
                 let ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style.0 as isize);
+
+                // Remove hollow frame subclass (ID 2) first
+                // We need to pass the same proc that was used to install it
+                let _ = RemoveWindowSubclass(hwnd, Some(Self::hollow_frame_subclass_proc), 2);
+                
+                // Reinstall selection-mode hit testing (ID 1)
+                OVERLAY_HWND.set(hwnd.0 as isize);
+                let _ = SetWindowSubclass(hwnd, Some(Self::selection_subclass_proc), 1, 0);
 
                 // Force window to update
                 let _ = SetWindowPos(

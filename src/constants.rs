@@ -7,14 +7,20 @@
 pub mod colors {
     /// Bright blue border color
     pub const BORDER: u32 = 0xFF00A8FF;
+    /// Orange border when capture is active
+    pub const BORDER_ACTIVE: u32 = 0xFFFF9A3C;
     /// Almost fully transparent fill
     pub const FILL: u32 = 0x10000000;
     /// Lighter blue for corner markers
     pub const CORNER: u32 = 0xFF00D4FF;
+    /// Orange corner markers when capture is active
+    pub const CORNER_ACTIVE: u32 = 0xFFFFB766;
     /// Dark gray background for text box
     pub const TEXT_BG: u32 = 0xF0181818;
     /// Blue border for text box
     pub const TEXT_BORDER: u32 = 0xFF00A8FF;
+    /// Orange border for text box when capture is active
+    pub const TEXT_BORDER_ACTIVE: u32 = 0xFFFF9A3C;
     /// White text
     pub const TEXT_WHITE: u32 = 0xFFFFFFFF;
     /// Blue text (for title)
@@ -27,6 +33,8 @@ pub mod colors {
     pub const TEXT_RED: u32 = 0xFFFF4444;
     /// Yellow text (for dev mode indicator)
     pub const TEXT_YELLOW: u32 = 0xFFFFCC00;
+    /// Bright green for play button
+    pub const PLAY: u32 = 0xFF00FF7A;
 }
 
 /// Overlay window dimensions

@@ -28,6 +28,10 @@ RustFrame allows you to select a region of your screen and mirror it to a separa
 - ✅ **Smart ESC Behavior**: ESC stops capture first, then exits (prevents accidental closure)
 - ✅ **Production Mode**: Off-screen destination window for clean video sharing
 - ✅ **Help Overlay**: On-screen keyboard shortcut reference (H key)
+- ✅ **Play Button**: Visual play icon to start capture with a click
+- ✅ **Right-Click Context Menu**: Quick access to Start Capture, Settings, and Help
+- ✅ **Scalable UI**: Overlay text and buttons scale with window size
+- ✅ **Active State Colors**: Border color changes when capture is active
 
 ## 🏗️ Architecture
 
@@ -100,9 +104,11 @@ cargo run --release
 
 4. **Start capturing:**
    - Press **ENTER** or **Numpad Enter** to start real-time capture
+   - Or **click the Play button** in the center of the overlay
+   - Or **right-click** and select "Start Capture" from the context menu
    - The destination window will display the selected region
 
-5. **Keyboard Shortcuts (during selection):**
+5. **Keyboard Shortcuts (during selection):****
    - **C**: Toggle cursor visibility in capture
    - **B**: Toggle border visibility
    - **E**: Toggle exclude from capture mode

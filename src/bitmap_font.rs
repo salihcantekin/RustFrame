@@ -187,6 +187,8 @@ pub fn draw_help_text(
     show_cursor: bool,
     show_border: bool,
     exclude_from_capture: bool,
+    mode_enabled: bool,
+    ui_scale: i32,
 ) {
     let mut canvas = Canvas {
         pixels,
@@ -197,12 +199,16 @@ pub fn draw_help_text(
     // Format settings status text
     let cursor_status = if show_cursor { "ON" } else { "OFF" };
     let border_status = if show_border { "ON" } else { "OFF" };
-    let mode_status = if exclude_from_capture { "PROD" } else { "DEV" };
+    let mode_line = if mode_enabled {
+        let mode_status = if exclude_from_capture { "PROD" } else { "DEV" };
+        Some(format!("[E] Mode: {}", mode_status))
+    } else {
+        None
+    };
 
     // Build dynamic text lines
     let cursor_line = format!("[C] Cursor: {}", cursor_status);
     let border_line = format!("[B] Border: {}", border_status);
-    let mode_line = format!("[E] Mode: {}", mode_status);
 
     // Help text content with color and scale
     // Using owned Strings for dynamic content
@@ -214,28 +220,30 @@ pub fn draw_help_text(
         ("", colors::TEXT_WHITE, 1),
         ("ENTER - Start capture", colors::TEXT_WHITE, 1),
         ("ESC   - Stop / Exit", colors::TEXT_WHITE, 1),
+        ("ENTER or PLAY to start", colors::TEXT_GREEN, 1),
         ("", colors::TEXT_WHITE, 1),
         ("[S] Settings", colors::TEXT_GRAY, 1),
         ("", colors::TEXT_WHITE, 1),
         ("by Salih Cantekin", colors::TEXT_GRAY, 1),
     ];
 
-    // Calculate line heights
-    const LINE_HEIGHT: i32 = 16;
-    const TITLE_HEIGHT: i32 = 28;
-    const EMPTY_LINE_HEIGHT: i32 = 8;
+    // Calculate line heights (scaled)
+    let line_height: i32 = 16 * ui_scale;
+    let title_height: i32 = 28 * ui_scale;
+    let empty_line_height: i32 = 8 * ui_scale;
 
     // Calculate total height including dynamic settings lines
-    let settings_lines_height = LINE_HEIGHT * 3; // 3 settings lines
+    let settings_line_count = if mode_enabled { 3 } else { 2 };
+    let settings_lines_height = line_height * settings_line_count;
     let total_height: i32 = lines
         .iter()
         .map(|(text, _, scale)| {
             if text.is_empty() {
-                EMPTY_LINE_HEIGHT
+                empty_line_height
             } else if *scale > 1 {
-                TITLE_HEIGHT
+                title_height
             } else {
-                LINE_HEIGHT
+                line_height
             }
         })
         .sum::<i32>()
@@ -246,28 +254,28 @@ pub fn draw_help_text(
     // Draw static lines up to settings section
     for (i, (text, color, scale)) in lines.iter().enumerate() {
         if text.is_empty() {
-            y += EMPTY_LINE_HEIGHT;
+            y += empty_line_height;
             continue;
         }
 
         let style = TextStyle {
             color: *color,
-            scale: *scale,
+            scale: (*scale) * ui_scale,
         };
-        let text_w = text_width(text, *scale);
+        let text_w = text_width(text, style.scale);
         let x = (width - text_w) / 2;
 
         draw_text(&mut canvas, x, y, text, &style);
 
         y += if *scale > 1 {
-            TITLE_HEIGHT
+            title_height
         } else {
-            LINE_HEIGHT
+            line_height
         };
 
         // Insert dynamic settings lines after "ESC - Stop / Exit" (index 6)
         if i == 6 {
-            y += EMPTY_LINE_HEIGHT; // Add spacing before settings
+            y += empty_line_height; // Add spacing before settings
 
             // Draw cursor setting (green if ON, red if OFF)
             let cursor_color = if show_cursor {
@@ -277,12 +285,12 @@ pub fn draw_help_text(
             };
             let cursor_style = TextStyle {
                 color: cursor_color,
-                scale: 1,
+                scale: 1 * ui_scale,
             };
-            let text_w = text_width(&cursor_line, 1);
+            let text_w = text_width(&cursor_line, cursor_style.scale);
             let x = (width - text_w) / 2;
             draw_text(&mut canvas, x, y, &cursor_line, &cursor_style);
-            y += LINE_HEIGHT;
+            y += line_height;
 
             // Draw border setting
             let border_color = if show_border {
@@ -292,27 +300,29 @@ pub fn draw_help_text(
             };
             let border_style = TextStyle {
                 color: border_color,
-                scale: 1,
+                scale: 1 * ui_scale,
             };
-            let text_w = text_width(&border_line, 1);
+            let text_w = text_width(&border_line, border_style.scale);
             let x = (width - text_w) / 2;
             draw_text(&mut canvas, x, y, &border_line, &border_style);
-            y += LINE_HEIGHT;
+            y += line_height;
 
             // Draw mode setting
-            let mode_color = if exclude_from_capture {
-                colors::TEXT_BLUE
-            } else {
-                colors::TEXT_YELLOW
-            };
-            let mode_style = TextStyle {
-                color: mode_color,
-                scale: 1,
-            };
-            let text_w = text_width(&mode_line, 1);
-            let x = (width - text_w) / 2;
-            draw_text(&mut canvas, x, y, &mode_line, &mode_style);
-            y += LINE_HEIGHT;
+            if let Some(mode_line) = &mode_line {
+                let mode_color = if exclude_from_capture {
+                    colors::TEXT_BLUE
+                } else {
+                    colors::TEXT_YELLOW
+                };
+                let mode_style = TextStyle {
+                    color: mode_color,
+                    scale: 1 * ui_scale,
+                };
+                let text_w = text_width(mode_line, mode_style.scale);
+                let x = (width - text_w) / 2;
+                draw_text(&mut canvas, x, y, mode_line, &mode_style);
+                y += line_height;
+            }
         }
     }
 }
