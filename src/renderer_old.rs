@@ -99,8 +99,7 @@ impl Renderer {
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::default(),
             memory_hints: wgpu::MemoryHints::Performance,
-            experimental_features: Default::default(),
-            trace: Default::default(),
+            trace: wgpu::Trace::Off,
         }))
         .context("Failed to create device and queue")?;
 
@@ -159,7 +158,7 @@ impl Renderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            immediate_size: Default::default(),
+            push_constant_ranges: &[],
         });
 
         // STEP 9: Create render pipeline
@@ -198,7 +197,7 @@ impl Renderer {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
         info!("Render pipeline created");
@@ -212,7 +211,7 @@ impl Renderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear, // Smooth scaling
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -335,12 +334,10 @@ impl Renderer {
                         }),
                         store: wgpu::StoreOp::Store,
                     },
-                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
 
             // Draw the quad with the captured texture
@@ -416,12 +413,10 @@ impl Renderer {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
-                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
         }
 

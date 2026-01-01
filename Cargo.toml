@@ -42,8 +42,12 @@ winit = { version = "0.30.12", features = ["rwh_06"] }
 # Raw window handle support - needed to bridge winit and wgpu
 raw-window-handle = "0.6.2"
 
+# Async utilities
+futures-intrusive = "0.5"
+
 # GPU graphics - WebGPU implementation for Rust
-wgpu = { version = "28.0.0", features = ["dx12"] }
+# Using 25.0 for compatibility with egui-wgpu 0.32.3
+wgpu = { version = "25.0", features = ["dx12"] }
 
 # Windows API bindings - this is where the magic happens
 # We need MANY specific features for WGC and D3D11
@@ -99,3 +103,10 @@ image = { version = "0.25", default-features = false, features = ["ico"] }
 # System tray icon
 tray-icon = "0.21.2"
 muda = "0.17.1"
+egui = "0.32.3"
+egui-winit = "0.32.3"
+egui-wgpu = "0.32.3"
+
+[[bin]]
+name = "rustframe_new"
+path = "src/main_new.rs"
