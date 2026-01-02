@@ -41,6 +41,13 @@ pub struct WindowsCaptureEngine {
     frame_pool: Option<Direct3D11CaptureFramePool>,
     capture_session: Option<GraphicsCaptureSession>,
     
+    // Cached staging texture to avoid per-frame allocation
+    staging_texture_cache: Option<ID3D11Texture2D>,
+    staging_cache_size: (u32, u32),  // (width, height) of cached texture
+    
+    // Reusable data buffer to avoid per-frame allocation
+    frame_data_buffer: Vec<u8>,
+    
     // State
     capture_region: Option<CaptureRect>,
     monitor_origin: (i32, i32),
@@ -62,6 +69,9 @@ impl WindowsCaptureEngine {
             direct3d_device: None,
             frame_pool: None,
             capture_session: None,
+            staging_texture_cache: None,
+            staging_cache_size: (0, 0),
+            frame_data_buffer: Vec::new(),
             capture_region: None,
             monitor_origin: (0, 0),
             frame_ready: Arc::new(AtomicBool::new(false)),
@@ -166,7 +176,7 @@ impl WindowsCaptureEngine {
     
     /// Copy texture to CPU-accessible staging texture and read pixels
     fn copy_frame_to_cpu(
-        &self,
+        &mut self,
         source_texture: &ID3D11Texture2D,
         region: &CaptureRect,
     ) -> Option<CaptureFrame> {
@@ -183,32 +193,46 @@ impl WindowsCaptureEngine {
             info!("Copying frame to CPU: {}x{} (frame #{})", width, height, count);
         }
         
-        // Create staging texture for CPU read
-        let staging_desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        };
+        // Check if we need to recreate staging texture (size changed)
+        let need_new_staging = self.staging_texture_cache.is_none() 
+            || self.staging_cache_size != (width, height);
         
-        let mut staging_texture = None;
-        unsafe {
-            if d3d_device.CreateTexture2D(&staging_desc, None, Some(&mut staging_texture)).is_err() {
-                warn!("Failed to create staging texture");
-                return None;
+        if need_new_staging {
+            info!("Creating new staging texture: {}x{}", width, height);
+            
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            
+            let mut staging_texture = None;
+            unsafe {
+                if d3d_device.CreateTexture2D(&staging_desc, None, Some(&mut staging_texture)).is_err() {
+                    warn!("Failed to create staging texture");
+                    return None;
+                }
             }
+            
+            self.staging_texture_cache = staging_texture;
+            self.staging_cache_size = (width, height);
+            
+            // Resize data buffer
+            let buffer_size = (width * height * 4) as usize;
+            self.frame_data_buffer.resize(buffer_size, 0);
         }
         
-        let staging_texture = staging_texture?;
+        let staging_texture = self.staging_texture_cache.as_ref()?;
         
         // Calculate source region (offset by monitor origin)
         let src_x = (region.x - self.monitor_origin.0) as u32;
@@ -226,7 +250,7 @@ impl WindowsCaptureEngine {
         
         unsafe {
             d3d_context.CopySubresourceRegion(
-                &staging_texture,
+                staging_texture,
                 0,
                 0, 0, 0,
                 source_texture,
@@ -238,7 +262,7 @@ impl WindowsCaptureEngine {
         // Map the staging texture and read pixels
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
-            if d3d_context.Map(&staging_texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped)).is_err() {
+            if d3d_context.Map(staging_texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped)).is_err() {
                 warn!("Failed to map staging texture");
                 return None;
             }
@@ -247,21 +271,19 @@ impl WindowsCaptureEngine {
         let stride = mapped.RowPitch as usize;
         let row_bytes = (width * 4) as usize;  // 4 bytes per pixel (BGRA)
         
-        // Copy row by row, removing stride padding
-        let mut data = vec![0u8; row_bytes * height as usize];
-        
+        // Copy row by row, removing stride padding (reuse buffer)
         unsafe {
             let src_ptr = mapped.pData as *const u8;
             for row in 0..height as usize {
                 let src_row = src_ptr.add(row * stride);
-                let dst_row = data.as_mut_ptr().add(row * row_bytes);
+                let dst_row = self.frame_data_buffer.as_mut_ptr().add(row * row_bytes);
                 std::ptr::copy_nonoverlapping(src_row, dst_row, row_bytes);
             }
-            d3d_context.Unmap(&staging_texture, 0);
+            d3d_context.Unmap(staging_texture, 0);
         }
         
         Some(CaptureFrame {
-            data,
+            data: self.frame_data_buffer.clone(),
             width,
             height,
             stride: row_bytes as u32,
@@ -354,6 +376,12 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.capture_region = None;
         self.is_active = false;
         
+        // Clear staging texture cache
+        self.staging_texture_cache = None;
+        self.staging_cache_size = (0, 0);
+        self.frame_data_buffer.clear();
+        self.frame_data_buffer.shrink_to_fit();
+        
         info!("Capture stopped");
     }
     
@@ -372,7 +400,8 @@ impl CaptureEngine for WindowsCaptureEngine {
         }
         
         let frame_pool = self.frame_pool.as_ref()?;
-        let region = self.capture_region.as_ref()?;
+        // Clone region to avoid borrow conflict with mutable self
+        let region = self.capture_region.clone()?;
         
         // Try to get frame from pool (non-blocking)
         let frame = match frame_pool.TryGetNextFrame() {
@@ -401,7 +430,6 @@ impl CaptureEngine for WindowsCaptureEngine {
         };
         
         // Get the D3D11 texture from the surface
-        use windows::Win32::Graphics::Direct3D11::ID3D11Resource;
         use windows::Win32::System::WinRT::Direct3D11::IDirect3DDxgiInterfaceAccess;
         
         let access: IDirect3DDxgiInterfaceAccess = match surface.cast() {
@@ -421,7 +449,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         };
         
         // Copy to CPU and return
-        self.copy_frame_to_cpu(&texture, region)
+        self.copy_frame_to_cpu(&texture, &region)
     }
     
     fn set_cursor_visible(&mut self, visible: bool) -> Result<()> {

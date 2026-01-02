@@ -14,6 +14,10 @@ categories = ["multimedia", "graphics", "os::windows-apis"]
 rust-version = "1.87.0"
 exclude = ["target/", ".git/", ".github/", "*.zip"]
 
+[lib]
+name = "rustframe"
+path = "src/lib.rs"
+
 [profile.release]
 # Optimize for performance
 opt-level = 3
@@ -104,9 +108,14 @@ image = { version = "0.25", default-features = false, features = ["ico"] }
 # System tray icon
 tray-icon = "0.21.2"
 muda = "0.17.1"
-egui = "0.32.3"
-egui-winit = "0.32.3"
-egui-wgpu = "0.32.3"
+
+# GUI Framework - Iced with transparent window support
+iced = { version = "0.13", features = ["wgpu", "tokio", "image"] }
+iced_aw = { version = "0.11", default-features = false, features = ["color_picker"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# File dialog
+rfd = "0.15"
 
 # Serialization for settings persistence
 serde = { version = "1.0", features = ["derive"] }
@@ -118,3 +127,7 @@ dirs = "5.0"
 [[bin]]
 name = "rustframe_new"
 path = "src/main_new.rs"
+
+[[bin]]
+name = "rustframe_iced"
+path = "src/main_iced.rs"
