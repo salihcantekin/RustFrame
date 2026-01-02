@@ -203,13 +203,8 @@ impl Renderer {
         
         // Render
         {
-            // For border window using region API, we can use a normal background color
-            // since the center is literally cut out (no pixels there at all)
-            let clear_color = if self.transparent {
-                wgpu::Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 } // Dark background for border
-            } else {
-                wgpu::Color::BLACK
-            };
+            // Use consistent dark color matching the UI theme (RGB 20, 20, 25 = 0.078, 0.078, 0.098)
+            let clear_color = wgpu::Color { r: 0.078, g: 0.078, b: 0.098, a: 1.0 };
             
             let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui Render Pass"),

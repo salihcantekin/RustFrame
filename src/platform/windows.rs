@@ -3,14 +3,40 @@
 // This module contains all Windows-specific code using Win32 API.
 
 use crate::app::CaptureRect;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use windows::Win32::{
-    Foundation::{HWND, RECT},
+    Foundation::{HWND, RECT, LPARAM, WPARAM, LRESULT},
     Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
         CreateRectRgn, CombineRgn, RGN_DIFF, SetWindowRgn, DeleteObject,
+        EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
     },
+    Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmEnableBlurBehindWindow, DWM_BLURBEHIND, DWM_BB_ENABLE},
     UI::WindowsAndMessaging::*,
 };
+use windows::Win32::UI::Controls::MARGINS;
+
+// Global mouse hook state
+static MOUSE_HOOK_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Wrapper for HHOOK to make it Send + Sync
+struct HookHandle(HHOOK);
+unsafe impl Send for HookHandle {}
+unsafe impl Sync for HookHandle {}
+
+lazy_static::lazy_static! {
+    static ref MOUSE_CLICKS: Arc<Mutex<Vec<MouseClick>>> = Arc::new(Mutex::new(Vec::new()));
+    static ref MOUSE_HOOK_HANDLE: Arc<Mutex<Option<HookHandle>>> = Arc::new(Mutex::new(None));
+}
+
+/// Represents a mouse click event
+#[derive(Debug, Clone, Copy)]
+pub struct MouseClick {
+    pub x: i32,
+    pub y: i32,
+    pub timestamp: std::time::Instant,
+    pub is_left: bool,
+}
 
 /// Resize direction for border window
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -89,6 +115,138 @@ pub fn get_primary_monitor_rect() -> CaptureRect {
     }
 }
 
+/// Start native window dragging using Win32 API - this is the smoothest way
+pub fn start_window_drag(hwnd: isize) {
+    unsafe {
+        // Use PostMessage for non-blocking drag initiation
+        // WM_NCLBUTTONDOWN with HTCAPTION simulates title bar drag
+        let _ = PostMessageW(
+            Some(HWND(hwnd as *mut _)),
+            WM_NCLBUTTONDOWN,
+            WPARAM(HTCAPTION as usize),
+            LPARAM(0),
+        );
+    }
+}
+
+/// Get the primary monitor's refresh rate in Hz
+pub fn get_monitor_refresh_rate() -> u32 {
+    unsafe {
+        let mut dev_mode: DEVMODEW = std::mem::zeroed();
+        dev_mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        
+        if EnumDisplaySettingsW(None, ENUM_CURRENT_SETTINGS, &mut dev_mode).as_bool() {
+            let refresh = dev_mode.dmDisplayFrequency;
+            if refresh > 0 && refresh <= 500 {
+                return refresh;
+            }
+        }
+        
+        // Fallback to 60Hz if we can't detect
+        60
+    }
+}
+
+/// Low-level mouse hook callback
+unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 && MOUSE_HOOK_ENABLED.load(Ordering::Relaxed) {
+        let mouse_struct = lparam.0 as *const MSLLHOOKSTRUCT;
+        if !mouse_struct.is_null() {
+            let is_click = match wparam.0 as u32 {
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN => true,
+                _ => false,
+            };
+            
+            if is_click {
+                let is_left = wparam.0 as u32 == WM_LBUTTONDOWN;
+                let pt = (*mouse_struct).pt;
+                
+                if let Ok(mut clicks) = MOUSE_CLICKS.lock() {
+                    clicks.push(MouseClick {
+                        x: pt.x,
+                        y: pt.y,
+                        timestamp: std::time::Instant::now(),
+                        is_left,
+                    });
+                    
+                    // Keep only recent clicks (last 2 seconds worth)
+                    let now = std::time::Instant::now();
+                    clicks.retain(|c| now.duration_since(c.timestamp).as_secs_f32() < 2.0);
+                }
+            }
+        }
+    }
+    
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
+/// Install global mouse hook for click detection
+pub fn install_mouse_hook() -> bool {
+    unsafe {
+        if let Ok(mut handle) = MOUSE_HOOK_HANDLE.lock() {
+            if handle.is_some() {
+                return true; // Already installed
+            }
+            
+            let hook = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                Some(mouse_hook_proc),
+                None,
+                0,
+            );
+            
+            match hook {
+                Ok(h) => {
+                    *handle = Some(HookHandle(h));
+                    MOUSE_HOOK_ENABLED.store(true, Ordering::Relaxed);
+                    log::info!("Mouse hook installed successfully");
+                    true
+                }
+                Err(e) => {
+                    log::error!("Failed to install mouse hook: {:?}", e);
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    }
+}
+
+/// Uninstall global mouse hook
+pub fn uninstall_mouse_hook() {
+    unsafe {
+        MOUSE_HOOK_ENABLED.store(false, Ordering::Relaxed);
+        
+        if let Ok(mut handle) = MOUSE_HOOK_HANDLE.lock() {
+            if let Some(hook) = handle.take() {
+                let _ = UnhookWindowsHookEx(hook.0);
+                log::info!("Mouse hook uninstalled");
+            }
+        }
+        
+        // Clear click buffer
+        if let Ok(mut clicks) = MOUSE_CLICKS.lock() {
+            clicks.clear();
+        }
+    }
+}
+
+/// Get recent mouse clicks and clear the buffer
+pub fn get_mouse_clicks() -> Vec<MouseClick> {
+    if let Ok(clicks) = MOUSE_CLICKS.lock() {
+        let result = clicks.clone();
+        result
+    } else {
+        Vec::new()
+    }
+}
+
+/// Check if mouse hook is active
+pub fn is_mouse_hook_active() -> bool {
+    MOUSE_HOOK_ENABLED.load(Ordering::Relaxed)
+}
+
 /// Set a window to be excluded from screen capture (Windows 10 2004+)
 pub fn set_window_capture_exclusion(hwnd: isize, exclude: bool) {
     unsafe {
@@ -146,12 +304,17 @@ pub fn get_window_position(hwnd: isize) -> (i32, i32) {
 /// Set window size
 pub fn set_window_size(hwnd: isize, width: u32, height: u32) {
     unsafe {
-        SetWindowPos(
+        let result = SetWindowPos(
             HWND(hwnd as *mut _),
             None,
             0, 0, width as i32, height as i32,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        ).ok();
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+        if result.is_err() {
+            log::error!("SetWindowPos failed: {:?}", result);
+        } else {
+            log::info!("SetWindowPos succeeded for {}x{}", width, height);
+        }
     }
 }
 
@@ -253,5 +416,67 @@ pub fn set_window_alpha(hwnd: isize, alpha: u8) {
             alpha,
             LWA_ALPHA,
         ).ok();
+    }
+}
+
+/// Enable DWM composition transparency for a window
+/// This allows true per-pixel alpha blending with wgpu
+pub fn enable_window_transparency(hwnd: isize) {
+    unsafe {
+        use windows::Win32::Graphics::Gdi::HRGN;
+        
+        let hwnd = HWND(hwnd as *mut _);
+        
+        // Extend frame into entire client area to enable DWM composition
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+        
+        // Enable blur behind (optional, helps with transparency)
+        let blur = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE,
+            fEnable: true.into(),
+            hRgnBlur: HRGN::default(),
+            fTransitionOnMaximized: false.into(),
+        };
+        let _ = DwmEnableBlurBehindWindow(hwnd, &blur);
+        
+        log::info!("Enabled DWM transparency for window {:?}", hwnd);
+    }
+}
+
+/// Set window icon from embedded resource
+pub fn set_window_icon(hwnd: isize) {
+    unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            LoadImageW, SendMessageW, WM_SETICON, ICON_BIG, ICON_SMALL,
+            IMAGE_ICON, LR_DEFAULTSIZE,
+        };
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        
+        let hwnd_win = HWND(hwnd as *mut _);
+        
+        // Get current module handle
+        let hinstance = GetModuleHandleW(None).unwrap_or_default();
+        
+        // Try to load the icon with resource ID 1 (standard for main icon)
+        if let Ok(icon) = LoadImageW(
+            Some(hinstance.into()),
+            windows::core::PCWSTR(1 as *const u16), // Resource ID 1
+            IMAGE_ICON,
+            0, 0,
+            LR_DEFAULTSIZE,
+        ) {
+            // Set both big and small icons
+            let _ = SendMessageW(hwnd_win, WM_SETICON, Some(WPARAM(ICON_BIG as usize)), Some(LPARAM(icon.0 as isize)));
+            let _ = SendMessageW(hwnd_win, WM_SETICON, Some(WPARAM(ICON_SMALL as usize)), Some(LPARAM(icon.0 as isize)));
+            log::info!("Window icon set successfully");
+        } else {
+            log::warn!("Failed to load window icon from resource");
+        }
     }
 }

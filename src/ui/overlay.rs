@@ -8,10 +8,7 @@ use crate::app::AppState;
 use super::theme::{RustFrameColors, RustFrameTheme};
 
 /// Overlay UI state and rendering
-pub struct OverlayUi {
-    /// Whether the play button is hovered
-    play_button_hovered: bool,
-}
+pub struct OverlayUi;
 
 impl Default for OverlayUi {
     fn default() -> Self {
@@ -21,9 +18,7 @@ impl Default for OverlayUi {
 
 impl OverlayUi {
     pub fn new() -> Self {
-        Self {
-            play_button_hovered: false,
-        }
+        Self
     }
     
     /// Render the overlay UI
@@ -56,6 +51,12 @@ impl OverlayUi {
                     }
                 );
             });
+        
+        // Draw status indicators at top-left
+        self.draw_status_indicators(ctx, state);
+        
+        // Draw window size indicator at bottom
+        self.draw_size_indicator(ctx, screen_rect);
         
         response
     }
@@ -127,114 +128,187 @@ impl OverlayUi {
         painter.line_segment([pos, Pos2::new(pos.x, pos.y + dy)], stroke);
     }
     
-    /// Draw the central control panel
-    fn draw_control_panel(&mut self, ui: &mut egui::Ui, state: &AppState, response: &mut OverlayResponse) {
-        // Control panel background
-        let panel_size = Vec2::new(300.0, 280.0);
+    /// Draw status indicators at top-left
+    fn draw_status_indicators(&self, ctx: &egui::Context, state: &AppState) {
+        egui::Area::new(egui::Id::new("status_indicators"))
+            .anchor(egui::Align2::LEFT_TOP, [12.0, 12.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+                    
+                    // Cursor indicator
+                    Self::status_pill(ui, "👆", "Cursor", state.settings.show_cursor);
+                    
+                    // Border indicator
+                    Self::status_pill(ui, "🔲", "Border", state.settings.show_border);
+                    
+                    // Click highlight indicator
+                    if state.settings.highlight_clicks {
+                        Self::status_pill(ui, "🖱", "Clicks", true);
+                    }
+                    
+                    // DEV mode indicator
+                    if state.dev_mode {
+                        Self::dev_badge(ui);
+                    }
+                });
+            });
+    }
+    
+    /// Draw a modern status pill indicator
+    fn status_pill(ui: &mut egui::Ui, icon: &str, label: &str, enabled: bool) {
+        let (bg_color, text_color, icon_color) = if enabled {
+            (
+                Color32::from_rgba_unmultiplied(40, 167, 69, 200),  // Green bg
+                Color32::WHITE,
+                Color32::WHITE,
+            )
+        } else {
+            (
+                Color32::from_rgba_unmultiplied(60, 60, 60, 180),  // Gray bg
+                Color32::from_rgb(150, 150, 150),
+                Color32::from_rgb(120, 120, 120),
+            )
+        };
         
         egui::Frame::new()
-            .fill(RustFrameColors::BG_PANEL)
-            .corner_radius(CornerRadius::same(8))
-            .stroke(Stroke::new(2.0, RustFrameColors::BLUE))
-            .inner_margin(16.0)
+            .fill(bg_color)
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(egui::Margin::symmetric(10, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    ui.label(egui::RichText::new(icon).size(11.0).color(icon_color));
+                    ui.label(egui::RichText::new(label).size(11.0).color(text_color).strong());
+                });
+            });
+    }
+    
+    /// Draw DEV mode badge
+    fn dev_badge(ui: &mut egui::Ui) {
+        egui::Frame::new()
+            .fill(Color32::from_rgba_unmultiplied(255, 193, 7, 220))  // Yellow/amber
+            .corner_radius(CornerRadius::same(12))
+            .inner_margin(egui::Margin::symmetric(10, 4))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("⚡ DEV")
+                        .size(11.0)
+                        .color(Color32::BLACK)
+                        .strong()
+                );
+            });
+    }
+    
+    /// Draw window size indicator at bottom
+    fn draw_size_indicator(&self, ctx: &egui::Context, rect: Rect) {
+        egui::Area::new(egui::Id::new("size_indicator"))
+            .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -12.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(100.0);  // Prevent wrapping
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_unmultiplied(0, 0, 0, 160))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(egui::Margin::symmetric(12, 4))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{}×{}", rect.width() as i32, rect.height() as i32))
+                                    .size(12.0)
+                                    .color(Color32::from_rgb(180, 180, 180))
+                                    .monospace()
+                            );
+                        });
+                    });
+            });
+    }
+    
+    /// Draw the central control panel
+    fn draw_control_panel(&mut self, ui: &mut egui::Ui, _state: &AppState, response: &mut OverlayResponse) {
+        // Control panel background - more modern glass effect
+        let panel_size = Vec2::new(280.0, 220.0);
+        
+        egui::Frame::new()
+            .fill(Color32::from_rgba_unmultiplied(20, 20, 25, 230))
+            .corner_radius(CornerRadius::same(16))
+            .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 30)))
+            .inner_margin(20.0)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 4],
+                blur: 16,
+                spread: 0,
+                color: Color32::from_rgba_unmultiplied(0, 0, 0, 100),
+            })
             .show(ui, |ui| {
                 ui.set_min_size(panel_size);
                 ui.vertical_centered(|ui| {
-                    // Title
+                    // Logo/Title
                     ui.label(
-                        egui::RichText::new("🎬 RustFrame")
-                            .size(24.0)
-                            .color(RustFrameColors::BLUE_LIGHT)
+                        egui::RichText::new("🎬")
+                            .size(36.0)
+                    );
+                    
+                    ui.label(
+                        egui::RichText::new("RustFrame")
+                            .size(22.0)
+                            .color(Color32::WHITE)
                             .strong()
                     );
                     
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
+                    ui.add_space(4.0);
                     
-                    // Instructions
+                    // Subtitle
                     ui.label(
-                        egui::RichText::new("Select a screen region to capture")
-                            .size(14.0)
-                            .color(RustFrameColors::TEXT_GRAY)
+                        egui::RichText::new("Drag to resize • Click to capture")
+                            .size(11.0)
+                            .color(Color32::from_rgb(130, 130, 140))
                     );
                     
-                    ui.add_space(12.0);
+                    ui.add_space(20.0);
                     
-                    // Settings status
-                    ui.horizontal(|ui| {
-                        Self::setting_badge(ui, "Cursor", state.settings.show_cursor);
-                        Self::setting_badge(ui, "Border", state.settings.show_border);
-                    });
-                    
-                    if state.dev_mode {
-                        ui.horizontal(|ui| {
-                            Self::setting_badge(ui, "Prod Mode", state.settings.exclude_from_capture);
-                            ui.label(
-                                egui::RichText::new("DEV")
-                                    .size(10.0)
-                                    .color(RustFrameColors::TEXT_YELLOW)
-                                    .strong()
-                            );
-                        });
-                    }
-                    
-                    ui.add_space(16.0);
-                    
-                    // Play button
-                    let button_size = Vec2::new(64.0, 64.0);
+                    // Play button - larger and more prominent
+                    let button_size = Vec2::new(72.0, 72.0);
                     let play_button = ui.add_sized(
                         button_size,
                         egui::Button::new(
                             egui::RichText::new("▶")
-                                .size(32.0)
+                                .size(36.0)
                                 .color(Color32::WHITE)
                         )
                         .fill(RustFrameColors::PLAY_GREEN)
-                        .corner_radius(CornerRadius::same(32))
+                        .corner_radius(CornerRadius::same(36))
                     );
-                    
-                    self.play_button_hovered = play_button.hovered();
                     
                     if play_button.clicked() {
                         response.start_capture = true;
                     }
                     
+                    ui.add_space(12.0);
+                    
+                    // Settings button - more subtle
+                    let settings_button = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("⚙  Settings")
+                                .size(13.0)
+                                .color(Color32::from_rgb(180, 180, 180))
+                        )
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 15))
+                        .corner_radius(CornerRadius::same(8))
+                    );
+                    
+                    if settings_button.clicked() {
+                        response.open_settings = true;
+                    }
+                    
                     ui.add_space(8.0);
                     
-                    // Keyboard shortcuts hint
+                    // Keyboard hint
                     ui.label(
-                        egui::RichText::new("Enter to start • ESC to cancel")
-                            .size(11.0)
-                            .color(RustFrameColors::TEXT_GRAY)
-                    );
-                    ui.label(
-                        egui::RichText::new("Right-click for options")
-                            .size(11.0)
-                            .color(RustFrameColors::TEXT_GRAY)
+                        egui::RichText::new("ESC to exit")
+                            .size(10.0)
+                            .color(Color32::from_rgb(90, 90, 100))
                     );
                 });
-            });
-    }
-    
-    /// Draw a setting badge (ON/OFF indicator)
-    fn setting_badge(ui: &mut egui::Ui, label: &str, enabled: bool) {
-        let (bg_color, text_color) = if enabled {
-            (Color32::from_rgb(0, 80, 0), RustFrameColors::TEXT_GREEN)
-        } else {
-            (Color32::from_rgb(80, 0, 0), RustFrameColors::TEXT_RED)
-        };
-        
-        egui::Frame::new()
-            .fill(bg_color)
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(egui::Margin::symmetric(8, 2))
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(label)
-                        .size(11.0)
-                        .color(text_color)
-                );
             });
     }
 }

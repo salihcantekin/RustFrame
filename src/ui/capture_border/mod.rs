@@ -38,6 +38,8 @@ pub struct BorderStyle {
     pub corner_thickness: i32,
     /// Show recording indicator
     pub show_rec_indicator: bool,
+    /// REC indicator size (1=Small, 2=Medium, 3=Large)
+    pub rec_indicator_size: u32,
 }
 
 impl Default for BorderStyle {
@@ -47,6 +49,7 @@ impl Default for BorderStyle {
             corner_size: 30,
             corner_thickness: 8,
             show_rec_indicator: true,
+            rec_indicator_size: 2, // Medium
         }
     }
 }
@@ -77,6 +80,30 @@ impl Default for BorderColors {
             rec_red: 0xB0FF4040,      // Recording indicator red (semi-transparent)
             rec_bg: 0x80181818,       // Recording indicator background
             rec_text: 0xD0FFFFFF,     // Recording indicator text
+        }
+    }
+}
+
+impl BorderColors {
+    /// Create BorderColors from CaptureSettings border_color [R, G, B, A]
+    pub fn from_settings(border_color: [u8; 4]) -> Self {
+        // Convert RGBA to ARGB format (used by GDI)
+        let r = border_color[0];
+        let g = border_color[1];
+        let b = border_color[2];
+        let a = border_color[3];
+        
+        // ARGB format: 0xAARRGGBB -> but GDI uses BGRA in memory
+        // For UpdateLayeredWindow with premultiplied alpha: 0xAABBGGRR
+        let border_argb = ((a as u32) << 24) | ((b as u32) << 16) | ((g as u32) << 8) | (r as u32);
+        
+        Self {
+            border: border_argb,
+            corner: 0xFFFFFFFF,       // White corners
+            transparent: 0x00000000,
+            rec_red: 0xB0FF4040,
+            rec_bg: 0x80181818,
+            rec_text: 0xD0FFFFFF,
         }
     }
 }

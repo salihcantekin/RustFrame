@@ -3,7 +3,7 @@
 // This module handles the destination window that displays captured content.
 // It renders the captured frames and any UI overlays.
 
-use egui::{Color32, TextureHandle, TextureOptions, Vec2};
+use egui::{Color32, TextureHandle, TextureOptions};
 use log::info;
 
 /// Destination window UI
@@ -22,6 +22,12 @@ pub struct DestinationUi {
     test_texture: Option<TextureHandle>,
     /// User requested to stop capture
     stop_requested: bool,
+    /// Click highlights to render: (x, y, timestamp, is_left, color)
+    click_highlights: Vec<(i32, i32, std::time::Instant, bool, Color32)>,
+    /// Capture region for coordinate mapping
+    capture_region: Option<(i32, i32, u32, u32)>,
+    /// Click highlight duration in milliseconds
+    click_highlight_duration_ms: u32,
 }
 
 impl Default for DestinationUi {
@@ -40,6 +46,9 @@ impl DestinationUi {
             is_capturing: false,
             test_texture: None,
             stop_requested: false,
+            click_highlights: Vec::new(),
+            capture_region: None,
+            click_highlight_duration_ms: 500,
         }
     }
     
@@ -64,6 +73,40 @@ impl DestinationUi {
         if self.is_capturing {
             self.stop_requested = true;
         }
+    }
+    
+    /// Set capture region for coordinate mapping
+    pub fn set_capture_region(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.capture_region = Some((x, y, width, height));
+    }
+    
+    /// Add click highlights from mouse events (only new clicks)
+    pub fn add_click_highlights(&mut self, new_clicks: Vec<(i32, i32, std::time::Instant, bool)>, color: Color32) {
+        // Add only new highlights
+        for (x, y, time, is_left) in new_clicks {
+            self.click_highlights.push((x, y, time, is_left, color));
+        }
+    }
+    
+    /// Update click highlights - remove expired ones
+    pub fn update_click_highlights(&mut self) {
+        let now = std::time::Instant::now();
+        let duration_ms = self.click_highlight_duration_ms as u128;
+        
+        // Remove old highlights
+        self.click_highlights.retain(|(_, _, time, _, _)| {
+            now.duration_since(*time).as_millis() < duration_ms
+        });
+    }
+    
+    /// Set click highlight duration
+    pub fn set_click_highlight_duration(&mut self, duration_ms: u32) {
+        self.click_highlight_duration_ms = duration_ms;
+    }
+    
+    /// Clear click highlights
+    pub fn clear_click_highlights(&mut self) {
+        self.click_highlights.clear();
     }
     
     /// Create a test pattern texture
@@ -189,6 +232,60 @@ impl DestinationUi {
                         ui.add_space(offset.x);
                         ui.image((texture.id(), scaled_size));
                     });
+                    
+                    // Draw click highlights on top of the frame
+                    if !self.click_highlights.is_empty() {
+                        if let Some((region_x, region_y, region_w, region_h)) = self.capture_region {
+                            let painter = ui.painter();
+                            let now = std::time::Instant::now();
+                            let duration_ms = self.click_highlight_duration_ms as f32;
+                            
+                            for (click_x, click_y, time, _is_left, color) in &self.click_highlights {
+                                // Check if click is within capture region
+                                let rel_x = *click_x - region_x;
+                                let rel_y = *click_y - region_y;
+                                
+                                if rel_x >= 0 && rel_y >= 0 
+                                   && rel_x < region_w as i32 && rel_y < region_h as i32 {
+                                    // Map to window coordinates
+                                    let win_x = offset.x + (rel_x as f32 / region_w as f32) * scaled_size.x;
+                                    let win_y = offset.y + (rel_y as f32 / region_h as f32) * scaled_size.y;
+                                    
+                                    // Calculate fade based on time (0.0 to 1.0, fading out)
+                                    let elapsed = now.duration_since(*time).as_millis() as f32;
+                                    let fade = 1.0 - (elapsed / duration_ms).min(1.0);
+                                    
+                                    // Draw expanding circle
+                                    let base_radius = 15.0;
+                                    let expand = 20.0 * (1.0 - fade);
+                                    let radius = base_radius + expand;
+                                    
+                                    // Calculate color with fade
+                                    let alpha = (fade * 200.0) as u8;
+                                    let stroke_color = Color32::from_rgba_unmultiplied(
+                                        color.r(), color.g(), color.b(), alpha
+                                    );
+                                    let fill_alpha = (fade * 80.0) as u8;
+                                    let fill_color = Color32::from_rgba_unmultiplied(
+                                        color.r(), color.g(), color.b(), fill_alpha
+                                    );
+                                    
+                                    let center = egui::pos2(win_x, win_y);
+                                    
+                                    // Draw filled circle
+                                    painter.circle_filled(center, radius, fill_color);
+                                    // Draw outline
+                                    painter.circle_stroke(center, radius, egui::Stroke::new(2.0, stroke_color));
+                                    
+                                    // Draw inner dot
+                                    let inner_color = Color32::from_rgba_unmultiplied(
+                                        color.r(), color.g(), color.b(), (fade * 255.0) as u8
+                                    );
+                                    painter.circle_filled(center, 4.0, inner_color);
+                                }
+                            }
+                        }
+                    }
                     
                     // Show capture info with STOP button
                     if self.is_capturing {

@@ -30,6 +30,7 @@ static BORDER_STYLE: Mutex<BorderStyle> = Mutex::new(BorderStyle {
     corner_size: 30,
     corner_thickness: 8,
     show_rec_indicator: true,
+    rec_indicator_size: 2,
 });
 
 /// Global colors storage
@@ -89,12 +90,8 @@ impl CaptureBorderWindow {
         // Install subclass for hit-testing and resize handling
         let _ = SetWindowSubclass(hwnd, Some(Self::border_subclass_proc), 1, 0);
         
-        // Initial draw
-        let mut rect = RECT::default();
-        let _ = GetWindowRect(hwnd, &mut rect);
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        Self::draw_border(hwnd, width, height);
+        // NOTE: Initial draw is NOT done here - it will be done after colors are set
+        // via set_colors() or set_style() which both call redraw()
         
         info!("Capture border window setup complete with layered style");
     }
@@ -188,19 +185,29 @@ impl CaptureBorderWindow {
         let corner_size = style.corner_size;
         let corner_thickness = style.corner_thickness;
         
-        // REC indicator - FIXED sizes (no scaling)
-        let rec_circle_radius = 8;
-        let rec_bg_height = 26;
-        let rec_bg_width = 72;
-        let rec_bg_x = width - rec_bg_width - 15;
-        let rec_bg_y = 12;
+        // REC indicator - size based on setting (1=Small, 2=Medium, 3=Large)
+        let size_multiplier = match style.rec_indicator_size {
+            1 => 0.6_f32,  // Small
+            3 => 1.4_f32,  // Large
+            _ => 1.0_f32,  // Medium (default)
+        };
+        
+        let rec_circle_radius = (6.0 * size_multiplier) as i32;
+        let rec_bg_height = (20.0 * size_multiplier) as i32;
+        let rec_bg_width = (56.0 * size_multiplier) as i32;
+        let rec_bg_x = width - rec_bg_width - 12;
+        let rec_bg_y = 10;
         let rec_bg_radius = rec_bg_height / 2; // Rounded corners
-        let rec_circle_x = rec_bg_x + 15;
+        let rec_circle_x = rec_bg_x + (12.0 * size_multiplier) as i32;
         let rec_circle_y = rec_bg_y + rec_bg_height / 2;
         
-        // Text - fixed 2x scale
-        let text_scale = 2;
-        let text_x = rec_circle_x + rec_circle_radius + 8;
+        // Text scale based on size
+        let text_scale = match style.rec_indicator_size {
+            1 => 1,  // Small
+            3 => 3,  // Large
+            _ => 2,  // Medium
+        };
+        let text_x = rec_circle_x + rec_circle_radius + (6.0 * size_multiplier) as i32;
         let text_y = rec_circle_y - (7 * text_scale) / 2;
         
         for y in 0..height {

@@ -11,6 +11,7 @@ mod ui;
 
 use std::sync::Arc;
 use anyhow::{Context, Result};
+use egui::Color32;
 use log::{error, info, LevelFilter};
 use winit::{
     application::ApplicationHandler,
@@ -97,6 +98,8 @@ struct RustFrameApp {
     pending_border_create: Option<(i32, i32, u32, u32)>,
     /// Event loop proxy
     event_proxy: Option<winit::event_loop::EventLoopProxy<UserEvent>>,
+    /// Last frame time for FPS limiting
+    last_frame_time: std::time::Instant,
 }
 
 impl RustFrameApp {
@@ -129,18 +132,28 @@ impl RustFrameApp {
             tray: SystemTray::new(),
             pending_border_create: None,
             event_proxy: Some(event_proxy),
+            last_frame_time: std::time::Instant::now(),
         }
     }
     
     fn create_overlay_window(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
         info!("Creating overlay window");
         
+        // Get window size - use remembered region if enabled, otherwise from settings
+        let (width, height) = if self.state.settings.remember_region && self.state.settings.last_width > 0 {
+            (self.state.settings.last_width, self.state.settings.last_height)
+        } else {
+            self.state.settings.get_window_dimensions()
+        };
+        info!("Window size: {}x{}", width, height);
+        
         let window_attrs = WindowAttributes::default()
-            .with_title("RustFrame Overlay")
-            .with_decorations(true)  // Enable for now to allow moving
+            .with_title("RustFrame - Select Region")
+            .with_decorations(true)  // Native title bar for smooth drag/resize
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_resizable(true)
-            .with_inner_size(PhysicalSize::new(400, 350));
+            .with_min_inner_size(PhysicalSize::new(400u32, 350u32))  // Minimum size to keep UI visible
+            .with_inner_size(PhysicalSize::new(width.max(400), height.max(350)));
         
         let window = Arc::new(
             event_loop
@@ -148,14 +161,34 @@ impl RustFrameApp {
                 .context("Failed to create overlay window")?
         );
         
+        // Apply position and icon from settings
         #[cfg(target_os = "windows")]
         {
-            use platform::windows::set_window_capture_exclusion;
-            if let Some(hwnd) = platform::windows::get_hwnd_from_window(&window) {
-                set_window_capture_exclusion(hwnd, true);
+            use platform::windows::{get_hwnd_from_window, get_primary_monitor_rect, set_window_icon};
+            
+            if let Some(hwnd) = get_hwnd_from_window(&window) {
+                // Set window icon from embedded resource
+                set_window_icon(hwnd);
+                
+                // Get screen dimensions for position calculation
+                let screen_rect = get_primary_monitor_rect();
+                let screen_width = screen_rect.width;
+                let screen_height = screen_rect.height;
+                
+                // Use remembered position if enabled, otherwise use preset
+                let (x, y) = if self.state.settings.remember_region && self.state.settings.last_width > 0 {
+                    (self.state.settings.last_x, self.state.settings.last_y)
+                } else {
+                    self.state.settings.get_window_position(screen_width, screen_height)
+                };
+                
+                // Set window position
+                window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+                info!("Window position set to: ({}, {})", x, y);
             }
         }
         
+        // Use normal renderer (not transparent) for consistent dark background
         let renderer = Renderer::new(window.clone())
             .context("Failed to create overlay renderer")?;
         
@@ -227,7 +260,21 @@ impl RustFrameApp {
             }
             
             // Setup native Win32 layered window for true transparency
-            if let Some(capture_border) = CaptureBorderWindow::from_winit_window(&window) {
+            if let Some(mut capture_border) = CaptureBorderWindow::from_winit_window(&window) {
+                // Apply border colors from settings
+                let border_colors = ui::BorderColors::from_settings(self.state.settings.border_color);
+                capture_border.set_colors(border_colors);
+                
+                // Apply border style from settings
+                let border_style = ui::BorderStyle {
+                    border_width: self.state.settings.border_width as i32,
+                    corner_size: 30,
+                    corner_thickness: 8,
+                    show_rec_indicator: self.state.settings.show_rec_indicator,
+                    rec_indicator_size: self.state.settings.rec_indicator_size,
+                };
+                capture_border.set_style(border_style);
+                
                 self.capture_border = Some(capture_border);
                 info!("Created capture border with Win32 layered window");
                 
@@ -332,6 +379,22 @@ impl RustFrameApp {
                             ));
                             self.destination_ui.set_capturing(true);
                             
+                            // Set capture region for click highlight coordinate mapping
+                            self.destination_ui.set_capture_region(
+                                region.x, region.y, region.width, region.height
+                            );
+                            
+                            // Set click highlight duration from settings
+                            self.destination_ui.set_click_highlight_duration(
+                                self.state.settings.click_highlight_duration_ms
+                            );
+                            
+                            // Install mouse hook if highlight clicks is enabled
+                            #[cfg(target_os = "windows")]
+                            if self.state.settings.highlight_clicks {
+                                platform::windows::install_mouse_hook();
+                            }
+                            
                             // Hide overlay window so we capture what's underneath
                             if let Some(window) = &self.overlay_window {
                                 window.set_visible(false);
@@ -356,16 +419,131 @@ impl RustFrameApp {
                 }
             }
             
+            // Handle settings dialog open request
+            if overlay_response.open_settings {
+                // Resize window to minimum size for settings dialog
+                if let Some(window) = &self.overlay_window {
+                    const SETTINGS_MIN_WIDTH: u32 = 560;
+                    const SETTINGS_MIN_HEIGHT: u32 = 550;
+                    
+                    let current_size = window.inner_size();
+                    info!("Settings open requested. Current window size: {}x{}", current_size.width, current_size.height);
+                    
+                    // Always resize if below minimum
+                    let new_width = current_size.width.max(SETTINGS_MIN_WIDTH);
+                    let new_height = current_size.height.max(SETTINGS_MIN_HEIGHT);
+                    
+                    if new_width != current_size.width || new_height != current_size.height {
+                        // Use Win32 API directly for immediate resize
+                        #[cfg(target_os = "windows")]
+                        {
+                            if let Some(hwnd) = platform::windows::get_hwnd_from_window(window) {
+                                info!("Calling set_window_size hwnd={} to {}x{}", hwnd, new_width, new_height);
+                                platform::windows::set_window_size(hwnd, new_width, new_height);
+                                // Force a redraw
+                                window.request_redraw();
+                            } else {
+                                error!("Failed to get hwnd from window");
+                            }
+                        }
+                        
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            let _ = window.request_inner_size(PhysicalSize::new(new_width, new_height));
+                            info!("Resized overlay for settings dialog: {}x{}", new_width, new_height);
+                        }
+                    }
+                }
+                self.settings_dialog.open(&self.state.settings);
+            }
+            
+            // Handle cancel/close request
+            if overlay_response.cancel {
+                self.save_window_position();
+                // Request exit
+                info!("User cancelled - exiting");
+                std::process::exit(0);
+            }
+            
             // Handle settings dialog
             let settings_response = self.settings_dialog.show(renderer.egui_ctx(), &mut self.state);
             
-            // Settings changed check
-            if settings_response.applied {
-                info!("Settings updated");
-            }
+            // Track if settings were applied
+            let settings_applied = settings_response.applied;
             
             if let Err(e) = renderer.end_frame() {
                 error!("Failed to render overlay: {}", e);
+            }
+            
+            // Settings changed - apply to window (outside renderer borrow)
+            if settings_applied {
+                info!("Settings updated - applying to window");
+                self.apply_window_settings();
+            }
+        }
+    }
+    
+    /// Apply current settings to overlay window (size and position)
+    fn apply_window_settings(&mut self) {
+        if let Some(window) = &self.overlay_window {
+            // Apply size
+            let (width, height) = self.state.settings.get_window_dimensions();
+            let _ = window.request_inner_size(PhysicalSize::new(width, height));
+            info!("Applied window size: {}x{}", width, height);
+            
+            // Apply position
+            #[cfg(target_os = "windows")]
+            {
+                use platform::windows::get_primary_monitor_rect;
+                use crate::app::PositionPreset;
+                
+                let screen_rect = get_primary_monitor_rect();
+                let (x, y) = self.state.settings.get_window_position(screen_rect.width, screen_rect.height);
+                
+                if self.state.settings.position_preset != PositionPreset::Center {
+                    window.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+                    info!("Applied window position: ({}, {})", x, y);
+                } else {
+                    // Center the window
+                    let center_x = (screen_rect.width as i32 - width as i32) / 2;
+                    let center_y = (screen_rect.height as i32 - height as i32) / 2;
+                    window.set_outer_position(winit::dpi::PhysicalPosition::new(center_x, center_y));
+                    info!("Applied window position (centered): ({}, {})", center_x, center_y);
+                }
+            }
+        }
+        
+        // Apply cursor visibility to active capture engine
+        if let Some(engine) = &mut self.capture_engine {
+            if let Err(e) = engine.set_cursor_visible(self.state.settings.show_cursor) {
+                error!("Failed to update cursor visibility: {}", e);
+            } else {
+                info!("Applied cursor visibility: {}", self.state.settings.show_cursor);
+            }
+        }
+    }
+    
+    /// Save current window position and size for remember_region feature
+    fn save_window_position(&mut self) {
+        if !self.state.settings.remember_region {
+            return;
+        }
+        
+        if let Some(window) = &self.overlay_window {
+            if let Ok(pos) = window.outer_position() {
+                let size = window.inner_size();
+                
+                self.state.settings.last_x = pos.x;
+                self.state.settings.last_y = pos.y;
+                self.state.settings.last_width = size.width;
+                self.state.settings.last_height = size.height;
+                
+                if let Err(e) = self.state.settings.save() {
+                    error!("Failed to save window position: {}", e);
+                } else {
+                    info!("Saved window position: ({}, {}) size: {}x{}", 
+                        pos.x, pos.y, size.width, size.height);
+                }
             }
         }
     }
@@ -376,6 +554,53 @@ impl RustFrameApp {
             self.stop_capture();
             return;
         }
+        
+        // FPS limiting - skip frame if too soon
+        let target_fps = self.state.settings.target_fps.max(1) as f64;
+        let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps);
+        let elapsed = self.last_frame_time.elapsed();
+        
+        if elapsed < frame_duration {
+            // Request redraw later to maintain frame rate
+            if let Some(window) = &self.destination_window {
+                window.request_redraw();
+            }
+            return;
+        }
+        self.last_frame_time = std::time::Instant::now();
+        
+        // Process mouse clicks for highlighting
+        #[cfg(target_os = "windows")]
+        if self.state.settings.highlight_clicks && self.state.is_capturing() {
+            // Update capture region from current engine state (in case window moved/resized)
+            if let Some(engine) = &self.capture_engine {
+                if let Some(region) = engine.get_region() {
+                    self.destination_ui.set_capture_region(
+                        region.x, region.y, region.width, region.height
+                    );
+                }
+            }
+            
+            let new_clicks = platform::windows::get_mouse_clicks();
+            
+            if !new_clicks.is_empty() {
+                // Only send NEW clicks to destination UI
+                let color = Color32::from_rgba_unmultiplied(
+                    self.state.settings.click_highlight_color[0],
+                    self.state.settings.click_highlight_color[1],
+                    self.state.settings.click_highlight_color[2],
+                    self.state.settings.click_highlight_color[3],
+                );
+                
+                let clicks_data: Vec<_> = new_clicks.iter()
+                    .map(|c| (c.x, c.y, c.timestamp, c.is_left))
+                    .collect();
+                self.destination_ui.add_click_highlights(clicks_data, color);
+            }
+        }
+        
+        // Clean up old highlights in destination UI
+        self.destination_ui.update_click_highlights();
         
         if let Some(renderer) = &mut self.destination_renderer {
             // Check for new captured frames before begin_frame
@@ -436,6 +661,23 @@ impl RustFrameApp {
                 if let Some(renderer) = &mut self.overlay_renderer {
                     renderer.resize(size.width, size.height);
                 }
+                
+                // If capturing, update capture engine region to match new overlay size
+                if self.state.is_capturing() {
+                    if let Some(window) = &self.overlay_window {
+                        if let Some(pos) = window.outer_position().ok() {
+                            let new_region = crate::capture::CaptureRect::new(
+                                pos.x,
+                                pos.y,
+                                size.width,
+                                size.height,
+                            );
+                            if let Some(engine) = &mut self.capture_engine {
+                                let _ = engine.update_region(new_region);
+                            }
+                        }
+                    }
+                }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 use winit::keyboard::{Key, NamedKey};
@@ -451,6 +693,23 @@ impl RustFrameApp {
                                 self.stop_capture();
                                 info!("Capture stopped by user (ESC on overlay)");
                             }
+                        }
+                    }
+                }
+            }
+            WindowEvent::Moved(position) => {
+                // If capturing, update capture engine region to match new overlay position
+                if self.state.is_capturing() {
+                    if let Some(window) = &self.overlay_window {
+                        let size = window.outer_size();
+                        let new_region = crate::capture::CaptureRect::new(
+                            position.x,
+                            position.y,
+                            size.width,
+                            size.height,
+                        );
+                        if let Some(engine) = &mut self.capture_engine {
+                            let _ = engine.update_region(new_region);
                         }
                     }
                 }
@@ -683,6 +942,13 @@ impl RustFrameApp {
         }
         self.state.stop_capture();
         self.destination_ui.set_capturing(false);
+        
+        // Uninstall mouse hook
+        #[cfg(target_os = "windows")]
+        platform::windows::uninstall_mouse_hook();
+        
+        // Clear click highlights
+        self.destination_ui.clear_click_highlights();
         
         // Destroy border window
         self.destroy_border_window();

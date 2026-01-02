@@ -45,10 +45,14 @@ impl RustFrameTheme {
         // Dark theme base
         style.visuals = Visuals::dark();
         
-        // Customize colors
-        style.visuals.window_fill = RustFrameColors::BG_DARK;
-        style.visuals.panel_fill = RustFrameColors::BG_PANEL;
-        style.visuals.extreme_bg_color = Color32::from_rgb(16, 16, 16);
+        // Match the wgpu clear color exactly (RGB 20, 20, 25)
+        let bg_color = Color32::from_rgb(20, 20, 25);
+        
+        // Customize colors - use matching background for overlay mode
+        style.visuals.window_fill = bg_color;
+        style.visuals.panel_fill = bg_color;
+        style.visuals.extreme_bg_color = bg_color;
+        style.visuals.faint_bg_color = bg_color;
         
         // Widget styling
         style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(40, 40, 40);
