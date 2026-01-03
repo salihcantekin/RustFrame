@@ -1,0 +1,630 @@
+//! Hollow Border Window - WinAPI Implementation
+//!
+//! Creates a transparent, hollow border window that can be resized and moved.
+//! The interior is completely click-through (HTTRANSPARENT).
+//! Runs in its own thread with dedicated message loop.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+
+use lazy_static::lazy_static;
+use log::info;
+
+#[cfg(windows)]
+use windows::Win32::{
+    Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+    Graphics::Gdi::{
+        BeginPaint, CombineRgn, CreatePen, CreateRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
+        FillRect, GetStockObject, InvalidateRect, Rectangle, SelectObject, SetBkMode, SetWindowRgn,
+        HBRUSH, HDC, HGDIOBJ, HOLLOW_BRUSH, PAINTSTRUCT, PS_SOLID, RGN_DIFF, TRANSPARENT,
+    },
+    UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+    UI::WindowsAndMessaging::*,
+};
+
+const VK_ESCAPE: u32 = 0x1B;
+
+lazy_static! {
+    /// Global HWND for the hollow border (stored as isize for thread safety)
+    static ref HOLLOW_HWND: Mutex<isize> = Mutex::new(0);
+    /// Global rect for the hollow border - updated by window thread, read by render thread
+    static ref HOLLOW_RECT: Mutex<(i32, i32, i32, i32)> = Mutex::new((0, 0, 800, 600));
+    /// Border width
+    static ref BORDER_WIDTH: Mutex<i32> = Mutex::new(4);
+    /// Border color (BGR format)
+    static ref BORDER_COLOR: Mutex<u32> = Mutex::new(0x4080FF);
+}
+
+// Global flag for ESC key pressed
+static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
+static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Check if ESC was pressed and reset the flag
+#[allow(dead_code)]
+pub fn was_esc_pressed() -> bool {
+    ESC_PRESSED.swap(false, Ordering::SeqCst)
+}
+
+/// Hollow border window - runs in its own thread with message loop
+pub struct HollowBorder {
+    thread_handle: Option<JoinHandle<()>>,
+    stop_flag: Arc<AtomicBool>,
+}
+
+// SAFETY: We communicate via atomic flags and mutex-protected data
+unsafe impl Send for HollowBorder {}
+unsafe impl Sync for HollowBorder {}
+
+impl HollowBorder {
+    /// Create a new hollow border window in its own thread
+    #[cfg(windows)]
+    pub fn new(
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        border_width: i32,
+        border_color: u32,
+    ) -> Option<Self> {
+        info!(
+            "Creating hollow border window at ({}, {}) size {}x{} in dedicated thread",
+            x, y, width, height
+        );
+
+        // Store initial values
+        if let Ok(mut bw) = BORDER_WIDTH.lock() {
+            *bw = border_width;
+        }
+        if let Ok(mut bc) = BORDER_COLOR.lock() {
+            *bc = border_color;
+        }
+        if let Ok(mut rect) = HOLLOW_RECT.lock() {
+            *rect = (x, y, width, height);
+        }
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_clone = stop_flag.clone();
+
+        // Spawn window thread
+        let thread_handle = thread::spawn(move || {
+            run_window_thread(
+                x,
+                y,
+                width,
+                height,
+                border_width,
+                border_color,
+                stop_flag_clone,
+            );
+        });
+
+        // Wait for window to be created
+        for _ in 0..50 {
+            thread::sleep(std::time::Duration::from_millis(10));
+            if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+                if *hwnd_lock != 0 {
+                    break;
+                }
+            }
+        }
+
+        Some(Self {
+            thread_handle: Some(thread_handle),
+            stop_flag,
+        })
+    }
+
+    /// Get the current position and size of the window (includes border)
+    pub fn get_rect(&self) -> (i32, i32, i32, i32) {
+        if let Ok(rect) = HOLLOW_RECT.lock() {
+            *rect
+        } else {
+            (0, 0, 800, 600)
+        }
+    }
+
+    /// Get the inner rect (capture area inside the border)
+    /// This is the area that should be captured - excludes the visual border
+    pub fn get_inner_rect(&self) -> (i32, i32, i32, i32) {
+        let (x, y, w, h) = self.get_rect();
+        let bw = BORDER_WIDTH.lock().map(|w| *w as i32).unwrap_or(3);
+        // Border is drawn inside the window, so inner area starts at border_width offset
+        (x + bw, y + bw, (w - 2 * bw).max(1), (h - 2 * bw).max(1))
+    }
+
+    /// Show the hollow border
+    pub fn show(&self) {
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOW};
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = ShowWindow(hwnd, SW_SHOW);
+                }
+            }
+        }
+    }
+
+    /// Hide the hollow border
+    pub fn hide(&self) {
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+        }
+    }
+
+    /// Get the HWND value (for platform-specific operations)
+    pub fn hwnd_value(&self) -> isize {
+        HOLLOW_HWND.lock().map(|h| *h).unwrap_or(0)
+    }
+
+    /// Update the border position and size
+    pub fn update_rect(&self, x: i32, y: i32, width: i32, height: i32) {
+        // Update stored rect (window = capture area)
+        if let Ok(mut rect) = HOLLOW_RECT.lock() {
+            *rect = (x, y, width, height);
+        }
+
+        // Move and resize window (window position matches capture region exactly)
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE,
+                    };
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let bw = BORDER_WIDTH.lock().map(|w| *w).unwrap_or(3);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_TOPMOST),
+                        x,
+                        y,
+                        width,
+                        height,
+                        SWP_NOACTIVATE,
+                    );
+                    // Update hollow region with new dimensions
+                    apply_hollow_region(hwnd, width, height, bw);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
+    }
+
+    /// Update the border color without recreating the window
+    pub fn update_color(&self, color: u32) {
+        // Update stored color
+        if let Ok(mut c) = BORDER_COLOR.lock() {
+            *c = color;
+        }
+
+        // Invalidate window to trigger repaint
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
+    }
+
+    /// Update both border width and color
+    pub fn update_style(&self, width: i32, color: u32) {
+        // Update stored values
+        if let Ok(mut w) = BORDER_WIDTH.lock() {
+            *w = width;
+        }
+        if let Ok(mut c) = BORDER_COLOR.lock() {
+            *c = color;
+        }
+
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Foundation::RECT;
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+
+                    // Get actual window dimensions
+                    let mut win_rect = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut win_rect);
+                    let window_w = win_rect.right - win_rect.left;
+                    let window_h = win_rect.bottom - win_rect.top;
+
+                    // Update hollow region with new border width
+                    if window_w > 0 && window_h > 0 {
+                        apply_hollow_region(hwnd, window_w, window_h, width);
+                    }
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for HollowBorder {
+    fn drop(&mut self) {
+        info!("Destroying hollow border window");
+
+        // Signal thread to stop
+        self.stop_flag.store(true, Ordering::SeqCst);
+
+        // Post close message to window thread
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
+
+        // Wait for thread to finish
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+
+        // Clear global HWND
+        if let Ok(mut hwnd_lock) = HOLLOW_HWND.lock() {
+            *hwnd_lock = 0;
+        }
+    }
+}
+
+/// Window thread - creates window and runs its own message loop
+#[cfg(windows)]
+fn run_window_thread(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    border_width: i32,
+    _border_color: u32,
+    stop_flag: Arc<AtomicBool>,
+) {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+
+    println!("[HOLLOW] Window thread started");
+
+    unsafe {
+        let hinstance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("[HOLLOW] Failed to get module handle: {}", e);
+                return;
+            }
+        };
+
+        // Register window class
+        let class_name = wide_string("RustFrameHollowBorder");
+        static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+        if !CLASS_REGISTERED.swap(true, Ordering::SeqCst) {
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(window_proc),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: hinstance.into(),
+                hIcon: HICON::default(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: HBRUSH::default(),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: PCWSTR(class_name.as_ptr()),
+                hIconSm: HICON::default(),
+            };
+
+            if RegisterClassExW(&wc) == 0 {
+                println!("[HOLLOW] Failed to register window class");
+                CLASS_REGISTERED.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+
+        // Create the window
+        // Window is placed exactly at the capture region coordinates
+        // Border is drawn INSIDE the window (capture area is slightly smaller than visual border)
+        // This ensures border never goes outside screen bounds
+        let window_x = x;
+        let window_y = y;
+        let window_w = width;
+        let window_h = height;
+
+        let hwnd = match CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            PCWSTR(class_name.as_ptr()),
+            PCWSTR(wide_string("RustFrame Capture Region").as_ptr()),
+            WS_POPUP | WS_VISIBLE,
+            window_x,
+            window_y,
+            window_w,
+            window_h,
+            None,
+            None,
+            Some(hinstance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                println!("[HOLLOW] Failed to create window: {}", e);
+                return;
+            }
+        };
+
+        // Store HWND globally
+        if let Ok(mut hwnd_lock) = HOLLOW_HWND.lock() {
+            *hwnd_lock = hwnd.0 as isize;
+        }
+
+        // Set layered window attributes for the border color
+        let _ = SetLayeredWindowAttributes(
+            hwnd,
+            COLORREF(0x00FF00), // Bright green as transparency key
+            255,
+            LWA_COLORKEY,
+        );
+
+        // Apply the hollow region (using window dimensions which include border)
+        apply_hollow_region(hwnd, window_w, window_h, border_width);
+
+        // Install subclass for hit testing
+        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, 0);
+
+        WINDOW_THREAD_RUNNING.store(true, Ordering::SeqCst);
+        println!("[HOLLOW] Hollow border window created: {:?}", hwnd);
+
+        // Message loop - THIS IS THE KEY!
+        let mut msg = MSG::default();
+        loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let result = GetMessageW(&mut msg, None, 0, 0);
+            if result.0 <= 0 {
+                break; // WM_QUIT or error
+            }
+
+            let _ = TranslateMessage(&msg);
+            let _ = DispatchMessageW(&msg);
+        }
+
+        // Cleanup
+        let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), 1);
+        WINDOW_THREAD_RUNNING.store(false, Ordering::SeqCst);
+        println!("[HOLLOW] Window thread exiting");
+    }
+}
+
+/// Apply hollow region to window (border visible, interior transparent/click-through)
+#[cfg(windows)]
+unsafe fn apply_hollow_region(hwnd: HWND, width: i32, height: i32, border: i32) {
+    let outer_rgn = CreateRectRgn(0, 0, width, height);
+    let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
+    let _ = CombineRgn(Some(outer_rgn), Some(outer_rgn), Some(inner_rgn), RGN_DIFF);
+    let _ = DeleteObject(inner_rgn.into());
+    SetWindowRgn(hwnd, Some(outer_rgn), true);
+}
+
+/// Window procedure
+#[cfg(windows)]
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_CREATE => LRESULT(0),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+
+            let mut rect = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rect);
+
+            let border_width = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+            let border_color = BORDER_COLOR.lock().map(|c| *c).unwrap_or(0x4080FF);
+
+            let pen = CreatePen(PS_SOLID, border_width, COLORREF(border_color));
+            let brush = GetStockObject(HOLLOW_BRUSH);
+
+            let old_pen = SelectObject(hdc, pen.into());
+            let old_brush = SelectObject(hdc, brush);
+
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            let _ = Rectangle(hdc, 0, 0, rect.right, rect.bottom);
+
+            SelectObject(hdc, old_pen);
+            SelectObject(hdc, old_brush);
+            let _ = DeleteObject(HGDIOBJ(pen.0));
+
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_ERASEBKGND => {
+            let hdc = HDC(wparam.0 as *mut _);
+            let mut rect = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rect);
+
+            let brush = CreateSolidBrush(COLORREF(0x00FF00)); // Green = transparent
+            let _ = FillRect(hdc, &rect, brush);
+            let _ = DeleteObject(brush.into());
+
+            LRESULT(1)
+        }
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        }
+        WM_DESTROY => {
+            if let Ok(mut hwnd_lock) = HOLLOW_HWND.lock() {
+                *hwnd_lock = 0;
+            }
+            PostQuitMessage(0);
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+/// Subclass procedure for hit testing and size tracking
+#[cfg(windows)]
+unsafe extern "system" fn subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        let x = (lparam.0 & 0xFFFF) as i16 as i32;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut rect);
+
+        let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4).max(8);
+        let corner_size = border + 4;
+
+        let on_left = x >= rect.left && x < rect.left + corner_size;
+        let on_right = x >= rect.right - corner_size && x < rect.right;
+        let on_top = y >= rect.top && y < rect.top + corner_size;
+        let on_bottom = y >= rect.bottom - corner_size && y < rect.bottom;
+
+        // Corner hit tests
+        if on_top && on_left {
+            return LRESULT(HTTOPLEFT as isize);
+        }
+        if on_top && on_right {
+            return LRESULT(HTTOPRIGHT as isize);
+        }
+        if on_bottom && on_left {
+            return LRESULT(HTBOTTOMLEFT as isize);
+        }
+        if on_bottom && on_right {
+            return LRESULT(HTBOTTOMRIGHT as isize);
+        }
+
+        // Edge hit tests
+        if x >= rect.left && x < rect.left + border {
+            return LRESULT(HTLEFT as isize);
+        }
+        if x >= rect.right - border && x < rect.right {
+            return LRESULT(HTRIGHT as isize);
+        }
+        if y >= rect.top && y < rect.top + border {
+            return LRESULT(HTCAPTION as isize);
+        }
+        if y >= rect.bottom - border && y < rect.bottom {
+            return LRESULT(HTBOTTOM as isize);
+        }
+
+        // Interior = transparent (click through)
+        return LRESULT(HTTRANSPARENT as isize);
+    }
+
+    if msg == WM_SETCURSOR {
+        let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
+
+        let cursor_id = match hit_test {
+            x if x == HTCAPTION => Some(IDC_SIZEALL),
+            x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
+            x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
+            x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
+            x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
+            _ => None,
+        };
+
+        if let Some(id) = cursor_id {
+            if let Ok(cur) = LoadCursorW(None, id) {
+                let _ = SetCursor(Some(cur));
+            }
+            return LRESULT(1);
+        }
+    }
+
+    // Handle size changes - update the hollow region and global rect
+    if msg == WM_SIZE {
+        let new_width = (lparam.0 & 0xFFFF) as i32;
+        let new_height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+
+        if new_width > 0 && new_height > 0 {
+            let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+            apply_hollow_region(hwnd, new_width, new_height, border);
+        }
+        return DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
+
+    // Handle move - update global rect
+    if msg == WM_MOVE {
+        // Use GetWindowRect for consistency with other handlers
+        let mut win_rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut win_rect);
+
+        if let Ok(mut rect) = HOLLOW_RECT.lock() {
+            // Store window position directly (window = capture area)
+            rect.0 = win_rect.left;
+            rect.1 = win_rect.top;
+            // Keep existing width/height since WM_MOVE doesn't change size
+        }
+        return DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
+
+    // Handle resize completion - update global rect
+    if msg == WM_EXITSIZEMOVE {
+        let mut win_rect = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut win_rect);
+
+        if let Ok(mut rect) = HOLLOW_RECT.lock() {
+            // Store window rect directly (window = capture area)
+            *rect = (
+                win_rect.left,
+                win_rect.top,
+                win_rect.right - win_rect.left,
+                win_rect.bottom - win_rect.top,
+            );
+        }
+
+        let _ = InvalidateRect(Some(hwnd), None, true);
+        println!("[HOLLOW] Resize complete: {:?}", win_rect);
+        return DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
+
+    // Handle ESC key
+    if msg == WM_KEYDOWN {
+        let vk = wparam.0 as u32;
+        if vk == VK_ESCAPE {
+            info!("ESC pressed in hollow border - signaling stop");
+            ESC_PRESSED.store(true, Ordering::SeqCst);
+            return LRESULT(0);
+        }
+    }
+
+    DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
+/// Convert a Rust string to a null-terminated wide string
+fn wide_string(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}

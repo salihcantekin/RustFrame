@@ -14,26 +14,21 @@ cargo run
 
 ## 🎮 Controls
 
-| Action | Key/Mouse |
-|--------|-----------|
-| **Move overlay** | Click and drag |
-| **Resize overlay** | Drag window edges |
-| **Start capture** | ENTER / Numpad Enter |
-| **Toggle cursor** | C |
-| **Open settings** | S |
-| **Toggle help** | H |
-| **Adjust border** | + / - |
-| **Exit** | ESC |
+| Action | Where |
+|--------|-------|
+| **Open settings** | Settings button in the app UI |
+| **Preview/select region** | Settings → Capture Region (Preview Border) |
+| **Start capture** | Start Capture button |
+| **Stop capture** | Stop Capture button |
 
 ## 📸 Typical Workflow
 
-1. **Launch** → Transparent overlay window appears
-2. **Position** → Drag overlay over content you want to share
-3. **Resize** → Adjust overlay to frame exactly what you need
-4. **Configure** → Press S for settings, C to toggle cursor, H for help
-5. **Confirm** → Press ENTER to start capturing
-6. **Share** → In Teams/Zoom/Google Meet, share "RustFrame Output" window
-7. **Done** → Press ESC to exit
+1. **Launch** → RustFrame UI opens
+2. **Configure** → Open **Settings**
+3. **Select region** → Use **Capture Region** (Preview Border helps you move/resize)
+4. **Start** → Click **Start Capture**
+5. **Share** → In Teams/Zoom/Google Meet, share the window titled **"RustFrame Preview"**
+6. **Done** → Click **Stop Capture** and close the app
 
 ## 🏗️ Build Issues?
 
@@ -50,14 +45,30 @@ cargo run
 ```
 src/
 ├── main.rs           ← Application entry point
-├── capture.rs        ← Windows.Graphics.Capture (WGC) API
-├── window_manager.rs ← Transparent overlay + destination window
-├── renderer.rs       ← wgpu rendering pipeline
-├── shader.wgsl       ← GPU shaders
-├── settings_dialog.rs← Settings window
-├── constants.rs      ← Centralized constants
-├── utils.rs          ← Shared utilities
-└── bitmap_font.rs    ← Pixel font rendering
+├── destination_window.rs ← WinAPI (GDI) output window (share this)
+├── hollow_border.rs  ← Border window used for region preview/capture
+└── platform/         ← Windows-specific helpers (input, monitors, etc.)
+```
+
+## Capture Profiles (Windows)
+
+RustFrame supports optional "Capture Profiles" to improve compatibility with different apps (e.g. Discord vs Google Meet).
+
+- Profiles are JSON files stored next to `settings.json` in the RustFrame config folder.
+- Naming convention: `profile_<name>.json` (example: `profile_discord.json`).
+- A profile file contains ONLY the keys you want to override from the default behavior.
+
+At startup, RustFrame scans for `profile_*.json` files and shows a "Capture Profile" selector on the main screen.
+Selecting a profile changes how capture starts (effective on the next Start Capture).
+
+Example `profile_discord.json`:
+
+```json
+{
+        "winapi_destination_toolwindow": false,
+        "winapi_destination_noactivate": false,
+        "winapi_destination_click_through": false
+}
 ```
 
 ## 🔍 Key Concepts
@@ -68,10 +79,12 @@ src/
 - Captures via Direct3D 11 textures
 
 ### Production Mode
-- Overlay window appears on screen for selection
-- Destination window is positioned off-screen
-- Share the "RustFrame Output" window in video calls
-- No infinite mirror effect!
+
+In release builds, the output window can be fully transparent and click-through while still being shareable.
+If you need to override this for troubleshooting, edit `settings.json`:
+
+- `winapi_destination_alpha`: 0..255 (default: 0)
+- `winapi_destination_topmost`: true/false (default: true)
 
 ### Texture Flow
 ```
@@ -96,8 +109,8 @@ Screen → D3D11 Texture → Staging → CPU → wgpu → Window
 - Press ENTER to start capture (you might still be in selection mode)
 
 ### "Overlay window is hard to see"
-- Press H to show help overlay with visual indicators
-- The overlay has a subtle colored border
+- Use Settings → Capture Region → enable Preview Border
+- Increase Border Width / adjust Border Color in Settings
 
 ### "Performance is laggy"
 - The CPU copy step adds some latency

@@ -1,80 +1,82 @@
 [package]
-name = "RustFrame"
+name = "rustframe"
 version = "1.1.0"
 edition = "2021"
 authors = ["Salih Cantekin <salihcantekin@gmail.com>"]
-description = "A GPU-accelerated Windows screen region capture tool using Windows.Graphics.Capture API"
+description = "Cross-platform screen capture application with Tauri UI"
 repository = "https://github.com/salihcantekin/RustFrame"
 homepage = "https://github.com/salihcantekin/RustFrame"
 documentation = "https://github.com/salihcantekin/RustFrame#readme"
 readme = "README.md"
 license = "MIT"
-keywords = ["windows", "screen-capture", "wgpu", "directx", "screen-sharing"]
-categories = ["multimedia", "graphics", "os::windows-apis"]
+keywords = ["screen-capture", "cross-platform", "windows", "macos", "linux"]
+categories = ["multimedia", "graphics"]
 rust-version = "1.87.0"
-exclude = ["target/", ".git/", ".github/", "*.zip"]
+exclude = ["target/", ".git/", ".github/", "*.zip", "ui/node_modules/"]
+
+# Binary target
+[[bin]]
+name = "rustframe"
+path = "src/main.rs"
+
+# Library for capture engine (can be used by other projects)
+[lib]
+name = "rustframe_capture"
+path = "src/lib.rs"
 
 [profile.release]
-# Optimize for performance
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
 
 [profile.dev]
-# Faster compile times during development
 opt-level = 1
 
-# Windows raw handle support
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
-
-[target.'cfg(windows)'.build-dependencies]
-embed-resource = "3.0.6"
-
 [build-dependencies]
-semver = "1.0.27"
+tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-# Window management - cross-platform windowing library
-winit = { version = "0.30.12", features = ["rwh_06"] }
+# Tauri framework
+tauri = { version = "2.9", features = [] }
+tauri-plugin-dialog = "2"
 
-# Raw window handle support - needed to bridge winit and wgpu
-raw-window-handle = "0.6.2"
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
-# Async utilities
-futures-intrusive = "0.5"
+# Utilities
+dirs = "5.0"
+lazy_static = "1.5"
+log = "0.4"
+anyhow = "1.0"
 
-# GPU graphics - WebGPU implementation for Rust
-# Using 25.0 for compatibility with egui-wgpu 0.32.3
-wgpu = { version = "25.0", features = ["dx12"] }
-
-# Windows API bindings - this is where the magic happens
-# We need MANY specific features for WGC and D3D11
+# Windows-specific dependencies
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = [
-    # Foundation types (IInspectable, HRESULT, HSTRING, etc.)
+    # Foundation types
     "Foundation",
     "Foundation_Collections",
-
-    # Windows.Graphics.Capture - the star of the show
+    
+    # Windows.Graphics.Capture API
     "Graphics_Capture",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
-
+    
     # Win32 Graphics APIs
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
-
+    
     # Win32 System APIs
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics",
     "Win32_System_WinRT_Graphics_Capture",
     "Win32_System_Com",
-
+    
     # UI and Window Management
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
@@ -82,39 +84,18 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
-
-    # Security (needed for some COM operations)
+    
+    # Security
     "Win32_Security",
     "Win32_System_Threading",
 ] }
 
-# Logging and error handling
-log = "0.4.29"
-env_logger = "0.11.8"
-anyhow = "1.0.100"
+# macOS-specific dependencies (placeholder for future)
+[target.'cfg(target_os = "macos")'.dependencies]
 
-# Additional utilities
-bytemuck = { version = "1.24.0", features = ["derive"] }
-pollster = "0.4.0"
-lazy_static = "1.5"
+# Linux-specific dependencies (placeholder for future)
+[target.'cfg(target_os = "linux")'.dependencies]
 
-# Image loading for icons
-image = { version = "0.25", default-features = false, features = ["ico"] }
-
-# System tray icon
-tray-icon = "0.21.2"
-muda = "0.17.1"
-egui = "0.32.3"
-egui-winit = "0.32.3"
-egui-wgpu = "0.32.3"
-
-# Serialization for settings persistence
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Platform-specific config directories
-dirs = "5.0"
-
-[[bin]]
-name = "rustframe_new"
-path = "src/main_new.rs"
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

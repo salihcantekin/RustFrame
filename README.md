@@ -16,24 +16,14 @@ RustFrame allows you to select a region of your screen and mirror it to a separa
 
 - ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
 - ✅ **Multi-Monitor Support**: Capture works on any connected monitor, not just primary
-- ✅ **Transparent Overlay**: Frameless, transparent selection window with visual border
 - ✅ **Real-time Mirroring**: Captured region displayed in a shareable window
-- ✅ **Drag-to-Move**: Click and drag the overlay window to reposition
-- ✅ **Resizable Selection**: Resize the overlay to select your desired region
-- ✅ **GPU Rendering**: wgpu-based rendering pipeline with Direct3D 12 backend
-- ✅ **Keyboard Shortcuts**: Quick adjustments with hotkeys (C, B, E, S, H, +/-)
-- ✅ **Real-time Settings Display**: Live status indicators in overlay (color-coded)
-- ✅ **Settings Dialog**: Customize cursor visibility and border width
-- ✅ **System Tray**: Minimize to tray with quick access menu and custom app icon
-- ✅ **Smart ESC Behavior**: ESC stops capture first, then exits (prevents accidental closure)
-- ✅ **Production Mode**: Off-screen destination window for clean video sharing
-- ✅ **Help Overlay**: On-screen keyboard shortcut reference (H key)
-- ✅ **Play Button**: Visual play icon to start capture with a click
-- ✅ **Right-Click Context Menu**: Quick access to Start Capture, Settings, and Help
-- ✅ **Scalable UI**: Overlay text and buttons scale with window size
-- ✅ **Active State Colors**: Border color changes when capture is active
+- ✅ **Settings UI**: Configure cursor, border, performance, and region selection
+- ✅ **Invisible Share Window (Release)**: The output window can be fully transparent + click-through while still being shareable
 
 ## 🏗️ Architecture
+
+> Note: This repository contains older/experimental modules (winit/wgpu overlay, etc.).
+> The current app entry point is Tauri-based ([src/main.rs](src/main.rs)) and uses a WinAPI GDI output window.
 
 ### Core Modules
 
@@ -93,37 +83,30 @@ cargo run --release
    cargo run
    ```
 
-2. **Two windows appear:**
-   - **Overlay Window** (transparent, borderless): This is your selection tool
-   - **Destination Window** (normal): This is what you share on Teams/Zoom
+2. **Open Settings**
+   - Click **Settings** in the app UI
+   - Use the **Capture Region** tab to position/size your region (Preview Border helps)
 
-3. **Position the overlay:**
-   - **Click and drag** to move the overlay window
-   - **Resize** using window edges (standard Windows resize)
-   - Position it over the content you want to share
+3. **Start capturing**
+   - Click **Start Capture**
+   - RustFrame will mirror the selected region into a separate shareable window
 
-4. **Start capturing:**
-   - Press **ENTER** or **Numpad Enter** to start real-time capture
-   - Or **click the Play button** in the center of the overlay
-   - Or **right-click** and select "Start Capture" from the context menu
-   - The destination window will display the selected region
-
-5. **Keyboard Shortcuts (during selection):****
-   - **C**: Toggle cursor visibility in capture
-   - **B**: Toggle border visibility
-   - **E**: Toggle exclude from capture mode
-   - **S**: Open settings dialog
-   - **H**: Toggle help overlay
-   - **+/-**: Adjust border width
-
-6. **Share on Teams/Zoom/Google Meet:**
-   - Select "RustFrame Output" window in your screen sharing dialog
+4. **Share on Teams/Zoom/Google Meet:**
+   - Select the RustFrame output window (titled **"RustFrame Preview"**) in your screen sharing dialog
    - Only the captured region will be visible to participants
 
-7. **Exit:**
-   - Press **ESC** once to stop capture (returns to selection mode)
-   - Press **ESC** again to close the application
-   - Or right-click tray icon and select Exit
+5. **Stop / Exit:**
+   - Click **Stop Capture** to stop mirroring
+   - Close the app to exit
+
+### Advanced (Hidden) Settings
+
+You can add these keys manually to `settings.json` (Settings → Advanced → Open Settings Folder):
+
+- `winapi_destination_alpha`: 0..255 (default: 0 in release builds)
+- `winapi_destination_topmost`: true/false (default: true)
+
+If a meeting app shows black or stops updating, try setting `winapi_destination_alpha` to `1` or `255` for diagnostics.
 
 ## 🛠️ Technical Details
 

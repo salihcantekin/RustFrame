@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "RustFrame",
+  "version": "1.1.0",
+  "identifier": "com.salihcantekin.rustframe",
+  "build": {
+    "beforeDevCommand": "cd ui && npm run dev",
+    "beforeBuildCommand": "cd ui && npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "ui/dist"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "RustFrame",
+        "width": 800,
+        "height": 600,
+        "minWidth": 320,
+        "minHeight": 240,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

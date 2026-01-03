@@ -2,9 +2,9 @@
 //
 // TODO: Implement using ScreenCaptureKit (macOS 12.3+) or CGWindowListCreateImage
 
-use anyhow::{anyhow, Result};
-use crate::app::CaptureRect;
 use super::{CaptureEngine, CaptureFrame};
+use crate::app::CaptureRect;
+use anyhow::{anyhow, Result};
 
 /// macOS capture engine (stub)
 pub struct MacOSCaptureEngine {
@@ -30,27 +30,27 @@ impl CaptureEngine for MacOSCaptureEngine {
         self.is_active = true;
         Err(anyhow!("macOS capture not yet implemented"))
     }
-    
+
     fn stop(&mut self) {
         self.is_active = false;
     }
-    
+
     fn is_active(&self) -> bool {
         self.is_active
     }
-    
+
     fn has_new_frame(&self) -> bool {
         false
     }
-    
+
     fn get_frame(&mut self) -> Option<CaptureFrame> {
         None
     }
-    
+
     fn set_cursor_visible(&mut self, _visible: bool) -> Result<()> {
         Ok(())
     }
-    
+
     fn get_region(&self) -> Option<CaptureRect> {
         self.region
     }

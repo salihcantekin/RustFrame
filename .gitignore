@@ -118,6 +118,17 @@ Icon?
 # ===================
 *.log
 *.sql
+
+# ===================
+# UI (Vite / Node)
+# ===================
+ui/node_modules/
+ui/dist/
+ui/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 *.sqlite
 *.sqlite3
 
@@ -137,6 +148,17 @@ Icon?
 *.tar.gz
 *.rar
 *.7z
+
+# ===================
+# Node.js / npm
+# ===================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+ui/dist/
 
 # ===================
 # Misc
