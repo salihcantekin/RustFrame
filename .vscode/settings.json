@@ -1,0 +1,35 @@
+{
+  // ===================
+  // RustFrame Project Settings
+  // ===================
+  
+  // Remote macOS Build Configuration
+  // Update these values with your macOS machine details
+  "rustframe.macOS.sshHost": "user@your-mac-hostname-or-ip",
+  "rustframe.macOS.projectPath": "~/RustFrame",
+  
+  // Rust Analyzer Settings
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.checkOnSave.allTargets": false,
+  "rust-analyzer.cargo.features": ["custom-protocol"],
+  
+  // Editor Settings
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "rust-lang.rust-analyzer",
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  
+  // Files to exclude from search
+  "files.exclude": {
+    "**/target": true,
+    "**/node_modules": true
+  },
+  
+  // File associations
+  "files.associations": {
+    "*.rs": "rust",
+    "Cargo.toml": "toml",
+    "Cargo.lock": "toml"
+  }
+}

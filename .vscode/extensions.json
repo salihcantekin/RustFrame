@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "tauri-apps.tauri-vscode",
+    "serayuzgur.crates",
+    "vadimcn.vscode-lldb",
+    "ms-vscode-remote.remote-ssh",
+    "ms-vscode.remote-explorer"
+  ]
+}
