@@ -66,9 +66,9 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add Cargo.toml ui/package.json tauri.conf.json
-          git commit -m "chore: bump version to ${{ github.event.inputs.version }}" || echo "No changes to commit"
-          git push || echo "Nothing to push"
-        shell: bash
+          git diff --staged --quiet || git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+          git push 2>$null || Write-Host "Nothing to push or already up to date"
+        shell: powershell
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -127,15 +127,15 @@ jobs:
       
       - name: Build summary
         run: |
-          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Platform**: Windows x64" >> $GITHUB_STEP_SUMMARY
-          echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        shell: bash
+          Write-Host "## Build Information" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Version**: ${{ github.event.inputs.version }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Platform**: Windows x64" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Runner**: ${{ github.event.inputs.runner }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Rust Version**: $(rustc --version)" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Build Number**: ${{ github.run_number }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+          Write-Host "- **Commit**: ${{ github.sha }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+        shell: powershell
       
       - name: Create Git tag
         if: github.event.inputs.create_release == 'true'
@@ -143,8 +143,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}"
-        shell: bash
+          git push origin "v${{ github.event.inputs.version }}" 2>$null || Write-Host "Tag already exists or push failed"
+        shell: powershell
       
       - name: Create GitHub Release
         if: github.event.inputs.create_release == 'true'
