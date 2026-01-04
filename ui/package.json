@@ -3,9 +3,8 @@
   "version": "1.1.0",
   "type": "module",
   "scripts": {
-    "copy-icon": "powershell -Command \"Add-Type -AssemblyName System.Drawing; $ico = New-Object System.Drawing.Icon('../icon.ico'); $bmp = $ico.ToBitmap(); $bmp.Save('./public/icon.png', [System.Drawing.Imaging.ImageFormat]::Png); $ico.Dispose(); $bmp.Dispose()\"",
-    "dev": "npm run copy-icon && vite",
-    "build": "npm run copy-icon && vite build",
+    "dev": "vite",
+    "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
