@@ -18,8 +18,7 @@ mod platform;
 mod platform_info;
 mod rec_indicator;
 
-use destination_window::DestinationWindow;
-use destination_window::DestinationWindowConfig;
+use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
 use rec_indicator::RecIndicator;
 
@@ -672,7 +671,7 @@ fn show_preview_border(
     }
 
     // Create new preview border
-    let border = HollowBorder::new(x, y, width, height, border_width, border_color)
+    let mut border = HollowBorder::new(x, y, width, height, border_width, border_color)
         .ok_or("Failed to create preview border")?;
 
     // Preview mode: interior is draggable, not click-through
@@ -725,6 +724,38 @@ async fn start_capture(
     height: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    println!("[START_CAPTURE] Function called with x={}, y={}, width={}, height={}", x, y, width, height);
+    
+    // Clean up any previous capture session first (always, not just if capturing)
+    println!("[START_CAPTURE] Cleaning up previous session...");
+    
+    // Stop capture engine if running
+    if let Some(ref mut engine) = *state.capture_engine.lock().unwrap() {
+        println!("[START_CAPTURE] Stopping existing capture engine");
+        engine.stop();
+    }
+    
+    // Stop render thread if running
+    *state.render_thread_stop.lock().unwrap() = true;
+    
+    // Clean up windows - this will trigger Drop which must be on main thread
+    println!("[START_CAPTURE] Cleaning up HOLLOW_BORDER");
+    *HOLLOW_BORDER.lock().unwrap() = None;
+    
+    println!("[START_CAPTURE] Cleaning up DESTINATION_WINDOW");
+    *DESTINATION_WINDOW.lock().unwrap() = None;
+    
+    println!("[START_CAPTURE] Cleaning up REC_INDICATOR");
+    *REC_INDICATOR.lock().unwrap() = None;
+    
+    // Reset capturing state
+    *state.is_capturing.lock().unwrap() = false;
+    
+    // Give a moment for cleanup
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    
+    println!("[START_CAPTURE] Cleanup complete");
+    
     // Base settings + optional active profile overrides
     let base_settings = state.settings.lock().unwrap().clone();
     let active_profile = state.active_profile.lock().unwrap().clone();
@@ -766,7 +797,7 @@ async fn start_capture(
         border_color,
         settings.border_width
     );
-    let hollow_border = HollowBorder::new(
+    let mut hollow_border = HollowBorder::new(
         x,
         y,
         width as i32,
@@ -786,22 +817,35 @@ async fn start_capture(
         hollow_border.hide();
     }
 
+    println!("[START_CAPTURE] Storing HOLLOW_BORDER in global...");
     *HOLLOW_BORDER.lock().unwrap() = Some(hollow_border);
+    println!("[START_CAPTURE] HOLLOW_BORDER stored successfully");
 
     // Create and show REC indicator if enabled
     if settings.show_rec_indicator {
+        println!("[START_CAPTURE] REC indicator temporarily disabled for debugging");
+        /*
+        println!("[START_CAPTURE] Creating REC indicator...");
         let rec = RecIndicator::new().ok_or("Failed to create REC indicator")?;
+        println!("[START_CAPTURE] REC indicator created, setting size...");
         rec.set_size(&settings.rec_indicator_size);
+        println!("[START_CAPTURE] Showing REC indicator...");
         rec.show(x + width as i32, y, settings.border_width as i32);
+        println!("[START_CAPTURE] Storing REC indicator...");
         *REC_INDICATOR.lock().unwrap() = Some(rec);
         log::info!("REC indicator created and shown");
+        println!("[START_CAPTURE] REC indicator setup complete");
+        */
     }
 
+    println!("[START_CAPTURE] After REC indicator, before destination window");
+    
     // Create destination window based on preview mode
     log::info!(
         "Creating destination window in {:?} mode",
         settings.preview_mode
     );
+    println!("[START_CAPTURE] Preview mode: {:?}", settings.preview_mode);
     #[cfg(target_os = "windows")]
     match settings.preview_mode {
         PreviewMode::WinApiGdi => {
@@ -870,12 +914,27 @@ async fn start_capture(
     }
 
     #[cfg(not(target_os = "windows"))]
-    match settings.preview_mode {
-        PreviewMode::TauriCanvas => {
-            // TODO: Implement Tauri Canvas window
-            log::warn!("Tauri Canvas mode not yet implemented");
-            return Err("Tauri Canvas mode not yet implemented".to_string());
-        }
+    {
+        // On macOS/Linux, create a basic destination window
+        log::info!("Creating destination window for non-Windows platform");
+        println!("[START_CAPTURE] About to create DestinationWindow");
+        
+        let config = DestinationWindowConfig {
+            alpha: Some(255),
+            topmost: Some(true),
+            click_through: Some(true),
+            toolwindow: None,
+            layered: None,
+            appwindow: None,
+            noactivate: None,
+            overlapped: None,
+        };
+        
+        let dest_window = DestinationWindow::new(width, height, config)
+            .ok_or("Failed to create destination window")?;
+        
+        log::info!("Destination window created successfully");
+        *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
     }
 
     // Start capture engine
@@ -1107,11 +1166,18 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     }
     drop(engine_lock);
 
-    // Clean up windows
-    *HOLLOW_BORDER.lock().unwrap() = None;
+    // Hide hollow border but keep it for repositioning
+    if let Ok(border_lock) = HOLLOW_BORDER.lock() {
+        if let Some(ref border) = *border_lock {
+            border.hide();
+            log::info!("Hollow border hidden");
+        }
+    }
+
+    // Clean up capture-related windows
     *DESTINATION_WINDOW.lock().unwrap() = None;
     *REC_INDICATOR.lock().unwrap() = None;
-    log::info!("Windows cleaned up");
+    log::info!("Capture windows cleaned up");
 
     // Clear click capture data
     platform::input::clear_clicks();

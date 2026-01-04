@@ -5,8 +5,8 @@
   
   // Remote macOS Build Configuration
   // Update these values with your macOS machine details
-  "rustframe.macOS.sshHost": "user@your-mac-hostname-or-ip",
-  "rustframe.macOS.projectPath": "~/RustFrame",
+  "rustframe.macOS.sshHost": "macsc@192.168.0.11",
+  "rustframe.macOS.projectPath": "~/Projects/RustFrame",
   
   // Rust Analyzer Settings
   "rust-analyzer.checkOnSave.command": "clippy",

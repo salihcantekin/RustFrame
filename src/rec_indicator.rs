@@ -7,6 +7,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+#[cfg(target_os = "macos")]
+use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSColor, NSView, NSTextField};
+#[cfg(target_os = "macos")]
+use cocoa::base::{id, nil, YES, NO};
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSRect, NSPoint, NSSize, NSString, NSAutoreleasePool};
+#[cfg(target_os = "macos")]
+use objc::{msg_send, sel, sel_impl, class};
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    static _dispatch_main_q: std::ffi::c_void;
+    fn dispatch_sync_f(
+        queue: *const std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+    fn pthread_main_np() -> i32;
+}
+
 #[cfg(windows)]
 use windows::core::PCWSTR;
 #[cfg(windows)]
@@ -81,7 +101,37 @@ impl RecIndicator {
 
     #[cfg(not(windows))]
     pub fn new() -> Option<Self> {
-        None
+        #[cfg(target_os = "macos")]
+        {
+            info!("Creating macOS REC indicator window");
+            println!("[REC] Creating macOS REC indicator");
+
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = stop_flag.clone();
+
+            let thread_handle = thread::spawn(move || {
+                run_rec_thread_macos(stop_flag_clone);
+            });
+
+            // Wait for window to be created
+            for _ in 0..50 {
+                thread::sleep(std::time::Duration::from_millis(10));
+                if let Ok(hwnd_lock) = REC_HWND.lock() {
+                    if *hwnd_lock != 0 {
+                        break;
+                    }
+                }
+            }
+
+            Some(Self {
+                thread_handle: Some(thread_handle),
+                stop_flag,
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     /// Show the REC indicator at the specified position (top-right of capture region)
@@ -116,6 +166,65 @@ impl RecIndicator {
                 }
             }
         }
+
+        #[cfg(target_os = "macos")]
+        if let Ok(hwnd_lock) = REC_HWND.lock() {
+            let window_ptr = *hwnd_lock;
+            if window_ptr != 0 {
+                println!("[REC] Showing macOS REC indicator at ({}, {})", pos_x, pos_y);
+                
+                // Context for main thread execution
+                struct ShowContext {
+                    window_ptr: isize,
+                    pos_x: i32,
+                    pos_y: i32,
+                    height: i32,
+                }
+                
+                extern "C" fn show_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+                    let ctx = unsafe { &*(ctx_ptr as *const ShowContext) };
+                    unsafe {
+                        let window: id = ctx.window_ptr as *mut objc::runtime::Object;
+                        
+                        // Get screen height for coordinate conversion
+                        let screen: id = msg_send![window, screen];
+                        let screen_frame: NSRect = msg_send![screen, frame];
+                        let screen_height = screen_frame.size.height;
+                        
+                        // Convert top-left to bottom-left coordinates
+                        let origin = NSPoint::new(
+                            ctx.pos_x as f64,
+                            screen_height - (ctx.pos_y as f64) - (ctx.height as f64)
+                        );
+                        
+                        let _: () = msg_send![window, setFrameOrigin: origin];
+                        let _: () = msg_send![window, orderFront: nil];
+                    }
+                }
+                
+                let mut context = ShowContext {
+                    window_ptr,
+                    pos_x,
+                    pos_y,
+                    height,
+                };
+                
+                let is_main = unsafe { pthread_main_np() } != 0;
+                if !is_main {
+                    println!("[REC] Not on main thread, dispatching show to main queue");
+                    unsafe {
+                        dispatch_sync_f(
+                            &_dispatch_main_q,
+                            &mut context as *mut _ as *mut std::ffi::c_void,
+                            show_on_main_thread,
+                        );
+                    }
+                } else {
+                    println!("[REC] Already on main thread, showing directly");
+                    show_on_main_thread(&mut context as *mut _ as *mut std::ffi::c_void);
+                }
+            }
+        }
     }
 
     /// Hide the REC indicator
@@ -130,6 +239,35 @@ impl RecIndicator {
                     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                     let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Ok(hwnd_lock) = REC_HWND.lock() {
+            let window_ptr = *hwnd_lock;
+            if window_ptr != 0 {
+                println!("[REC] Hiding macOS REC indicator");
+                
+                extern "C" fn hide_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+                    let window_ptr = ctx_ptr as isize;
+                    unsafe {
+                        let window: id = window_ptr as *mut objc::runtime::Object;
+                        let _: () = msg_send![window, orderOut: nil];
+                    }
+                }
+                
+                let is_main = unsafe { pthread_main_np() } != 0;
+                if !is_main {
+                    unsafe {
+                        dispatch_sync_f(
+                            &_dispatch_main_q,
+                            window_ptr as *mut std::ffi::c_void,
+                            hide_on_main_thread,
+                        );
+                    }
+                } else {
+                    hide_on_main_thread(window_ptr as *mut std::ffi::c_void);
                 }
             }
         }
@@ -443,4 +581,155 @@ unsafe extern "system" fn rec_window_proc(
 
 fn wide_string(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+// ========== macOS Implementation ==========
+
+#[cfg(target_os = "macos")]
+struct CreateRecWindowContext {
+    result_window: id,
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for CreateRecWindowContext {}
+
+#[cfg(target_os = "macos")]
+extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+    println!("[REC] Executing create_rec_window_on_main_thread callback");
+    
+    let ctx = unsafe { &mut *(ctx_ptr as *mut CreateRecWindowContext) };
+    
+    unsafe {
+        let _pool = NSAutoreleasePool::new(nil);
+        
+        let (width, height) = get_indicator_dimensions();
+        
+        // Create window frame
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(width as f64, height as f64)
+        );
+        
+        // Create borderless window
+        let window = NSWindow::alloc(nil).initWithContentRect_styleMask_backing_defer_(
+            frame,
+            NSWindowStyleMask::NSBorderlessWindowMask,
+            NSBackingStoreType::NSBackingStoreBuffered,
+            NO,
+        );
+        
+        if window == nil {
+            println!("[REC] ERROR: Failed to create NSWindow");
+            return;
+        }
+        
+        // Configure window - simplified version
+        println!("[REC] Configuring window properties...");
+        window.setOpaque_(NO);
+        let clear: id = NSColor::clearColor(nil);
+        window.setBackgroundColor_(clear);
+        let _: () = msg_send![window, setLevel: 3i32]; // Floating level
+        window.setIgnoresMouseEvents_(YES);
+        
+        println!("[REC] Getting content view...");
+        let content_view: id = window.contentView();
+        
+        // Set simple dark background
+        println!("[REC] Setting background color...");
+        let dark_bg: id = msg_send![class!(NSColor), colorWithRed:0.2 green:0.2 blue:0.2 alpha:0.9];
+        let _: () = msg_send![content_view, setWantsLayer: YES];
+        
+        // Create "● REC" text label (simple approach without separate dot view)
+        println!("[REC] Creating text label...");
+        let font_size = get_font_size() as f64;
+        let text_frame = NSRect::new(
+            NSPoint::new(4.0, (height as f64 - font_size) / 2.0 - 2.0),
+            NSSize::new(width as f64 - 8.0, font_size + 4.0)
+        );
+        
+        let text_label: id = msg_send![class!(NSTextField), alloc];
+        let text_label: id = msg_send![text_label, initWithFrame: text_frame];
+        let _: () = msg_send![text_label, setBezeled: NO];
+        let _: () = msg_send![text_label, setDrawsBackground: NO];
+        let _: () = msg_send![text_label, setEditable: NO];
+        let _: () = msg_send![text_label, setSelectable: NO];
+        
+        println!("[REC] Setting text content...");
+        let rec_str = NSString::alloc(nil).init_str("● REC");
+        let _: () = msg_send![text_label, setStringValue: rec_str];
+        
+        println!("[REC] Setting font and color...");
+        let font: id = msg_send![class!(NSFont), boldSystemFontOfSize: font_size * 0.7];
+        let _: () = msg_send![text_label, setFont: font];
+        
+        let red_color: id = msg_send![class!(NSColor), redColor];
+        let _: () = msg_send![text_label, setTextColor: red_color];
+        
+        println!("[REC] Adding subview...");
+        let _: () = msg_send![content_view, addSubview: text_label];
+        
+        println!("[REC] Showing window...");
+        window.makeKeyAndOrderFront_(nil);
+        
+        println!("[REC] macOS REC window created successfully");
+        
+        // Store result
+        ctx.result_window = window;
+    }
+    
+    println!("[REC] create_rec_window_on_main_thread callback finished");
+}
+
+#[cfg(target_os = "macos")]
+fn run_rec_thread_macos(stop_flag: Arc<AtomicBool>) {
+    println!("[REC] Starting macOS REC thread");
+    
+    let is_main = unsafe { pthread_main_np() } != 0;
+    println!("[REC] Current thread is main: {}", is_main);
+    
+    let mut context = CreateRecWindowContext {
+        result_window: nil,
+    };
+    
+    if !is_main {
+        println!("[REC] Not on main thread, dispatching to main queue");
+        unsafe {
+            dispatch_sync_f(
+                &_dispatch_main_q,
+                &mut context as *mut _ as *mut std::ffi::c_void,
+                create_rec_window_on_main_thread,
+            );
+        }
+        println!("[REC] Dispatch completed");
+    } else {
+        println!("[REC] Already on main thread, creating directly");
+        create_rec_window_on_main_thread(&mut context as *mut _ as *mut std::ffi::c_void);
+    }
+    
+    let result_window = context.result_window;
+    
+    if result_window != nil {
+        if let Ok(mut hwnd_lock) = REC_HWND.lock() {
+            *hwnd_lock = result_window as isize;
+        }
+        REC_THREAD_RUNNING.store(true, Ordering::SeqCst);
+        println!("[REC] REC indicator window created");
+    } else {
+        println!("[REC] ERROR: Failed to create REC window");
+    }
+    
+    // Keep thread alive while stop flag is not set
+    while !stop_flag.load(Ordering::SeqCst) {
+        thread::sleep(std::time::Duration::from_millis(100));
+    }
+    
+    // Clean up
+    if result_window != nil {
+        unsafe {
+            let _: () = msg_send![result_window, close];
+        }
+    }
+    
+    REC_THREAD_RUNNING.store(false, Ordering::SeqCst);
+    println!("[REC] macOS REC thread exiting");
 }

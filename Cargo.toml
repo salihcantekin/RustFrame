@@ -38,7 +38,7 @@ tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
 # Tauri framework
-tauri = { version = "2.9", features = [] }
+tauri = { version = "2.9", features = ["macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 
@@ -94,6 +94,11 @@ windows = { version = "0.62.2", features = [
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
+core-foundation = "0.10"
+cocoa = "0.26"
+objc = "0.2"
+libc = "0.2"
+foreign-types-shared = "0.3"
 
 # Linux-specific dependencies (placeholder for future)
 [target.'cfg(target_os = "linux")'.dependencies]

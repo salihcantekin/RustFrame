@@ -63,6 +63,36 @@ src/
    core-graphics = "0.24"
    ```
 
+5. **⚠️ CRITICAL: macOS Main Thread Requirement**
+   - **ALL Cocoa/AppKit APIs MUST run on the main thread**
+   - Calling NSWindow, NSView, NSColor, etc. from background threads causes NSException
+   - Rust cannot catch NSException → immediate crash with "foreign exception" error
+   - **Solution**: Use `dispatch_sync_f` with `_dispatch_main_q` to dispatch to main thread
+   ```rust
+   extern "C" {
+       static _dispatch_main_q: std::ffi::c_void;
+       fn dispatch_sync_f(
+           queue: *const std::ffi::c_void,
+           context: *mut std::ffi::c_void,
+           work: extern "C" fn(*mut std::ffi::c_void),
+       );
+       fn pthread_main_np() -> i32; // Returns non-zero if on main thread
+   }
+   
+   // Check thread and dispatch if needed
+   let is_main = unsafe { pthread_main_np() } != 0;
+   if !is_main {
+       unsafe {
+           dispatch_sync_f(&_dispatch_main_q, context_ptr, callback);
+       }
+   }
+   ```
+   - This applies to:
+     - Window creation (HollowBorder, DestinationWindow)
+     - Screen capture APIs (CGWindowListCreateImage, CGDisplayStream)
+     - Any UI manipulation
+   - Common error: `fatal runtime error: Rust cannot catch foreign exceptions, aborting`
+
 ---
 
 ## Rust Coding Standards

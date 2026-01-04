@@ -113,17 +113,13 @@
       }
     },
     {
-      "label": "📤 Sync to macOS (rsync)",
+      "label": "📤 Sync to macOS (tar+scp)",
       "type": "shell",
-      "command": "rsync",
+      "command": "C:\\Program Files\\Git\\bin\\bash.exe",
       "args": [
-        "-avz",
-        "--exclude", "target/",
-        "--exclude", "node_modules/",
-        "--exclude", ".git/",
-        "--exclude", "ui/dist/",
-        ".",
-        "${config:rustframe.macOS.sshHost}:${config:rustframe.macOS.projectPath}/"
+        ".vscode/sync-to-macos.sh",
+        "${config:rustframe.macOS.sshHost}",
+        "${config:rustframe.macOS.projectPath}"
       ],
       "presentation": {
         "reveal": "always",
@@ -133,17 +129,13 @@
       "problemMatcher": []
     },
     {
-      "label": "📥 Sync from macOS (rsync)",
+      "label": "📥 Sync from macOS (tar+scp)",
       "type": "shell",
-      "command": "rsync",
+      "command": "C:\\Program Files\\Git\\bin\\bash.exe",
       "args": [
-        "-avz",
-        "--exclude", "target/",
-        "--exclude", "node_modules/",
-        "--exclude", ".git/",
-        "--exclude", "ui/dist/",
-        "${config:rustframe.macOS.sshHost}:${config:rustframe.macOS.projectPath}/",
-        "."
+        ".vscode/sync-from-macos.sh",
+        "${config:rustframe.macOS.sshHost}",
+        "${config:rustframe.macOS.projectPath}"
       ],
       "presentation": {
         "reveal": "always",
@@ -156,7 +148,7 @@
       "label": "🔄 Full Remote Build (Sync + Build + Check)",
       "dependsOrder": "sequence",
       "dependsOn": [
-        "📤 Sync to macOS (rsync)",
+        "📤 Sync to macOS (tar+scp)",
         "🍎 Build (macOS - Remote via SSH)",
         "🍎 Check (macOS - Remote via SSH)"
       ],
