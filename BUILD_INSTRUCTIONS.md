@@ -89,6 +89,44 @@ Once you resolve the linker issue, the project should compile successfully!
    - **ESC**: Exit
 5. Share "RustFrame Output" window in video calls
 
+## macOS Build Instructions
+
+### Prerequisites
+
+On macOS, ensure you have:
+- Xcode Command Line Tools installed: `xcode-select --install`
+- Rust toolchain: `rustup default stable`
+
+### Building on macOS
+
+```bash
+# Clean build (recommended after dependency updates)
+cargo clean
+
+# Build the project
+cargo build --release
+
+# Run the application
+cargo run --release
+```
+
+### macOS-Specific Dependencies
+
+The project uses the following macOS-specific crates:
+- **core-graphics**: Screen capture and display APIs
+- **cocoa**: Cocoa framework bindings (NSWindow, NSView, etc.)
+- **objc**: Objective-C runtime with exception handling
+
+**Important**: The `objc` crate is configured with the `exception` feature to properly handle Objective-C exceptions (NSException). Without this feature, the build would fail with "Rust cannot catch foreign exceptions" error.
+
+For detailed information about the exception handling fix, see [docs/MACOS_EXCEPTION_FIX.md](docs/MACOS_EXCEPTION_FIX.md).
+
+## Windows Build Instructions
+
+### Problem: Link.exe Conflict (Windows Only)
+
+This section applies only to Windows builds.
+
 ## Technical Notes
 
 1. **D3D11 → wgpu texture transfer uses CPU** (not zero-copy)

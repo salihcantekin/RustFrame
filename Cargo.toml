@@ -95,6 +95,8 @@ windows = { version = "0.62.2", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
 cocoa = "0.26"
+# objc with exception feature: Converts NSException to Rust panics for proper error handling
+# Without this feature, Objective-C exceptions would bypass Rust's panic mechanism
 objc = { version = "0.2.7", features = ["exception"] }
 
 # Linux-specific dependencies (placeholder for future)
