@@ -1,80 +1,36 @@
-name: Build RustFrame
+name: Build macOS
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to use'
+        required: true
+        type: choice
+        options:
+          - macos-latest
+          - macos-14
+          - macos-13
+          - self-hosted
+        default: 'macos-latest'
+      architecture:
+        description: 'Build architecture'
+        required: true
+        type: choice
+        options:
+          - universal
+          - arm64-only
+          - x86_64-only
+        default: 'universal'
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  build-windows:
-    name: Build Windows
-    runs-on: windows-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: ui/package-lock.json
-      
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-      
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-      
-      - name: Install UI dependencies
-        working-directory: ./ui
-        run: npm ci
-      
-      - name: Build UI
-        working-directory: ./ui
-        run: npm run build
-      
-      - name: Build Rust (Release)
-        run: cargo build --release --verbose
-      
-      - name: Run tests
-        run: cargo test --release --verbose
-      
-      - name: Create distribution folder
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/release/rustframe.exe dist/
-          Copy-Item README.md dist/
-          Copy-Item LICENSE dist/
-          Copy-Item QUICK_START.md dist/
-        shell: powershell
-      
-      - name: Create ZIP archive
-        run: |
-          Compress-Archive -Path dist/* -DestinationPath RustFrame-Windows-x64.zip
-        shell: powershell
-      
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RustFrame-Windows-x64
-          path: RustFrame-Windows-x64.zip
-          retention-days: 30
-
   build-macos:
     name: Build macOS
-    runs-on: macos-latest
+    runs-on: ${{ github.event.inputs.runner }}
     
     steps:
       - name: Checkout code
@@ -107,12 +63,15 @@ jobs:
         run: npm run build
       
       - name: Build Rust for ARM64 (Apple Silicon)
+        if: github.event.inputs.architecture == 'universal' || github.event.inputs.architecture == 'arm64-only'
         run: cargo build --release --target aarch64-apple-darwin --verbose
       
       - name: Build Rust for x86_64 (Intel)
+        if: github.event.inputs.architecture == 'universal' || github.event.inputs.architecture == 'x86_64-only'
         run: cargo build --release --target x86_64-apple-darwin --verbose
       
       - name: Create universal binary
+        if: github.event.inputs.architecture == 'universal'
         run: |
           mkdir -p target/universal-apple-darwin/release
           lipo -create \
@@ -121,13 +80,27 @@ jobs:
             -output target/universal-apple-darwin/release/rustframe
           lipo -info target/universal-apple-darwin/release/rustframe
       
+      - name: Determine binary path
+        id: binary-path
+        run: |
+          if [ "${{ github.event.inputs.architecture }}" = "universal" ]; then
+            echo "path=target/universal-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
+            echo "arch=Universal" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.architecture }}" = "arm64-only" ]; then
+            echo "path=target/aarch64-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
+            echo "arch=ARM64" >> $GITHUB_OUTPUT
+          else
+            echo "path=target/x86_64-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
+            echo "arch=x86_64" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Create .app bundle
         run: |
           mkdir -p RustFrame.app/Contents/MacOS
           mkdir -p RustFrame.app/Contents/Resources
           
           # Copy binary
-          cp target/universal-apple-darwin/release/rustframe RustFrame.app/Contents/MacOS/
+          cp ${{ steps.binary-path.outputs.path }} RustFrame.app/Contents/MacOS/rustframe
           chmod +x RustFrame.app/Contents/MacOS/rustframe
           
           # Create Info.plist
@@ -164,6 +137,8 @@ jobs:
           
           # Ad-hoc code signing (for local use, not App Store)
           codesign --force --deep --sign - RustFrame.app
+          
+          echo "✅ .app bundle created and signed"
       
       - name: Create distribution folder
         run: |
@@ -176,40 +151,27 @@ jobs:
       - name: Create ZIP archive
         run: |
           cd dist
-          zip -r ../RustFrame-macOS-Universal.zip *
+          timestamp=$(date +%Y%m%d-%H%M%S)
+          arch="${{ steps.binary-path.outputs.arch }}"
+          zipname="RustFrame-macOS-${arch}-${timestamp}.zip"
+          zip -r "../${zipname}" *
           cd ..
+          echo "Created: ${zipname}"
       
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustFrame-macOS-Universal
-          path: RustFrame-macOS-Universal.zip
+          name: RustFrame-macOS-${{ steps.binary-path.outputs.arch }}-${{ github.run_number }}
+          path: RustFrame-macOS-*.zip
           retention-days: 30
-  
-  create-release:
-    name: Create Release
-    needs: [build-windows, build-macos]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: RustFrame-Windows-x64
       
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: RustFrame-macOS-Universal
-      
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            RustFrame-Windows-x64.zip
-            RustFrame-macOS-Universal.zip
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build summary
+        run: |
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platform**: macOS" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture**: ${{ steps.binary-path.outputs.arch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY

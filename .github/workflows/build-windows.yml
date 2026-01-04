@@ -1,0 +1,92 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to use'
+        required: true
+        type: choice
+        options:
+          - windows-latest
+          - self-hosted
+        default: 'windows-latest'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: ${{ github.event.inputs.runner }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      
+      - name: Install UI dependencies
+        working-directory: ./ui
+        run: npm ci
+      
+      - name: Build UI
+        working-directory: ./ui
+        run: npm run build
+      
+      - name: Build Rust (Release)
+        run: cargo build --release --verbose
+      
+      - name: Run tests
+        run: cargo test --release --verbose
+      
+      - name: Create distribution folder
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/release/rustframe.exe dist/
+          Copy-Item README.md dist/
+          Copy-Item LICENSE dist/
+          Copy-Item QUICK_START.md dist/
+        shell: powershell
+      
+      - name: Create ZIP archive
+        run: |
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $zipName = "RustFrame-Windows-x64-$timestamp.zip"
+          Compress-Archive -Path dist/* -DestinationPath $zipName
+          Write-Host "Created: $zipName"
+        shell: powershell
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustFrame-Windows-x64-${{ github.run_number }}
+          path: RustFrame-Windows-x64-*.zip
+          retention-days: 30
+      
+      - name: Build summary
+        run: |
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platform**: Windows x64" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        shell: bash
