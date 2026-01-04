@@ -52,21 +52,21 @@ jobs:
           
           # Update Cargo.toml
           sed -i.bak "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$version\"/" Cargo.toml
-          echo "✓ Updated Cargo.toml"
+          echo "[OK] Updated Cargo.toml"
           
           # Update package.json
           sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$version\"/" ui/package.json
-          echo "✓ Updated package.json"
+          echo "[OK] Updated package.json"
           
           # Update tauri.conf.json
           sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$version\"/" tauri.conf.json
-          echo "✓ Updated tauri.conf.json"
+          echo "[OK] Updated tauri.conf.json"
           
           # Remove backup files
           rm -f Cargo.toml.bak ui/package.json.bak tauri.conf.json.bak
           
           echo ""
-          echo "✅ Version updated to $version in all files"
+          echo "[SUCCESS] Version updated to $version in all files"
       
       - name: Commit version changes
         run: |
