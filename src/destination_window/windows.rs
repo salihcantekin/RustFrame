@@ -1,4 +1,4 @@
-//! Pure WinAPI Destination Window
+﻿//! Pure WinAPI Destination Window
 //!
 //! Runs in its own thread with dedicated message loop.
 //! This is necessary because Tauri's WebView2 message loop doesn't pump

@@ -4,8 +4,14 @@
   "version": "1.1.0",
   "identifier": "com.salihcantekin.rustframe",
   "build": {
-    "beforeDevCommand": "cd ui && npm run dev",
-    "beforeBuildCommand": "cd ui && npm run build",
+    "beforeDevCommand": {
+      "script": "npm run dev",
+      "cwd": "./ui"
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "./ui"
+    },
     "devUrl": "http://localhost:1420",
     "frontendDist": "ui/dist"
   },
@@ -26,14 +32,14 @@
     "windows": [
       {
         "title": "RustFrame",
-        "width": 800,
-        "height": 600,
-        "minWidth": 320,
-        "minHeight": 240,
+        "width": 900,
+        "height": 820,
+        "minWidth": 600,
+        "minHeight": 500,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true,
-        "transparent": false,
+        "decorations": false,
+        "transparent": true,
         "alwaysOnTop": false
       }
     ],

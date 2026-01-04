@@ -677,6 +677,9 @@ fn show_preview_border(
     let border = HollowBorder::new(x, y, width, height, border_width, border_color)
         .ok_or("Failed to create preview border")?;
 
+    // Preview mode: interior is draggable, not click-through
+    border.set_preview_mode();
+
     *preview = Some(border);
     Ok(())
 }
@@ -776,6 +779,9 @@ async fn start_capture(
     .ok_or("Failed to create hollow border")?;
 
     log::info!("Hollow border created successfully");
+
+    // Capture mode: interior is click-through, only top edge drags
+    hollow_border.set_capture_mode();
 
     // Apply show_border setting
     if !settings.show_border {
@@ -1301,6 +1307,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![
             is_dev_mode,

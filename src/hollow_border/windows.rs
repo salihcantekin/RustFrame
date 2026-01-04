@@ -1,7 +1,7 @@
-//! Hollow Border Window - WinAPI Implementation
+﻿//! Hollow Border Window - WinAPI Implementation
 //!
-//! Creates a transparent, hollow border window that can be resized and moved.
-//! The interior is completely click-through (HTTRANSPARENT).
+//! Creates a resizable border window for capture region selection.
+//! Interior is draggable, borders are resizable from edges and corners.
 //! Runs in its own thread with dedicated message loop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,9 +15,9 @@ use log::info;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{
-        BeginPaint, CombineRgn, CreatePen, CreateRectRgn, CreateSolidBrush, DeleteObject, EndPaint,
+        BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
         FillRect, GetStockObject, InvalidateRect, Rectangle, SelectObject, SetBkMode, SetWindowRgn,
-        HBRUSH, HDC, HGDIOBJ, HOLLOW_BRUSH, PAINTSTRUCT, PS_SOLID, RGN_DIFF, TRANSPARENT,
+        HBRUSH, HDC, HGDIOBJ, HOLLOW_BRUSH, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
     },
     UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
     UI::WindowsAndMessaging::*,
@@ -39,6 +39,9 @@ lazy_static! {
 // Global flag for ESC key pressed
 static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
 static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Preview mode: interior is draggable, not click-through
+/// Capture mode: interior is click-through, only top edge drags
+static PREVIEW_MODE: AtomicBool = AtomicBool::new(true);
 
 /// Check if ESC was pressed and reset the flag
 #[allow(dead_code)]
@@ -256,6 +259,65 @@ impl HollowBorder {
             }
         }
     }
+
+    /// Set preview mode - interior is draggable, not click-through
+    pub fn set_preview_mode(&self) {
+        PREVIEW_MODE.store(true, Ordering::SeqCst);
+        // Update the region and layered attributes
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Foundation::RECT;
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA};
+                    
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    
+                    // Preview mode: use alpha transparency (15% opaque = 38/255)
+                    // This makes interior visible but semi-transparent, and NOT click-through
+                    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
+                    
+                    let mut win_rect = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut win_rect);
+                    let w = win_rect.right - win_rect.left;
+                    let h = win_rect.bottom - win_rect.top;
+                    let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+                    apply_hollow_region(hwnd, w, h, border);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
+    }
+
+    /// Set capture mode - interior is click-through, only top edge drags
+    pub fn set_capture_mode(&self) {
+        PREVIEW_MODE.store(false, Ordering::SeqCst);
+        // Update the region and layered attributes
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Foundation::RECT;
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY};
+                    
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    
+                    // Capture mode: use color key for transparency (green = click-through)
+                    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
+                    
+                    let mut win_rect = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut win_rect);
+                    let w = win_rect.right - win_rect.left;
+                    let h = win_rect.bottom - win_rect.top;
+                    let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+                    apply_hollow_region(hwnd, w, h, border);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
+    }
 }
 
 impl Drop for HollowBorder {
@@ -415,14 +477,24 @@ fn run_window_thread(
     }
 }
 
-/// Apply hollow region to window (border visible, interior transparent/click-through)
+/// Apply window region based on mode
+/// Preview mode: full window is interactive (draggable from interior)
+/// Capture mode: hollow region (interior is click-through)
 #[cfg(windows)]
 unsafe fn apply_hollow_region(hwnd: HWND, width: i32, height: i32, border: i32) {
-    let outer_rgn = CreateRectRgn(0, 0, width, height);
-    let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
-    let _ = CombineRgn(Some(outer_rgn), Some(outer_rgn), Some(inner_rgn), RGN_DIFF);
-    let _ = DeleteObject(inner_rgn.into());
-    SetWindowRgn(hwnd, Some(outer_rgn), true);
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, RGN_DIFF};
+    
+    if PREVIEW_MODE.load(Ordering::SeqCst) {
+        // Preview mode: remove region, entire window is interactive
+        SetWindowRgn(hwnd, None, true);
+    } else {
+        // Capture mode: hollow region, interior is click-through
+        let outer_rgn = CreateRectRgn(0, 0, width, height);
+        let inner_rgn = CreateRectRgn(border, border, width - border, height - border);
+        let _ = CombineRgn(Some(outer_rgn), Some(outer_rgn), Some(inner_rgn), RGN_DIFF);
+        let _ = DeleteObject(inner_rgn.into());
+        SetWindowRgn(hwnd, Some(outer_rgn), true);
+    }
 }
 
 /// Window procedure
@@ -444,7 +516,19 @@ unsafe extern "system" fn window_proc(
 
             let border_width = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
             let border_color = BORDER_COLOR.lock().map(|c| *c).unwrap_or(0x4080FF);
+            let corner_length = 16.min(rect.right / 5).min(rect.bottom / 5); // Shorter corner lines
+            let corner_thickness = (border_width + 1).max(4); // Thinner corner lines
+            let is_preview = PREVIEW_MODE.load(Ordering::SeqCst);
 
+            // Fill background based on mode
+            // Preview mode: dark gray overlay to show it's not click-through
+            // Capture mode: green (color key) for transparency/click-through
+            let bg_color = if is_preview { 0x202020 } else { 0x00FF00 }; // Dark gray vs green
+            let bg_brush = CreateSolidBrush(COLORREF(bg_color));
+            let _ = FillRect(hdc, &rect, bg_brush);
+            let _ = DeleteObject(bg_brush.into());
+
+            // Draw main border (thinner)
             let pen = CreatePen(PS_SOLID, border_width, COLORREF(border_color));
             let brush = GetStockObject(HOLLOW_BRUSH);
 
@@ -458,6 +542,39 @@ unsafe extern "system" fn window_proc(
             SelectObject(hdc, old_brush);
             let _ = DeleteObject(HGDIOBJ(pen.0));
 
+            // Draw thicker corner lines (L-shaped at each corner)
+            let corner_brush = CreateSolidBrush(COLORREF(border_color));
+            
+            // Top-left corner - horizontal line
+            let tl_h = RECT { left: 0, top: 0, right: corner_length, bottom: corner_thickness };
+            let _ = FillRect(hdc, &tl_h, corner_brush);
+            // Top-left corner - vertical line
+            let tl_v = RECT { left: 0, top: 0, right: corner_thickness, bottom: corner_length };
+            let _ = FillRect(hdc, &tl_v, corner_brush);
+            
+            // Top-right corner - horizontal line
+            let tr_h = RECT { left: rect.right - corner_length, top: 0, right: rect.right, bottom: corner_thickness };
+            let _ = FillRect(hdc, &tr_h, corner_brush);
+            // Top-right corner - vertical line
+            let tr_v = RECT { left: rect.right - corner_thickness, top: 0, right: rect.right, bottom: corner_length };
+            let _ = FillRect(hdc, &tr_v, corner_brush);
+            
+            // Bottom-left corner - horizontal line
+            let bl_h = RECT { left: 0, top: rect.bottom - corner_thickness, right: corner_length, bottom: rect.bottom };
+            let _ = FillRect(hdc, &bl_h, corner_brush);
+            // Bottom-left corner - vertical line
+            let bl_v = RECT { left: 0, top: rect.bottom - corner_length, right: corner_thickness, bottom: rect.bottom };
+            let _ = FillRect(hdc, &bl_v, corner_brush);
+            
+            // Bottom-right corner - horizontal line
+            let br_h = RECT { left: rect.right - corner_length, top: rect.bottom - corner_thickness, right: rect.right, bottom: rect.bottom };
+            let _ = FillRect(hdc, &br_h, corner_brush);
+            // Bottom-right corner - vertical line
+            let br_v = RECT { left: rect.right - corner_thickness, top: rect.bottom - corner_length, right: rect.right, bottom: rect.bottom };
+            let _ = FillRect(hdc, &br_v, corner_brush);
+            
+            let _ = DeleteObject(corner_brush.into());
+
             let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
@@ -466,7 +583,10 @@ unsafe extern "system" fn window_proc(
             let mut rect = RECT::default();
             let _ = GetClientRect(hwnd, &mut rect);
 
-            let brush = CreateSolidBrush(COLORREF(0x00FF00)); // Green = transparent
+            // Use same background color logic as WM_PAINT
+            let is_preview = PREVIEW_MODE.load(Ordering::SeqCst);
+            let bg_color = if is_preview { 0x202020 } else { 0x00FF00 };
+            let brush = CreateSolidBrush(COLORREF(bg_color));
             let _ = FillRect(hdc, &rect, brush);
             let _ = DeleteObject(brush.into());
 
@@ -505,14 +625,15 @@ unsafe extern "system" fn subclass_proc(
         let _ = GetWindowRect(hwnd, &mut rect);
 
         let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4).max(8);
-        let corner_size = border + 4;
+        let corner_size = 20.max(border * 2); // Corner hit area
+        let is_preview = PREVIEW_MODE.load(Ordering::SeqCst);
 
         let on_left = x >= rect.left && x < rect.left + corner_size;
         let on_right = x >= rect.right - corner_size && x < rect.right;
         let on_top = y >= rect.top && y < rect.top + corner_size;
         let on_bottom = y >= rect.bottom - corner_size && y < rect.bottom;
 
-        // Corner hit tests
+        // Corner hit tests (priority - check first)
         if on_top && on_left {
             return LRESULT(HTTOPLEFT as isize);
         }
@@ -526,7 +647,7 @@ unsafe extern "system" fn subclass_proc(
             return LRESULT(HTBOTTOMRIGHT as isize);
         }
 
-        // Edge hit tests
+        // Edge hit tests (narrower than corners)
         if x >= rect.left && x < rect.left + border {
             return LRESULT(HTLEFT as isize);
         }
@@ -534,26 +655,38 @@ unsafe extern "system" fn subclass_proc(
             return LRESULT(HTRIGHT as isize);
         }
         if y >= rect.top && y < rect.top + border {
-            return LRESULT(HTCAPTION as isize);
+            // Top edge: HTCAPTION in capture mode (drag), HTTOP in preview (resize from top too)
+            if is_preview {
+                return LRESULT(HTTOP as isize);
+            } else {
+                return LRESULT(HTCAPTION as isize);
+            }
         }
         if y >= rect.bottom - border && y < rect.bottom {
             return LRESULT(HTBOTTOM as isize);
         }
 
-        // Interior = transparent (click through)
-        return LRESULT(HTTRANSPARENT as isize);
+        // Interior behavior depends on mode
+        if is_preview {
+            // Preview mode: interior is draggable
+            return LRESULT(HTCAPTION as isize);
+        } else {
+            // Capture mode: interior is click-through
+            return LRESULT(HTTRANSPARENT as isize);
+        }
     }
 
     if msg == WM_SETCURSOR {
         let hit_test = (lparam.0 & 0xFFFF) as u16 as u32;
+        let is_preview = PREVIEW_MODE.load(Ordering::SeqCst);
 
         let cursor_id = match hit_test {
-            x if x == HTCAPTION => Some(IDC_SIZEALL),
+            x if x == HTCAPTION => Some(IDC_SIZEALL),  // Move cursor
             x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
             x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
             x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
             x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
-            _ => None,
+            _ => if is_preview { Some(IDC_SIZEALL) } else { None },
         };
 
         if let Some(id) = cursor_id {
