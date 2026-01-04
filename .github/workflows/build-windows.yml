@@ -66,8 +66,14 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add Cargo.toml ui/package.json tauri.conf.json
-          git diff --staged --quiet || git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
-          git push 2>$null || Write-Host "Nothing to push or already up to date"
+          git diff --staged --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+          }
+          git push 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Nothing to push or already up to date"
+          }
         shell: powershell
       
       - name: Setup Node.js
@@ -143,7 +149,10 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}" 2>$null || Write-Host "Tag already exists or push failed"
+          git push origin "v${{ github.event.inputs.version }}" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Tag already exists or push failed"
+          }
         shell: powershell
       
       - name: Create GitHub Release
