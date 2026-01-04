@@ -2,8 +2,7 @@
 //
 // TODO: Implement using PipeWire (modern) or X11/XComposite (legacy)
 
-use super::{CaptureEngine, CaptureFrame};
-use crate::app::CaptureRect;
+use super::{CaptureEngine, CaptureFrame, CaptureRect};
 use anyhow::{anyhow, Result};
 
 /// Linux capture engine (stub)
@@ -54,5 +53,10 @@ impl CaptureEngine for LinuxCaptureEngine {
 
     fn get_region(&self) -> Option<CaptureRect> {
         self.region
+    }
+
+    fn update_region(&mut self, region: CaptureRect) -> Result<()> {
+        self.region = Some(region);
+        Ok(())
     }
 }

@@ -10,3 +10,9 @@ pub use capture::{CaptureEngine, CaptureFrame, CaptureRect, CaptureSettings};
 
 #[cfg(target_os = "windows")]
 pub use capture::windows::WindowsCaptureEngine;
+
+#[cfg(target_os = "macos")]
+pub use capture::macos::MacOSCaptureEngine;
+
+#[cfg(target_os = "linux")]
+pub use capture::linux::LinuxCaptureEngine;

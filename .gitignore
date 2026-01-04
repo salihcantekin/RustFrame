@@ -84,8 +84,9 @@ $RECYCLE.BIN/
 .LSOverride
 ._*
 
-# macOS Icon files
-Icon?
+# macOS Icon metadata files (not the icons/ folder!)
+Icon
+Icon\r
 
 # macOS Finder window settings
 .Spotlight-V100

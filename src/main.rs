@@ -11,9 +11,6 @@ use tauri::State;
 // Import capture engine from library
 use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRect};
 
-#[cfg(target_os = "windows")]
-use rustframe_capture::capture::windows::{WindowsCaptureEngine, WindowsGdiCopyCaptureEngine};
-
 // Import modules
 mod destination_window;
 mod hollow_border;
