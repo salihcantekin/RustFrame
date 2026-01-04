@@ -7,14 +7,6 @@ on:
         description: 'Version (e.g., 1.2.0)'
         required: true
         type: string
-      runner:
-        description: 'Runner to use'
-        required: true
-        type: choice
-        options:
-          - windows-latest
-          - self-hosted
-        default: 'windows-latest'
       create_release:
         description: 'Create GitHub release'
         required: true
@@ -27,8 +19,8 @@ env:
 
 jobs:
   build-windows:
-    name: Build Windows
-    runs-on: ${{ github.event.inputs.runner }}
+    name: Build Windows (GitHub Hosted)
+    runs-on: windows-latest
     
     steps:
       - name: Checkout code
@@ -66,15 +58,9 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add Cargo.toml ui/package.json tauri.conf.json
-          git diff --staged --quiet
-          if ($LASTEXITCODE -ne 0) {
-            git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
-          }
-          git push 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Nothing to push or already up to date"
-          }
-        shell: powershell
+          git diff --staged --quiet || git commit -m "chore: bump version to ${{ github.event.inputs.version }}"
+          git push || echo "Nothing to push or already up to date"
+        shell: bash
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -139,27 +125,23 @@ jobs:
           Write-Host "- **Platform**: Windows x64" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
           Write-Host "- **Runner**: ${{ github.event.inputs.runner }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
           Write-Host "- **Rust Version**: $(rustc --version)" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Build Number**: ${{ github.run_number }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Commit**: ${{ github.sha }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-        shell: powershell
-      
-      - name: Create Git tag
-        if: github.event.inputs.create_release == 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Platform**: Windows x64 (GitHub Hosted)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        shell: bashcal user.name "github-actions[bot]"
           git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
           git push origin "v${{ github.event.inputs.version }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "Tag already exists or push failed"
           }
         shell: powershell
-      
-      - name: Create GitHub Release
-        if: github.event.inputs.create_release == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ github.event.inputs.version }}
+       || echo "Tag already exists"
+          git push origin "v${{ github.event.inputs.version }}" || echo "Tag already pushed or failed"
+        shell: bashgithub.event.inputs.version }}
           name: RustFrame v${{ github.event.inputs.version }}
           body: |
             # RustFrame v${{ github.event.inputs.version }}
@@ -168,10 +150,10 @@ jobs:
             
             Built with:
             - Runner: ${{ github.event.inputs.runner }}
-            - Rust: $(rustc --version)
-            - Build #${{ github.run_number }}
+            - Rust: $(rustc  (GitHub Hosted)
             
-            ### Installation
+            Built with:
+            - Runner: windows-latest
             1. Download `RustFrame-Windows-x64-*.zip`
             2. Extract the archive
             3. Run `rustframe.exe`
