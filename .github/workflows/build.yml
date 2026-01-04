@@ -1,0 +1,215 @@
+name: Build RustFrame
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      
+      - name: Install UI dependencies
+        working-directory: ./ui
+        run: npm ci
+      
+      - name: Build UI
+        working-directory: ./ui
+        run: npm run build
+      
+      - name: Build Rust (Release)
+        run: cargo build --release --verbose
+      
+      - name: Run tests
+        run: cargo test --release --verbose
+      
+      - name: Create distribution folder
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/release/rustframe.exe dist/
+          Copy-Item README.md dist/
+          Copy-Item LICENSE dist/
+          Copy-Item QUICK_START.md dist/
+        shell: powershell
+      
+      - name: Create ZIP archive
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath RustFrame-Windows-x64.zip
+        shell: powershell
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustFrame-Windows-x64
+          path: RustFrame-Windows-x64.zip
+          retention-days: 30
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      
+      - name: Install UI dependencies
+        working-directory: ./ui
+        run: npm ci
+      
+      - name: Build UI
+        working-directory: ./ui
+        run: npm run build
+      
+      - name: Build Rust for ARM64 (Apple Silicon)
+        run: cargo build --release --target aarch64-apple-darwin --verbose
+      
+      - name: Build Rust for x86_64 (Intel)
+        run: cargo build --release --target x86_64-apple-darwin --verbose
+      
+      - name: Create universal binary
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create \
+            target/aarch64-apple-darwin/release/rustframe \
+            target/x86_64-apple-darwin/release/rustframe \
+            -output target/universal-apple-darwin/release/rustframe
+          lipo -info target/universal-apple-darwin/release/rustframe
+      
+      - name: Create .app bundle
+        run: |
+          mkdir -p RustFrame.app/Contents/MacOS
+          mkdir -p RustFrame.app/Contents/Resources
+          
+          # Copy binary
+          cp target/universal-apple-darwin/release/rustframe RustFrame.app/Contents/MacOS/
+          chmod +x RustFrame.app/Contents/MacOS/rustframe
+          
+          # Create Info.plist
+          cat > RustFrame.app/Contents/Info.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleExecutable</key>
+              <string>rustframe</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.salihcantekin.rustframe</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>RustFrame</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          
+          # Ad-hoc code signing (for local use, not App Store)
+          codesign --force --deep --sign - RustFrame.app
+      
+      - name: Create distribution folder
+        run: |
+          mkdir -p dist
+          cp -r RustFrame.app dist/
+          cp README.md dist/
+          cp LICENSE dist/
+          cp QUICK_START.md dist/
+      
+      - name: Create ZIP archive
+        run: |
+          cd dist
+          zip -r ../RustFrame-macOS-Universal.zip *
+          cd ..
+      
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RustFrame-macOS-Universal
+          path: RustFrame-macOS-Universal.zip
+          retention-days: 30
+  
+  create-release:
+    name: Create Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RustFrame-Windows-x64
+      
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RustFrame-macOS-Universal
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            RustFrame-Windows-x64.zip
+            RustFrame-macOS-Universal.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
