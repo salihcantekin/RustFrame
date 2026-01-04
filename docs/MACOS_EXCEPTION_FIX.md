@@ -23,7 +23,15 @@ However, `Cargo.toml` only declared `core-graphics = "0.24"` for macOS, missing:
 
 ### Why "Rust Cannot Catch Foreign Exceptions"?
 
-When Objective-C code throws an `NSException`, Rust's panic handling mechanism cannot catch it by default. The `objc` crate provides an `exception` feature that:
+When Objective-C code throws an `NSException`, Rust's panic handling mechanism cannot catch it by default. 
+
+**Important Note**: Most modern Cocoa APIs use `NSError` for expected error conditions. However, `NSException` is still thrown for:
+- Programming errors (invalid parameters, contract violations)
+- Some legacy APIs
+- Runtime errors in graphics/window operations
+- Invalid state access
+
+The `objc` crate provides an `exception` feature that:
 
 1. Intercepts Objective-C exceptions at the FFI boundary
 2. Converts them to Rust panics
@@ -33,7 +41,9 @@ Without this feature enabled, any `NSException` thrown by Cocoa APIs would:
 - Bypass Rust's panic handling
 - Potentially cause undefined behavior
 - Fail to properly clean up resources
-- Trigger the "cannot catch foreign exceptions" error
+- Trigger the "cannot catch foreign exceptions" error during compilation
+
+This is a compile-time safety check - Rust refuses to compile code that might call exception-throwing foreign code without proper handling infrastructure.
 
 ## Solution
 
@@ -120,25 +130,31 @@ The application should now compile and run without the "foreign exceptions" erro
 
 ## Potential Exception Sources
 
-The following macOS API calls could potentially throw NSExceptions:
+The following macOS API calls could potentially throw NSExceptions (typically for programming errors):
 
 1. **Window Creation**
    - `NSWindow::alloc(nil).initWithContentRect_styleMask_backing_defer_(...)`
-   - Creating windows with invalid parameters
+   - NSException may be thrown for: Invalid style mask combinations, invalid backing store type, or nil dereference
 
 2. **Display Capture**
    - `CGDisplay::image()` - Screen capture operations
+   - May throw if: Display is invalid, insufficient permissions, or graphics context errors
    - `CGDisplay::active_displays()` - Display enumeration
+   - May throw if: Display system is unavailable
 
 3. **Graphics Context**
    - `CGContext::create_bitmap_context(...)` - Invalid context parameters
+   - NSException if: Invalid dimensions, null data pointer with zero bytes, or invalid color space
    - `CGContext::draw_image(...)` - Drawing operations
+   - NSException if: Invalid rect dimensions or null image
 
 4. **Custom NSView Classes**
    - Runtime class registration with `objc::declare::ClassDecl`
+   - NSException if: Class name conflicts, invalid superclass, or duplicate method registration
    - Method invocations via `msg_send!`
+   - NSException if: Selector doesn't exist, wrong parameter types, or object is deallocated
 
-All of these are now properly protected by the exception handling mechanism.
+**Note**: Most of these exceptions indicate programming errors rather than recoverable runtime errors. The exception feature ensures these are properly caught and converted to Rust panics for debugging.
 
 ## References
 
