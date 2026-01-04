@@ -165,27 +165,47 @@ fn draw_click_highlight(
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum PreviewMode {
-    TauriCanvas, // Cross-platform, WebView overhead
-    WinApiGdi,   // Windows-only, lightweight (default)
+    TauriCanvas,      // Cross-platform, WebView overhead
+    #[cfg(windows)]
+    WinApiGdi,        // Windows-only, lightweight
 }
 
 impl Default for PreviewMode {
     fn default() -> Self {
-        PreviewMode::WinApiGdi
+        #[cfg(windows)]
+        {
+            PreviewMode::WinApiGdi
+        }
+        #[cfg(not(windows))]
+        {
+            PreviewMode::TauriCanvas
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CaptureMethod {
-    /// Windows.Graphics.Capture (modern, GPU-backed)
+    /// Windows.Graphics.Capture (Windows only, modern, GPU-backed)
+    #[cfg(windows)]
     Wgc,
-    /// GDI screen copy (RegionToShare-style, broad compatibility)
+    /// GDI screen copy (Windows only, broad compatibility)
+    #[cfg(windows)]
     GdiCopy,
+    /// macOS/Linux CoreGraphics-based capture
+    #[cfg(not(windows))]
+    CoreGraphics,
 }
 
 impl Default for CaptureMethod {
     fn default() -> Self {
-        CaptureMethod::Wgc
+        #[cfg(windows)]
+        {
+            CaptureMethod::Wgc
+        }
+        #[cfg(not(windows))]
+        {
+            CaptureMethod::CoreGraphics
+        }
     }
 }
 
@@ -278,6 +298,7 @@ impl Default for Settings {
 fn create_capture_engine_for_settings(settings: &Settings) -> Result<Box<dyn CaptureEngine>, String> {
     #[cfg(target_os = "windows")]
     {
+        use rustframe_capture::capture::windows::{WindowsCaptureEngine, WindowsGdiCopyCaptureEngine};
         return match settings.capture_method {
             CaptureMethod::Wgc => WindowsCaptureEngine::new()
                 .map(|e| Box::new(e) as Box<dyn CaptureEngine>)
@@ -285,13 +306,26 @@ fn create_capture_engine_for_settings(settings: &Settings) -> Result<Box<dyn Cap
             CaptureMethod::GdiCopy => WindowsGdiCopyCaptureEngine::new()
                 .map(|e| Box::new(e) as Box<dyn CaptureEngine>)
                 .map_err(|e| e.to_string()),
+            _ => Err("Invalid capture method for Windows".to_string()),
         };
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = settings;
-        create_capture_engine().map_err(|e| e.to_string())
+        use rustframe_capture::capture::macos::MacOSCaptureEngine;
+        let _ = settings; // CoreGraphics is the only method on macOS
+        MacOSCaptureEngine::new()
+            .map(|e| Box::new(e) as Box<dyn CaptureEngine>)
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use rustframe_capture::capture::linux::LinuxCaptureEngine;
+        let _ = settings; // Only stub method available on Linux for now
+        LinuxCaptureEngine::new()
+            .map(|e| Box::new(e) as Box<dyn CaptureEngine>)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -765,6 +799,7 @@ async fn start_capture(
         settings.preview_mode
     );
     match settings.preview_mode {
+        #[cfg(target_os = "windows")]
         PreviewMode::WinApiGdi => {
             let config = DestinationWindowConfig {
                 alpha: settings.winapi_destination_alpha,
@@ -1091,6 +1126,8 @@ pub struct MonitorInfo {
     pub refresh_rate: u32,
 }
 
+// Windows implementation
+#[cfg(target_os = "windows")]
 #[tauri::command]
 async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
     use std::mem;
@@ -1158,37 +1195,66 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
     Ok(monitors)
 }
 
+// Non-Windows stub
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
+    // TODO: Implement for macOS and Linux
+    Ok(vec![MonitorInfo {
+        id: 0,
+        name: "Primary Display".to_string(),
+        x: 0,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        is_primary: true,
+        refresh_rate: 60,
+    }])
+}
+
+// Windows implementation
+#[cfg(target_os = "windows")]
 #[tauri::command]
 async fn get_screen_dimensions() -> Result<(u32, u32), String> {
-    #[cfg(windows)]
-    {
-        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-        unsafe {
-            let w = GetSystemMetrics(SM_CXSCREEN) as u32;
-            let h = GetSystemMetrics(SM_CYSCREEN) as u32;
-            return Ok((w, h));
-        }
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+    unsafe {
+        let w = GetSystemMetrics(SM_CXSCREEN) as u32;
+        let h = GetSystemMetrics(SM_CYSCREEN) as u32;
+        Ok((w, h))
     }
-    #[cfg(not(windows))]
+}
+
+// Non-Windows stub
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn get_screen_dimensions() -> Result<(u32, u32), String> {
+    // TODO: Implement for macOS and Linux using proper APIs
     Ok((1920, 1080))
 }
 
+// Windows implementation
+#[cfg(target_os = "windows")]
 #[tauri::command]
 async fn get_monitor_refresh_rate() -> Result<u32, String> {
-    #[cfg(windows)]
-    {
-        use windows::Win32::Graphics::Gdi::{
-            EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
-        };
-        unsafe {
-            let mut devmode: DEVMODEW = std::mem::zeroed();
-            devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
-            if EnumDisplaySettingsW(None, ENUM_CURRENT_SETTINGS, &mut devmode).as_bool() {
-                return Ok(devmode.dmDisplayFrequency.max(30));
-            }
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
+    };
+    unsafe {
+        let mut devmode: DEVMODEW = std::mem::zeroed();
+        devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if EnumDisplaySettingsW(None, ENUM_CURRENT_SETTINGS, &mut devmode).as_bool() {
+            return Ok(devmode.dmDisplayFrequency.max(30));
         }
+        Ok(60)
     }
-    Ok(60)
+}
+
+// Non-Windows stub
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+async fn get_monitor_refresh_rate() -> Result<u32, String> {
+    // TODO: Implement for macOS and Linux
+    Ok(60) // Default to 60Hz
 }
 
 // ============================================================================

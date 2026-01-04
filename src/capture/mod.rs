@@ -13,7 +13,7 @@ pub mod macos;
 pub mod linux;
 
 /// Screen region to capture
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaptureRect {
     pub x: i32,
     pub y: i32,
