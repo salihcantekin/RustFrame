@@ -3,6 +3,10 @@ name: Build macOS
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Version (e.g., 1.2.0)'
+        required: true
+        type: string
       runner:
         description: 'Runner to use'
         required: true
@@ -22,6 +26,11 @@ on:
           - arm64-only
           - x86_64-only
         default: 'universal'
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +44,37 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Update version in project files
+        run: |
+          version="${{ github.event.inputs.version }}"
+          echo "Updating version to: $version"
+          
+          # Update Cargo.toml
+          sed -i.bak "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$version\"/" Cargo.toml
+          echo "✓ Updated Cargo.toml"
+          
+          # Update package.json
+          sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$version\"/" ui/package.json
+          echo "✓ Updated package.json"
+          
+          # Update tauri.conf.json
+          sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$version\"/" tauri.conf.json
+          echo "✓ Updated tauri.conf.json"
+          
+          # Remove backup files
+          rm -f Cargo.toml.bak ui/package.json.bak tauri.conf.json.bak
+          
+          echo ""
+          echo "✅ Version updated to $version in all files"
+      
+      - name: Commit version changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Cargo.toml ui/package.json tauri.conf.json
+          git commit -m "chore: bump version to ${{ github.event.inputs.version }}" || echo "No changes to commit"
+          git push || echo "Nothing to push"
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -169,9 +209,51 @@ jobs:
         run: |
           echo "## Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platform**: macOS" >> $GITHUB_STEP_SUMMARY
           echo "- **Architecture**: ${{ steps.binary-path.outputs.arch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Create Git tag
+        if: github.event.inputs.create_release == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}" || echo "Tag already exists"
+      
+      - name: Create or Update GitHub Release
+        if: github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: RustFrame v${{ github.event.inputs.version }}
+          body: |
+            # RustFrame v${{ github.event.inputs.version }}
+            
+            ## macOS Build
+            
+            Built with:
+            - Architecture: ${{ steps.binary-path.outputs.arch }}
+            - Runner: ${{ github.event.inputs.runner }}
+            - Rust: $(rustc --version)
+            - Build #${{ github.run_number }}
+            
+            ### Installation
+            1. Download `RustFrame-macOS-*.zip`
+            2. Extract the archive
+            3. Drag `RustFrame.app` to Applications folder
+            4. Right-click and select "Open" on first launch (if from self-hosted runner)
+            5. Grant Screen Recording permission when prompted
+            
+            ### Notes
+            - Universal binary supports both Apple Silicon and Intel Macs
+            - See QUICK_START.md for detailed instructions
+          files: RustFrame-macOS-*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

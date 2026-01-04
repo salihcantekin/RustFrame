@@ -3,6 +3,10 @@ name: Build Windows
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Version (e.g., 1.2.0)'
+        required: true
+        type: string
       runner:
         description: 'Runner to use'
         required: true
@@ -11,6 +15,11 @@ on:
           - windows-latest
           - self-hosted
         default: 'windows-latest'
+      create_release:
+        description: 'Create GitHub release'
+        required: true
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +33,41 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
+      - name: Update version in project files
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          Write-Host "Updating version to: $version"
+          
+          # Update Cargo.toml
+          $cargoContent = Get-Content Cargo.toml -Raw
+          $cargoContent = $cargoContent -replace 'version = "\d+\.\d+\.\d+"', "version = `"$version`""
+          $cargoContent | Set-Content Cargo.toml -NoNewline
+          Write-Host "✓ Updated Cargo.toml"
+          
+          # Update package.json
+          $packageContent = Get-Content ui/package.json -Raw
+          $packageContent = $packageContent -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$version`""
+          $packageContent | Set-Content ui/package.json -NoNewline
+          Write-Host "✓ Updated package.json"
+          
+          # Update tauri.conf.json
+          $tauriContent = Get-Content tauri.conf.json -Raw
+          $tauriContent = $tauriContent -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$version`""
+          $tauriContent | Set-Content tauri.conf.json -NoNewline
+          Write-Host "✓ Updated tauri.conf.json"
+          
+          Write-Host "`n✅ Version updated to $version in all files"
+        shell: powershell
+      
+      - name: Commit version changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add Cargo.toml ui/package.json tauri.conf.json
+          git commit -m "chore: bump version to ${{ github.event.inputs.version }}" || echo "No changes to commit"
+          git push || echo "Nothing to push"
+        shell: bash
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -84,9 +128,49 @@ jobs:
         run: |
           echo "## Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platform**: Windows x64" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
         shell: bash
+      
+      - name: Create Git tag
+        if: github.event.inputs.create_release == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
+          git push origin "v${{ github.event.inputs.version }}"
+        shell: bash
+      
+      - name: Create GitHub Release
+        if: github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: RustFrame v${{ github.event.inputs.version }}
+          body: |
+            # RustFrame v${{ github.event.inputs.version }}
+            
+            ## Windows Build
+            
+            Built with:
+            - Runner: ${{ github.event.inputs.runner }}
+            - Rust: $(rustc --version)
+            - Build #${{ github.run_number }}
+            
+            ### Installation
+            1. Download `RustFrame-Windows-x64-*.zip`
+            2. Extract the archive
+            3. Run `rustframe.exe`
+            
+            ### Notes
+            - First run may require Windows Defender approval
+            - See QUICK_START.md for detailed instructions
+          files: RustFrame-Windows-x64-*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
