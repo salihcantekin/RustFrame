@@ -94,6 +94,8 @@ windows = { version = "0.62.2", features = [
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
+cocoa = "0.26"
+objc = { version = "0.2.7", features = ["exception"] }
 
 # Linux-specific dependencies (placeholder for future)
 [target.'cfg(target_os = "linux")'.dependencies]
