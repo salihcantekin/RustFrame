@@ -1,5 +1,7 @@
 # RustFrame - GitHub Copilot Instructions
 
+> **Note**: These instructions apply to both GitHub Copilot and AI agents. All contributors (human and AI) must follow these guidelines to maintain code quality and consistency.
+
 ## Project Overview
 
 **RustFrame** is a high-performance, cross-platform screen capture application built with Rust + Tauri 2 and React. The primary feature is creating a **Preview Window** that displays only a user-selected region of the screen, enabling users with wide-screen monitors to share specific areas in video conferencing apps (Discord, Google Meets, Zoom, Teams) instead of their entire screen.
@@ -374,6 +376,57 @@ cargo tauri build
 ### UI Components
 - `ui/src/App.tsx` - Main application UI
 - `ui/src/components/SettingsDialog.tsx` - Settings modal
+
+---
+
+## Development Workflow
+
+### User Approval Requirements
+
+**CRITICAL**: Always request user approval before proceeding in these scenarios:
+
+1. **Major Platform API Changes**
+   - Using low-level OS APIs (Win32, Cocoa, X11, etc.)
+   - Modifying capture engine implementations
+   - Changing window management or rendering logic
+   - Adding new platform-specific dependencies
+
+2. **Large-Scale Refactoring**
+   - Restructuring more than 5 files
+   - Changing core architectural patterns
+   - Modifying build configuration or dependencies
+   - Altering cross-platform abstraction layers
+
+3. **Breaking Changes**
+   - Changes that affect settings file format
+   - Modifications to public API signatures
+   - Updates that require data migration
+   - Changes that impact backward compatibility
+
+4. **Small Feature with Many Changes**
+   - If a seemingly simple feature requires modifications to 10+ files
+   - When adding a feature impacts multiple platform implementations
+   - If changes affect both backend and frontend extensively
+
+**Approval Process**:
+```
+1. Explain what needs to be changed and why
+2. List all files that will be modified
+3. Highlight potential risks or breaking changes
+4. Wait for explicit user confirmation before proceeding
+5. If user declines, propose alternative approaches
+```
+
+**Example Approval Request**:
+```
+I need to implement [feature]. This requires:
+- Modifying Windows capture API in src/capture/windows/wgc.rs
+- Adding new dependency: windows-capture v0.2.0
+- Updating 3 platform-specific files
+
+Risks: May affect capture performance on older Windows versions.
+Shall I proceed?
+```
 
 ---
 

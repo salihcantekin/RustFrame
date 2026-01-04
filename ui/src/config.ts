@@ -27,3 +27,42 @@ export const AppConfig = {
 } as const;
 
 export type AppConfigType = typeof AppConfig;
+
+// ============================================================================
+// Platform Types
+// ============================================================================
+
+export interface PlatformInfo {
+  os_name: string;
+  os_type: "windows" | "macos" | "linux";
+  os_version: string;
+  available_capture_methods: CaptureMethodInfo[];
+  all_platforms_capture_methods: PlatformCaptureMethodInfo[];
+  capabilities: PlatformCapabilities;
+}
+
+export interface CaptureMethodInfo {
+  id: string;
+  name: string;
+  description: string;
+  recommended: boolean;
+  hardware_accelerated: boolean;
+}
+
+export interface PlatformCaptureMethodInfo {
+  platform_name: string;
+  platform_type: string;
+  id: string;
+  name: string;
+  description: string;
+  recommended: boolean;
+  hardware_accelerated: boolean;
+}
+
+export interface PlatformCapabilities {
+  supports_custom_rendering: boolean;
+  supports_transparency: boolean;
+  supports_hardware_acceleration: boolean;
+  has_winapi_options: boolean;
+}
+

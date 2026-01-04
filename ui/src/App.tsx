@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-shell";
 import SettingsDialog from "./components/SettingsDialog";
-import { AppConfig } from "./config";
+import { AppConfig, PlatformInfo } from "./config";
 
 export interface Settings {
   // Mouse & Cursor
@@ -20,10 +20,10 @@ export interface Settings {
   // Performance
   target_fps: number;
 
-  // Capture Method
-  capture_method: "Wgc" | "GdiCopy";
+  // Capture Method (platform-specific)
+  capture_method: "Wgc" | "GdiCopy" | "CoreGraphics";
   
-  // Preview Mode
+  // Preview Mode (platform-specific)
   preview_mode: "TauriCanvas" | "WinApiGdi";
 
   // Advanced (hidden) WinAPI Destination Window overrides
@@ -69,6 +69,7 @@ export interface CaptureProfileHints {
 
 function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showDonate, setShowDonate] = useState(false);
@@ -109,7 +110,12 @@ function App() {
   // Combined initialization to ensure proper order
   const initializeApp = async () => {
     try {
-      // First load settings
+      // First load platform info
+      const platform = await invoke<PlatformInfo>("get_platform_info");
+      setPlatformInfo(platform);
+      console.log("Platform detected:", platform.os_name, platform.os_version);
+
+      // Then load settings
       const loadedSettings = await invoke<Settings>("get_settings");
       setSettings(loadedSettings);
 
@@ -518,9 +524,10 @@ function App() {
       </div>
 
       {/* Settings Dialog */}
-      {showSettings && (
+      {showSettings && platformInfo && (
         <SettingsDialog
           settings={settings}
+          platformInfo={platformInfo}
           captureRegion={captureRegion}
           monitors={monitors}
           selectedMonitor={selectedMonitor}

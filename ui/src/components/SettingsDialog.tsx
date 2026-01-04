@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Settings, MonitorInfo } from "../App";
+import { PlatformInfo } from "../config";
 
 interface CaptureRegion {
   x: number;
@@ -12,6 +13,7 @@ interface CaptureRegion {
 
 interface SettingsDialogProps {
   settings: Settings;
+  platformInfo: PlatformInfo;
   captureRegion: CaptureRegion;
   monitors: MonitorInfo[];
   selectedMonitor: number;
@@ -24,7 +26,8 @@ interface SettingsDialogProps {
 type TabType = "general" | "region" | "capture" | "advanced";
 
 function SettingsDialog({ 
-  settings, 
+  settings,
+  platformInfo,
   captureRegion, 
   monitors, 
   selectedMonitor, 
@@ -40,6 +43,12 @@ function SettingsDialog({
   const [previewEnabled, setPreviewEnabled] = useState(false);
   const [positionPreset, setPositionPreset] = useState<string>("center");
   const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false); // Flag to prevent update loops
+  const [devMode, setDevMode] = useState(false);
+
+  // Load dev mode status
+  useEffect(() => {
+    invoke<boolean>("is_dev_mode").then(setDevMode).catch(() => setDevMode(false));
+  }, []);
 
   // Get max FPS based on selected monitor
   // Round to nearest standard refresh rate (handles 119.9Hz -> 120Hz)
@@ -694,47 +703,141 @@ function SettingsDialog({
 
           {activeTab === "capture" && (
             <div className="space-y-6">
+              {/* Platform Info Banner */}
+              <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-lg p-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  <div>
+                    <div className="font-semibold text-white">{platformInfo.os_name} {platformInfo.os_version}</div>
+                    <div className="text-xs text-gray-400">
+                      {platformInfo.capabilities.supports_hardware_acceleration && "Hardware Acceleration Supported"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <h3 className="text-lg font-semibold mb-4">Capture Method</h3>
                 <div className="space-y-3">
-                  <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
-                    <input
-                      type="radio"
-                      name="capture_method"
-                      checked={localSettings.capture_method === "Wgc"}
-                      onChange={() =>
-                        setLocalSettings({
-                          ...localSettings,
-                          capture_method: "Wgc",
-                        })
-                      }
-                      className="w-4 h-4 text-blue-600"
-                    />
-                    <div className="flex-1">
-                      <div className="font-medium">Windows.Graphics.Capture (WGC)</div>
-                      <div className="text-sm text-gray-400">Modern API, GPU-backed, best quality/performance</div>
-                    </div>
-                  </label>
-                  <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
-                    <input
-                      type="radio"
-                      name="capture_method"
-                      checked={localSettings.capture_method === "GdiCopy"}
-                      onChange={() =>
-                        setLocalSettings({
-                          ...localSettings,
-                          capture_method: "GdiCopy",
-                        })
-                      }
-                      className="w-4 h-4 text-blue-600"
-                    />
-                    <div className="flex-1">
-                      <div className="font-medium">GDI Screen Copy (RegionToShare-style)</div>
-                      <div className="text-sm text-gray-400">Compatibility option; can be slower and may miss some protected content</div>
-                    </div>
-                  </label>
+                  {platformInfo.available_capture_methods.map((method) => (
+                    <label 
+                      key={method.id}
+                      className={`flex items-center space-x-3 cursor-pointer p-3 rounded-lg transition-colors ${
+                        localSettings.capture_method === method.id 
+                          ? 'bg-blue-600/20 border-2 border-blue-500' 
+                          : 'bg-gray-700 border-2 border-transparent hover:bg-gray-650'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="capture_method"
+                        checked={localSettings.capture_method === method.id}
+                        onChange={() =>
+                          setLocalSettings({
+                            ...localSettings,
+                            capture_method: method.id as any,
+                          })
+                        }
+                        className="w-4 h-4 text-blue-600"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{method.name}</span>
+                          {method.recommended && (
+                            <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
+                              Recommended
+                            </span>
+                          )}
+                          {method.hardware_accelerated && (
+                            <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-medium">
+                              GPU
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm text-gray-400 mt-1">{method.description}</div>
+                      </div>
+                    </label>
+                  ))}
                 </div>
               </div>
+
+              {/* Dev Mode: Show all platforms' methods */}
+              {devMode && platformInfo.all_platforms_capture_methods.length > 0 && (
+                <div className="border-t border-gray-700 pt-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                    <h3 className="text-lg font-semibold text-yellow-400">Dev Mode: All Platforms Preview</h3>
+                  </div>
+                  <p className="text-sm text-gray-400 mb-4">
+                    Below are capture methods from all supported platforms (read-only). You can only use methods available for {platformInfo.os_name}.
+                  </p>
+                  
+                  {["Windows", "macOS", "Linux"].map((platformName) => {
+                    const methods = platformInfo.all_platforms_capture_methods.filter(
+                      (m) => m.platform_name === platformName
+                    );
+                    if (methods.length === 0) return null;
+
+                    const isCurrentPlatform = platformInfo.os_name === platformName;
+
+                    return (
+                      <div key={platformName} className="mb-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <h4 className="font-medium text-gray-300">{platformName}</h4>
+                          {isCurrentPlatform && (
+                            <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-medium">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          {methods.map((method) => (
+                            <div
+                              key={`${platformName}-${method.id}`}
+                              className={`flex items-center space-x-3 p-3 rounded-lg border-2 ${
+                                isCurrentPlatform
+                                  ? 'bg-gray-700/50 border-gray-600'
+                                  : 'bg-gray-800/50 border-gray-700 opacity-60'
+                              }`}
+                            >
+                              <div className="w-4 h-4 rounded-full border-2 border-gray-500 flex items-center justify-center">
+                                {isCurrentPlatform && localSettings.capture_method === method.id && (
+                                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                                )}
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-gray-300">{method.name}</span>
+                                  {method.recommended && (
+                                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
+                                      Recommended
+                                    </span>
+                                  )}
+                                  {method.hardware_accelerated && (
+                                    <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-medium">
+                                      GPU
+                                    </span>
+                                  )}
+                                  {!isCurrentPlatform && (
+                                    <span className="text-xs bg-gray-600/50 text-gray-400 px-2 py-0.5 rounded-full font-medium">
+                                      Not Available
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1">{method.description}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               <div>
                 <h3 className="text-lg font-semibold mb-4">Performance</h3>
@@ -765,25 +868,38 @@ function SettingsDialog({
 
               <div>
                 <h3 className="text-lg font-semibold mb-4">Preview Mode</h3>
+                <p className="text-sm text-gray-400 mb-4">
+                  Controls how the shareable output window is rendered. Platform-specific options may vary.
+                </p>
                 <div className="space-y-3">
-                  <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
-                    <input
-                      type="radio"
-                      name="preview_mode"
-                      checked={localSettings.preview_mode === "WinApiGdi"}
-                      onChange={() =>
-                        setLocalSettings({
-                          ...localSettings,
-                          preview_mode: "WinApiGdi",
-                        })
-                      }
-                      className="w-4 h-4 text-blue-600"
-                    />
-                    <div className="flex-1">
-                      <div className="font-medium">WinAPI GDI (Recommended)</div>
-                      <div className="text-sm text-gray-400">Lightweight, Windows-only, best performance</div>
-                    </div>
-                  </label>
+                  {/* WinAPI GDI - Windows Only */}
+                  {platformInfo.os_type === "windows" && (
+                    <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
+                      <input
+                        type="radio"
+                        name="preview_mode"
+                        checked={localSettings.preview_mode === "WinApiGdi"}
+                        onChange={() =>
+                          setLocalSettings({
+                            ...localSettings,
+                            preview_mode: "WinApiGdi",
+                          })
+                        }
+                        className="w-4 h-4 text-blue-600"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">WinAPI GDI</span>
+                          <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 text-xs rounded-full font-medium">
+                            Recommended
+                          </span>
+                        </div>
+                        <div className="text-sm text-gray-400">Lightweight, Windows-only, best performance</div>
+                      </div>
+                    </label>
+                  )}
+
+                  {/* Tauri Canvas - Cross-platform */}
                   <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
                     <input
                       type="radio"
@@ -798,10 +914,54 @@ function SettingsDialog({
                       className="w-4 h-4 text-blue-600"
                     />
                     <div className="flex-1">
-                      <div className="font-medium">Tauri Canvas (Coming Soon)</div>
-                      <div className="text-sm text-gray-400">Cross-platform, WebView2 based</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Tauri Canvas</span>
+                        <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded-full font-medium">
+                          Cross-platform
+                        </span>
+                        {platformInfo.os_type !== "windows" && (
+                          <span className="px-2 py-0.5 bg-green-500/20 text-green-300 text-xs rounded-full font-medium">
+                            Default
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm text-gray-400">
+                        {platformInfo.os_type === "windows" 
+                          ? "WebView2 based, slower than WinAPI"
+                          : "WebView based, cross-platform support"}
+                      </div>
                     </div>
                   </label>
+
+                  {/* Dev Mode Preview for Preview Mode */}
+                  {devMode && platformInfo.os_type !== "windows" && (
+                    <div className="mt-4 pt-4 border-t border-gray-700">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                        </svg>
+                        <span className="text-sm font-medium text-yellow-400">Dev Mode: Windows-Only Option</span>
+                      </div>
+                      <div className="space-y-2 opacity-60 pointer-events-none">
+                        <label className="flex items-center space-x-3 p-3 bg-gray-700/50 rounded-lg">
+                          <input
+                            type="radio"
+                            disabled
+                            className="w-4 h-4 text-blue-600"
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">WinAPI GDI</span>
+                              <span className="px-2 py-0.5 bg-red-500/20 text-red-300 text-xs rounded-full font-medium">
+                                Not Available on {platformInfo.os_type === "macos" ? "macOS" : "Linux"}
+                              </span>
+                            </div>
+                            <div className="text-sm text-gray-400">Lightweight, Windows-only, best performance</div>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -809,6 +969,29 @@ function SettingsDialog({
 
           {activeTab === "advanced" && (
             <div className="space-y-6">
+              {/* Platform-Specific Features */}
+              {platformInfo.capabilities.has_winapi_options && (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <div>
+                      <h4 className="font-semibold text-yellow-400 mb-2">Windows Advanced Options</h4>
+                      <p className="text-sm text-gray-300 mb-2">
+                        This platform supports advanced WinAPI customization options for the destination window.
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        You can manually edit <span className="font-mono bg-gray-800 px-1 rounded">settings.json</span> to add 
+                        keys like <span className="font-mono bg-gray-800 px-1 rounded">winapi_destination_alpha</span>, 
+                        <span className="font-mono bg-gray-800 px-1 rounded ml-1">winapi_destination_topmost</span>, etc. 
+                        for advanced troubleshooting.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Settings Management */}
               <div>
                 <h3 className="text-lg font-semibold mb-4">Settings Management</h3>
@@ -853,47 +1036,77 @@ function SettingsDialog({
                 <h3 className="text-lg font-semibold mb-4">Help</h3>
                 <div className="space-y-3">
                   <div className="text-sm text-gray-300 p-4 bg-gray-700 rounded-lg space-y-2">
-                    <p>
-                      <span className="font-medium">Preview Mode</span> controls how the shareable output window is rendered.
-                      For Google Meet / Teams / Zoom on Windows, <span className="font-medium">WinAPI GDI</span> is the most compatible.
-                    </p>
-                    <p>
-                      <span className="font-medium">Capture Method</span> controls how pixels are captured from the screen.
-                      <span className="font-medium"> WGC</span> is the modern Windows API; <span className="font-medium">GDI Screen Copy</span> is a compatibility option similar to RegionToShare.
-                    </p>
-                    <p className="text-gray-400">
-                      Advanced troubleshooting (hidden): you can add these keys to <span className="font-medium">settings.json</span> to override
-                      the WinAPI destination window behavior.
-                    </p>
-                    <ul className="list-disc list-inside text-gray-400 space-y-1">
-                      <li>
-                        <span className="font-medium">winapi_destination_alpha</span>: number 0..255 (default: 0 in release builds)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_topmost</span>: true/false (default: true)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_toolwindow</span>: true/false (default: true)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_click_through</span>: true/false (default: true)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_layered</span>: true/false (default: true)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_appwindow</span>: true/false (default: false; only used when toolwindow=false)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_noactivate</span>: true/false (default: true)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_overlapped</span>: true/false (default: false; uses a normal overlapped window style)
-                      </li>
-                      <li>
-                        <span className="font-medium">winapi_destination_hide_taskbar_after_ms</span>: number (ms). If set, RustFrame will add TOOLWINDOW after this delay to hide from taskbar/Alt-Tab.
-                      </li>
-                    </ul>
+                    {platformInfo.os_type === "windows" && (
+                      <>
+                        <p>
+                          <span className="font-medium">Preview Mode</span> controls how the shareable output window is rendered.
+                          For Google Meet / Teams / Zoom on Windows, <span className="font-medium">WinAPI GDI</span> is the most compatible.
+                        </p>
+                        <p>
+                          <span className="font-medium">Capture Method</span> controls how pixels are captured from the screen.
+                          <span className="font-medium"> WGC</span> is the modern Windows API; <span className="font-medium">GDI Screen Copy</span> is a compatibility option similar to RegionToShare.
+                        </p>
+                      </>
+                    )}
+                    {platformInfo.os_type === "macos" && (
+                      <>
+                        <p>
+                          <span className="font-medium">Capture Method</span>: RustFrame uses ScreenCaptureKit on macOS 12.3+, 
+                          providing hardware-accelerated screen capture with minimal performance impact.
+                        </p>
+                        <p className="text-gray-400">
+                          Make sure you've granted screen recording permissions in System Preferences → Security & Privacy → Screen Recording.
+                        </p>
+                      </>
+                    )}
+                    {platformInfo.os_type === "linux" && (
+                      <>
+                        <p>
+                          <span className="font-medium">Capture Method</span>: RustFrame automatically detects your compositor (Wayland/X11) 
+                          and uses the appropriate capture method.
+                        </p>
+                        <p className="text-gray-400">
+                          For Wayland: Requires PipeWire support. For X11: Uses standard X11 capture APIs.
+                        </p>
+                      </>
+                    )}
+                    {platformInfo.capabilities.has_winapi_options && (
+                      <>
+                        <p className="text-gray-400">
+                          Advanced troubleshooting (hidden): you can add these keys to <span className="font-medium">settings.json</span> to override
+                          the WinAPI destination window behavior.
+                        </p>
+                        <ul className="list-disc list-inside text-gray-400 space-y-1">
+                          <li>
+                            <span className="font-medium">winapi_destination_alpha</span>: number 0..255 (default: 0 in release builds)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_topmost</span>: true/false (default: true)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_toolwindow</span>: true/false (default: true)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_click_through</span>: true/false (default: true)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_layered</span>: true/false (default: true)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_appwindow</span>: true/false (default: false; only used when toolwindow=false)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_noactivate</span>: true/false (default: true)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_overlapped</span>: true/false (default: false; uses a normal overlapped window style)
+                          </li>
+                          <li>
+                            <span className="font-medium">winapi_destination_hide_taskbar_after_ms</span>: number (ms). If set, RustFrame will add TOOLWINDOW after this delay to hide from taskbar/Alt-Tab.
+                          </li>
+                        </ul>
+                      </>
+                    )}
                     <p className="text-gray-400">
                       Tip: If a meeting app shows black or stops updating, try setting <span className="font-medium">winapi_destination_alpha</span> to 1
                       or 255 for diagnostics.

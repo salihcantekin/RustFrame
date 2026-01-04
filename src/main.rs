@@ -18,6 +18,7 @@ use rustframe_capture::capture::windows::{WindowsCaptureEngine, WindowsGdiCopyCa
 mod destination_window;
 mod hollow_border;
 mod platform;
+mod platform_info;
 mod rec_indicator;
 
 use destination_window::DestinationWindow;
@@ -804,8 +805,8 @@ async fn start_capture(
         "Creating destination window in {:?} mode",
         settings.preview_mode
     );
+    #[cfg(target_os = "windows")]
     match settings.preview_mode {
-        #[cfg(target_os = "windows")]
         PreviewMode::WinApiGdi => {
             let config = DestinationWindowConfig {
                 alpha: settings.winapi_destination_alpha,
@@ -864,6 +865,15 @@ async fn start_capture(
 
             *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
         }
+        PreviewMode::TauriCanvas => {
+            // TODO: Implement Tauri Canvas window
+            log::warn!("Tauri Canvas mode not yet implemented");
+            return Err("Tauri Canvas mode not yet implemented".to_string());
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    match settings.preview_mode {
         PreviewMode::TauriCanvas => {
             // TODO: Implement Tauri Canvas window
             log::warn!("Tauri Canvas mode not yet implemented");
@@ -1264,6 +1274,15 @@ async fn get_monitor_refresh_rate() -> Result<u32, String> {
 }
 
 // ============================================================================
+// Platform Info
+// ============================================================================
+
+#[tauri::command]
+fn get_platform_info() -> platform_info::PlatformInfo {
+    platform_info::PlatformInfo::detect()
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1311,6 +1330,7 @@ fn main() {
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![
             is_dev_mode,
+            get_platform_info,
             get_settings,
             get_capture_profiles,
             get_active_capture_profile,
