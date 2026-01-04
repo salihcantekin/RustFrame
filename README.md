@@ -65,6 +65,8 @@ RustFrame allows you to select a region of your screen and mirror it to a separa
 
 See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed build setup.
 
+**macOS Users**: If you encounter a "Rust cannot catch foreign exceptions" error, see [docs/MACOS_EXCEPTION_FIX.md](docs/MACOS_EXCEPTION_FIX.md) or [docs/MACOS_EXCEPTION_FIX_TR.md](docs/MACOS_EXCEPTION_FIX_TR.md) (Turkish) for details. This has been fixed in the latest version by adding proper Objective-C exception handling dependencies.
+
 **Quick start with RustRover:**
 1. Open project in RustRover
 2. Press `Ctrl+F9` to build
