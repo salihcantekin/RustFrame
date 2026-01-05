@@ -11,7 +11,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["screen-capture", "cross-platform", "windows", "macos", "linux"]
 categories = ["multimedia", "graphics"]
-rust-version = "1.70.0"
+rust-version = "1.0.0"
 exclude = ["target/", ".git/", ".github/", "*.zip", "ui/node_modules/"]
 
 # Binary target
