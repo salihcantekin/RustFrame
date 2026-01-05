@@ -1,6 +1,6 @@
 [package]
 name = "rustframe"
-version = "1.0.0"
+version = "1.56.0"
 edition = "2021"
 authors = ["Salih Cantekin <salihcantekin@gmail.com>"]
 description = "Cross-platform screen capture application with Tauri UI"
@@ -11,7 +11,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["screen-capture", "cross-platform", "windows", "macos", "linux"]
 categories = ["multimedia", "graphics"]
-rust-version = "1.0.0"
+rust-version = "1.56.0"
 exclude = ["target/", ".git/", ".github/", "*.zip", "ui/node_modules/"]
 
 # Binary target
