@@ -132,17 +132,19 @@ jobs:
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
         shell: bash
       
+      - name: Get Rust version
+        id: rust-version
+        run: echo "version=$(rustc --version)" >> $GITHUB_OUTPUT
+        shell: bash
+      
       - name: Create Git tag
         if: github.event.inputs.create_release == 'true'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}" 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Tag already exists or push failed"
-          }
-        shell: powershell
+          git push origin "v${{ github.event.inputs.version }}" || echo "Tag already exists or push failed"
+        shell: bash
       
       - name: Create or Update GitHub Release
         if: github.event.inputs.create_release == 'true'
@@ -157,7 +159,7 @@ jobs:
             
             Built with:
             - Runner: windows-latest (GitHub Hosted)
-            - Rust: $(rustc --version)
+            - Rust: ${{ steps.rust-version.outputs.version }}
             - Build #${{ github.run_number }}
             
             ### Installation
