@@ -17,6 +17,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# Required permissions for creating releases
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build Windows (GitHub Hosted)
