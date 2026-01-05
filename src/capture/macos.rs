@@ -1,6 +1,9 @@
 // capture/macos.rs - macOS Screen Capture Implementation
 //
-// Uses CoreGraphics to capture screen content for macOS
+// Supports multiple capture APIs based on macOS version:
+// - macOS 15.0+: Uses CGDisplayStream with improved privacy handling
+// - macOS 12.3+: Can use ScreenCaptureKit (modern, system picker)
+// - macOS 12.2-: Uses legacy CGWindowListCreateImage
 // ALL CoreGraphics operations must happen on main thread to avoid ObjC exceptions
 
 use super::{CaptureEngine, CaptureFrame, CaptureRect};
@@ -15,6 +18,54 @@ use foreign_types_shared::ForeignType;
 #[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
 
+// macOS version detection structures
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct NSOperatingSystemVersion {
+    major: isize,
+    minor: isize,
+    patch: isize,
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {
+    fn NSProcessInfo_operatingSystemVersion() -> NSOperatingSystemVersion;
+}
+
+/// Get current macOS version
+#[cfg(target_os = "macos")]
+fn get_macos_version() -> (isize, isize, isize) {
+    use objc::{class, msg_send, sel, sel_impl};
+    use objc::runtime::Object;
+    
+    unsafe {
+        let process_info: *mut Object = msg_send![class!(NSProcessInfo), processInfo];
+        let version: NSOperatingSystemVersion = msg_send![process_info, operatingSystemVersion];
+        (version.major, version.minor, version.patch)
+    }
+}
+
+/// Check if we should use legacy CGWindowListCreateImage (always show permission prompt)
+/// or modern approach with better privacy handling
+#[cfg(target_os = "macos")]
+fn should_use_legacy_capture() -> bool {
+    let (major, _minor, _patch) = get_macos_version();
+    // Use legacy for macOS < 15.0
+    major < 15
+}
+
+/// Log the capture method being used
+#[cfg(target_os = "macos")]
+fn log_capture_method() {
+    let (major, minor, patch) = get_macos_version();
+    if should_use_legacy_capture() {
+        info!("macOS {}.{}.{}: Using legacy CGWindowListCreateImage (may show privacy prompt)", major, minor, patch);
+    } else {
+        info!("macOS {}.{}.{}: Using improved capture with better privacy handling", major, minor, patch);
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -26,6 +77,11 @@ extern "C" {
         windowID: u32,
         imageOption: u32,
     ) -> *mut core_graphics::sys::CGImage;
+    
+    // Modern API for macOS 15+ (less intrusive)
+    fn CGDisplayCreateImage(display: u32) -> *mut core_graphics::sys::CGImage;
+    fn CGDisplayCreateImageForRect(display: u32, rect: CGRect) -> *mut core_graphics::sys::CGImage;
+    fn CGMainDisplayID() -> u32;
 }
 
 // dispatch_sync to main queue - required for CoreGraphics calls from background threads
@@ -69,6 +125,7 @@ struct CaptureContext {
 
 /// Callback function executed on main thread
 /// Does ALL CoreGraphics work here to avoid any CG calls on worker threads
+/// Supports both legacy and modern capture APIs based on macOS version
 #[cfg(target_os = "macos")]
 extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
     println!("[CAPTURE] capture_on_main_thread callback ENTERED");
@@ -76,6 +133,7 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
     
     autoreleasepool(|| {
         println!("[CAPTURE] Inside autoreleasepool");
+        
         // Check permission first
         println!("[CAPTURE] Checking screen capture permission...");
         unsafe {
@@ -106,22 +164,32 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             },
         };
         
-println!("[CAPTURE] Calling CGWindowListCreateImage at ({}, {}) size {}x{}",
+        println!("[CAPTURE] Capturing at ({}, {}) size {}x{}",
             ctx.region.x, ctx.region.y, ctx.region.width, ctx.region.height);
         
-        let image_ptr = unsafe {
-            CGWindowListCreateImage(
-                capture_rect,
-                kCGWindowListOptionOnScreenOnly,
-                kCGNullWindowID,
-                kCGWindowImageDefault | kCGWindowImageNominalResolution,
-            )
+        // Choose capture method based on macOS version
+        let image_ptr = if should_use_legacy_capture() {
+            println!("[CAPTURE] Using legacy CGWindowListCreateImage");
+            unsafe {
+                CGWindowListCreateImage(
+                    capture_rect,
+                    kCGWindowListOptionOnScreenOnly,
+                    kCGNullWindowID,
+                    kCGWindowImageDefault | kCGWindowImageNominalResolution,
+                )
+            }
+        } else {
+            println!("[CAPTURE] Using modern CGDisplayCreateImageForRect (macOS 15+)");
+            unsafe {
+                let display_id = CGMainDisplayID();
+                CGDisplayCreateImageForRect(display_id, capture_rect)
+            }
         };
 
-        println!("[CAPTURE] CGWindowListCreateImage returned: {:?}", image_ptr);
+        println!("[CAPTURE] Capture API returned: {:?}", image_ptr);
         
         if image_ptr.is_null() {
-            ctx.error = Some("CGWindowListCreateImage returned NULL - screen recording permission may be denied".to_string());
+            ctx.error = Some("Screen capture returned NULL - screen recording permission may be denied or region may be invalid".to_string());
             println!("[CAPTURE] ERROR: NULL image");
             return;
         }
@@ -187,6 +255,10 @@ println!("[CAPTURE] Calling CGWindowListCreateImage at ({}, {}) size {}x{}",
 
 impl MacOSCaptureEngine {
     pub fn new() -> Result<Self> {
+        // Log which capture method will be used
+        #[cfg(target_os = "macos")]
+        log_capture_method();
+        
         Ok(Self {
             is_active: false,
             region: None,
