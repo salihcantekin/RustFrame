@@ -119,12 +119,6 @@ jobs:
       
       - name: Build summary
         run: |
-          Write-Host "## Build Information" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Version**: ${{ github.event.inputs.version }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Platform**: Windows x64" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Runner**: ${{ github.event.inputs.runner }}" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
-          Write-Host "- **Rust Version**: $(rustc --version)" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
           echo "## Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
@@ -132,16 +126,25 @@ jobs:
           echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        shell: bashcal user.name "github-actions[bot]"
+        shell: bash
+      
+      - name: Create Git tag
+        if: github.event.inputs.create_release == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
           git tag -a "v${{ github.event.inputs.version }}" -m "Release v${{ github.event.inputs.version }}"
           git push origin "v${{ github.event.inputs.version }}" 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "Tag already exists or push failed"
           }
         shell: powershell
-       || echo "Tag already exists"
-          git push origin "v${{ github.event.inputs.version }}" || echo "Tag already pushed or failed"
-        shell: bashgithub.event.inputs.version }}
+      
+      - name: Create or Update GitHub Release
+        if: github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
           name: RustFrame v${{ github.event.inputs.version }}
           body: |
             # RustFrame v${{ github.event.inputs.version }}
@@ -149,11 +152,11 @@ jobs:
             ## Windows Build
             
             Built with:
-            - Runner: ${{ github.event.inputs.runner }}
-            - Rust: $(rustc  (GitHub Hosted)
+            - Runner: windows-latest (GitHub Hosted)
+            - Rust: $(rustc --version)
+            - Build #${{ github.run_number }}
             
-            Built with:
-            - Runner: windows-latest
+            ### Installation
             1. Download `RustFrame-Windows-x64-*.zip`
             2. Extract the archive
             3. Run `rustframe.exe`
