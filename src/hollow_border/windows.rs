@@ -412,7 +412,7 @@ fn run_window_thread(
         let window_h = height;
 
         let hwnd = match CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE,
             PCWSTR(class_name.as_ptr()),
             PCWSTR(wide_string("RustFrame Capture Region").as_ptr()),
             WS_POPUP | WS_VISIBLE,

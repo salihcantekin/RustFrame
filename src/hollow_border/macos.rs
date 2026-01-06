@@ -86,6 +86,10 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // Initially click-through (mouse events ignored)
         window.setIgnoresMouseEvents_(YES);
         
+        // Accept mouse events without becoming key window
+        // This allows interaction without activating the main application window
+        let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
+        
         register_border_view_class();
         
         let view_class = Class::get("HollowBorderView").expect("HollowBorderView class not registered");
@@ -111,10 +115,11 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         
         let _: () = msg_send![window, setContentView: view];
         
-        println!("[HOLLOW_BORDER] Showing window...");
-        window.makeKeyAndOrderFront_(nil);
+        // Show window WITHOUT making it key window
+        // This prevents the border from activating the main application window
+        let _: () = msg_send![window, orderFront: nil];
         
-        println!("[HOLLOW_BORDER] Window created successfully");
+        log::info!("Border window created and shown (non-key)");
         ctx.result_window = Some(window);
     }
     
@@ -799,13 +804,14 @@ impl HollowBorder {
     }
 
     pub fn show(&self) {
-        println!("[HOLLOW_BORDER] show() called");
         log::info!("Showing macOS hollow border");
         
         extern "C" fn show_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
-                let _: () = msg_send![window, makeKeyAndOrderFront: nil];
+                // Use orderFront instead of makeKeyAndOrderFront
+                // to prevent activating the main application window
+                let _: () = msg_send![window, orderFront: nil];
             }
         }
         
