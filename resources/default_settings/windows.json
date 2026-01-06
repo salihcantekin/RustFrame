@@ -1,0 +1,30 @@
+{
+  "show_cursor": true,
+  "capture_clicks": false,
+  "click_highlight_color": [255, 255, 0, 180],
+  "click_dissolve_ms": 300,
+
+  "show_border": true,
+  "border_color": [255, 0, 0, 255],
+  "border_width": 3,
+
+  "target_fps": 60,
+  "capture_method": "Wgc",
+  "preview_mode": "WinApiGdi",
+
+  "remember_last_region": true,
+  "last_region": [100, 100, 600, 400],
+
+  "show_rec_indicator": true,
+  "rec_indicator_size": "medium",
+
+  "winapi_destination_alpha": 255,
+  "winapi_destination_topmost": true,
+  "winapi_destination_click_through": true,
+  "winapi_destination_toolwindow": false,
+  "winapi_destination_layered": true,
+  "winapi_destination_appwindow": true,
+  "winapi_destination_noactivate": true,
+  "winapi_destination_overlapped": false,
+  "winapi_destination_hide_taskbar_after_ms": null
+}

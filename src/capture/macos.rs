@@ -16,6 +16,12 @@ use log::info;
 use foreign_types_shared::ForeignType;
 
 #[cfg(target_os = "macos")]
+use cocoa::base::nil;
+
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSPoint, NSRect, NSSize};
+
+#[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
 
 // macOS version detection structures
@@ -95,6 +101,220 @@ extern "C" {
     fn CGMainDisplayID() -> u32;
 }
 
+#[cfg(target_os = "macos")]
+#[link(name = "ImageIO", kind = "framework")]
+extern "C" {
+    fn CGImageSourceCreateWithData(
+        data: *const std::ffi::c_void,
+        options: *const std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    fn CGImageSourceCreateImageAtIndex(
+        isrc: *mut std::ffi::c_void,
+        index: usize,
+        options: *const std::ffi::c_void,
+    ) -> *mut core_graphics::sys::CGImage;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const std::ffi::c_void);
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_rgba_premultiplied() -> Option<(Vec<u8>, u32, u32, i32, i32)> {
+    // Returns (rgba_premultiplied, width_px, height_px, hotspot_x_px, hotspot_y_px)
+    // Hotspot is assumed to be in image coordinates with origin at top-left (AppKit behavior).
+    use cocoa::appkit::NSCursor;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    unsafe {
+        let cursor: *mut objc::runtime::Object = msg_send![class!(NSCursor), currentCursor];
+        if cursor == nil {
+            return None;
+        }
+
+        let image: *mut objc::runtime::Object = msg_send![cursor, image];
+        if image == nil {
+            return None;
+        }
+
+        let hot_spot_points: NSPoint = msg_send![cursor, hotSpot];
+        let size_points: NSSize = msg_send![image, size];
+
+        // Use TIFFRepresentation + ImageIO to avoid fragile CGImageForProposedRect paths.
+        let tiff: *mut objc::runtime::Object = msg_send![image, TIFFRepresentation];
+        if tiff == nil {
+            return None;
+        }
+
+        let image_source = CGImageSourceCreateWithData(tiff as *const std::ffi::c_void, std::ptr::null());
+        if image_source.is_null() {
+            return None;
+        }
+
+        let cursor_ptr = CGImageSourceCreateImageAtIndex(image_source, 0, std::ptr::null());
+        CFRelease(image_source as *const std::ffi::c_void);
+
+        if cursor_ptr.is_null() {
+            return None;
+        }
+
+        let cursor_image: CGImage = CGImage::from_ptr(cursor_ptr);
+        let cw = cursor_image.width() as u32;
+        let ch = cursor_image.height() as u32;
+        if cw == 0 || ch == 0 {
+            return None;
+        }
+
+        let scale_x = if size_points.width > 0.0 {
+            cw as f64 / size_points.width
+        } else {
+            1.0
+        };
+        let scale_y = if size_points.height > 0.0 {
+            ch as f64 / size_points.height
+        } else {
+            1.0
+        };
+
+        let hotspot_x = (hot_spot_points.x * scale_x).round() as i32;
+        let hotspot_y = (hot_spot_points.y * scale_y).round() as i32;
+
+        // Convert cursor image to RGBA premultiplied.
+        let bytes_per_row = (cw as usize) * 4;
+        let color_space = core_graphics::color_space::CGColorSpace::create_device_rgb();
+        let mut rgba = vec![0u8; bytes_per_row * (ch as usize)];
+        let ctx = core_graphics::context::CGContext::create_bitmap_context(
+            Some(rgba.as_mut_ptr() as *mut _),
+            cw as usize,
+            ch as usize,
+            8,
+            bytes_per_row,
+            &color_space,
+            core_graphics::base::kCGImageAlphaPremultipliedLast,
+        );
+
+        ctx.draw_image(
+            CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize {
+                    width: cw as f64,
+                    height: ch as f64,
+                },
+            },
+            &cursor_image,
+        );
+
+        Some((rgba, cw, ch, hotspot_x, hotspot_y))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn overlay_cursor_rgba_premultiplied(
+    dst: &mut [u8],
+    dst_width: u32,
+    dst_height: u32,
+    src: &[u8],
+    src_width: u32,
+    src_height: u32,
+    dst_x: i32,
+    dst_y: i32,
+) {
+    if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
+        return;
+    }
+
+    let dst_stride = (dst_width as usize) * 4;
+    let src_stride = (src_width as usize) * 4;
+
+    for sy in 0..(src_height as i32) {
+        let dy = dst_y + sy;
+        if dy < 0 || dy >= dst_height as i32 {
+            continue;
+        }
+        let src_row = (sy as usize) * src_stride;
+        let dst_row = (dy as usize) * dst_stride;
+
+        for sx in 0..(src_width as i32) {
+            let dx = dst_x + sx;
+            if dx < 0 || dx >= dst_width as i32 {
+                continue;
+            }
+            let si = src_row + (sx as usize) * 4;
+            let di = dst_row + (dx as usize) * 4;
+            if si + 3 >= src.len() || di + 3 >= dst.len() {
+                continue;
+            }
+
+            let sa = src[si + 3] as u16;
+            if sa == 0 {
+                continue;
+            }
+            let inv = 255u16 - sa;
+
+            // Premultiplied alpha-over: out = src + dst*(1-sa)
+            dst[di] = (src[si] as u16 + (dst[di] as u16 * inv + 127) / 255) as u8;
+            dst[di + 1] = (src[si + 1] as u16 + (dst[di + 1] as u16 * inv + 127) / 255) as u8;
+            dst[di + 2] = (src[si + 2] as u16 + (dst[di + 2] as u16 * inv + 127) / 255) as u8;
+            dst[di + 3] = (sa + (dst[di + 3] as u16 * inv + 127) / 255) as u8;
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn overlay_software_cursor_dot_rgba(
+    pixel_data: &mut [u8],
+    width: u32,
+    height: u32,
+    center_x: i32,
+    center_y_from_top: i32,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let radius: i32 = 6;
+    let border: i32 = 1;
+    let r2 = radius * radius;
+    let inner_r2 = (radius - border).max(0);
+    let inner_r2 = inner_r2 * inner_r2;
+
+    let stride = (width as usize) * 4;
+
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let dist2 = dx * dx + dy * dy;
+            if dist2 > r2 {
+                continue;
+            }
+
+            let x = center_x + dx;
+            let y = center_y_from_top + dy;
+
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                continue;
+            }
+
+            let is_border = dist2 >= inner_r2;
+            let (r, g, b, a) = if is_border {
+                (0u8, 0u8, 0u8, 255u8)
+            } else {
+                (255u8, 255u8, 255u8, 255u8)
+            };
+
+            let idx = (y as usize) * stride + (x as usize) * 4;
+            if idx + 3 < pixel_data.len() {
+                pixel_data[idx] = r;
+                pixel_data[idx + 1] = g;
+                pixel_data[idx + 2] = b;
+                pixel_data[idx + 3] = a;
+            }
+        }
+    }
+}
+
 // dispatch_sync to main queue - required for CoreGraphics calls from background threads
 #[cfg(target_os = "macos")]
 extern "C" {
@@ -128,11 +348,28 @@ pub struct MacOSCaptureEngine {
 #[cfg(target_os = "macos")]
 struct CaptureContext {
     region: CaptureRect,
+    show_cursor: bool,
     // Results - all processing done on main thread
     pixel_data: Option<Vec<u8>>,
     result_width: u32,
     result_height: u32,
     error: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_screen_recording_permission() -> Result<()> {
+    // Avoid calling CGRequestScreenCaptureAccess here.
+    // In practice, the user must enable Screen Recording in System Settings
+    // and restart the app; requesting during a synchronous main-thread capture
+    // can contribute to UI stalls.
+    let has_perm = unsafe { CGPreflightScreenCaptureAccess() };
+    if has_perm {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "Screen Recording permission is not granted. Enable it in System Settings > Privacy & Security > Screen Recording, then restart the app."
+    ))
 }
 
 /// Callback function executed on main thread
@@ -143,19 +380,7 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
     let ctx = unsafe { &mut *(context as *mut CaptureContext) };
     
     autoreleasepool(|| {
-        // Check permission first
-        unsafe {
-            let has_perm = CGPreflightScreenCaptureAccess();
-            if !has_perm {
-                let granted = CGRequestScreenCaptureAccess();
-                
-                if !granted {
-                    ctx.error = Some("Screen Recording permission denied. Please enable it in System Settings > Privacy & Security > Screen Recording and restart the app".to_string());
-                    log::error!("Screen capture permission denied");
-                    return;
-                }
-            }
-        }
+        // Permission is checked before dispatching to the main thread.
         
         let capture_rect = CGRect {
             origin: CGPoint {
@@ -227,6 +452,76 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             },
             &screen_image,
         );
+
+        // Optional: overlay cursor into the captured frame.
+        // CoreGraphics screen capture does not include the cursor by default, so we overlay it.
+        // We prefer the real system cursor image; if we can't fetch it reliably, we fall back to
+        // a software dot.
+        if ctx.show_cursor {
+            // Use NSEvent mouseLocation (global, bottom-left origin in Cocoa screen coords)
+            // and convert to our capture-space which uses top-left origin (see hollow_border cache).
+            use cocoa::appkit::{NSEvent, NSScreen};
+            use objc::{class, msg_send, sel, sel_impl};
+
+            unsafe {
+                let screen: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
+                if screen != nil {
+                    let screen_frame: NSRect = msg_send![screen, frame];
+                    let screen_height_points = screen_frame.size.height;
+
+                    let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+
+                    // Convert to top-left origin (points)
+                    let cursor_x_points = mouse.x;
+                    let cursor_y_points_tl = screen_height_points - mouse.y;
+
+                    let rel_x_points = cursor_x_points - ctx.region.x as f64;
+                    let rel_y_points = cursor_y_points_tl - ctx.region.y as f64;
+
+                    if ctx.region.width > 0
+                        && ctx.region.height > 0
+                        && rel_x_points >= 0.0
+                        && rel_y_points >= 0.0
+                        && rel_x_points <= ctx.region.width as f64
+                        && rel_y_points <= ctx.region.height as f64
+                    {
+                        // The capture region is specified in points; the captured image size may
+                        // be scaled (Retina), so compute a point->pixel scale.
+                        let scale_x = width as f64 / ctx.region.width as f64;
+                        let scale_y = height as f64 / ctx.region.height as f64;
+
+                        let rel_x_px = rel_x_points * scale_x;
+                        let rel_y_px_from_top = rel_y_points * scale_y;
+
+                        let cursor_x_px = rel_x_px.round() as i32;
+                        let cursor_y_px = rel_y_px_from_top.round() as i32;
+
+                        if let Some((cursor_rgba, cw, ch, hot_x, hot_y)) = cursor_rgba_premultiplied() {
+                            let draw_x = cursor_x_px - hot_x;
+                            let draw_y = cursor_y_px - hot_y;
+                            overlay_cursor_rgba_premultiplied(
+                                &mut pixel_data,
+                                width,
+                                height,
+                                &cursor_rgba,
+                                cw,
+                                ch,
+                                draw_x,
+                                draw_y,
+                            );
+                        } else {
+                            overlay_software_cursor_dot_rgba(
+                                &mut pixel_data,
+                                width,
+                                height,
+                                cursor_x_px,
+                                cursor_y_px,
+                            );
+                        }
+                    }
+                }
+            }
+        }
         
         // Store results
         ctx.pixel_data = Some(pixel_data);
@@ -254,23 +549,32 @@ impl MacOSCaptureEngine {
     /// Capture a region of the screen - dispatches ALL work to main thread
     #[cfg(target_os = "macos")]
     fn capture_region(&mut self, region: CaptureRect) -> Result<()> {
+        ensure_screen_recording_permission()?;
+
         // Create context for the callback
         let mut ctx = CaptureContext {
             region,
+            show_cursor: self.show_cursor,
             pixel_data: None,
             result_width: 0,
             result_height: 0,
             error: None,
         };
         
-        // Dispatch ALL capture work to main thread synchronously
+        // Dispatch ALL capture work to main thread synchronously.
+        // IMPORTANT: dispatching synchronously to the main queue from the main thread will deadlock.
         unsafe {
-            let main_queue = &_dispatch_main_q as *const std::ffi::c_void;
-            dispatch_sync_f(
-                main_queue,
-                &mut ctx as *mut CaptureContext as *mut std::ffi::c_void,
-                capture_on_main_thread,
-            );
+            let is_main = pthread_main_np() != 0;
+            if is_main {
+                capture_on_main_thread(&mut ctx as *mut CaptureContext as *mut std::ffi::c_void);
+            } else {
+                let main_queue = &_dispatch_main_q as *const std::ffi::c_void;
+                dispatch_sync_f(
+                    main_queue,
+                    &mut ctx as *mut CaptureContext as *mut std::ffi::c_void,
+                    capture_on_main_thread,
+                );
+            }
         }
         
         // Check for errors from the callback

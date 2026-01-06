@@ -235,14 +235,29 @@ function App() {
 
   const handleStopCapture = async () => {
     try {
+      let borderRect: [number, number, number, number] | null = null;
+      if (settings?.remember_last_region) {
+        try {
+          borderRect = await invoke<[number, number, number, number] | null>("get_border_rect");
+        } catch {
+          borderRect = null;
+        }
+      }
+
       await invoke("stop_capture");
       setIsCapturing(false);
-      
+
       // Save last region if remember_last_region is enabled
       if (settings?.remember_last_region) {
+        const [x, y, width, height] = borderRect
+          ? borderRect
+          : ([captureRegion.x, captureRegion.y, captureRegion.width, captureRegion.height] as [number, number, number, number]);
+
+        setCaptureRegion({ x, y, width, height });
+
         const updatedSettings = {
           ...settings,
-          last_region: [captureRegion.x, captureRegion.y, captureRegion.width, captureRegion.height] as [number, number, number, number]
+          last_region: [x, y, width, height] as [number, number, number, number],
         };
         await invoke("save_settings", { settings: updatedSettings });
         setSettings(updatedSettings);

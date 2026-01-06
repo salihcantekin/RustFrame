@@ -4,6 +4,7 @@
 //! Interior is draggable, borders are resizable from edges and corners.
 //! Runs in its own thread with dedicated message loop.
 
+use crate::traits::BorderWindow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -317,6 +318,61 @@ impl HollowBorder {
                 }
             }
         }
+    }
+}
+
+// Implement cross-platform BorderWindow trait
+impl BorderWindow for HollowBorder {
+    fn new(x: i32, y: i32, width: i32, height: i32, border_width: i32, border_color: u32) -> Option<Self> {
+        HollowBorder::new(x, y, width, height, border_width, border_color)
+    }
+
+    fn get_rect(&self) -> (i32, i32, i32, i32) {
+        self.get_rect()
+    }
+
+    fn get_inner_rect(&self) -> (i32, i32, i32, i32) {
+        self.get_inner_rect()
+    }
+
+    fn update_rect(&self, x: i32, y: i32, width: i32, height: i32) {
+        self.update_rect(x, y, width, height)
+    }
+
+    fn update_color(&self, color: u32) {
+        self.update_color(color)
+    }
+
+    fn update_style(&self, width: i32, color: u32) {
+        self.update_style(width, color)
+    }
+
+    fn hide(&self) {
+        self.hide()
+    }
+
+    fn show(&self) {
+        self.show()
+    }
+
+    fn hwnd_value(&self) -> isize {
+        self.hwnd_value()
+    }
+
+    fn set_capture_mode(&mut self) {
+        self.set_capture_mode()
+    }
+
+    fn set_preview_mode(&mut self) {
+        self.set_preview_mode()
+    }
+
+    fn was_esc_pressed() -> bool {
+        Self::was_esc_pressed()
+    }
+
+    fn stop(&mut self) {
+        // Stop flag already set in Drop, nothing extra needed
     }
 }
 

@@ -17,6 +17,7 @@ mod hollow_border;
 mod platform;
 mod platform_info;
 mod rec_indicator;
+mod traits; // Cross-platform trait definitions
 
 use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
@@ -270,8 +271,8 @@ impl Default for Settings {
             click_highlight_color: [255, 255, 0, 180],
             click_dissolve_ms: 300,
             show_border: true,
-            border_color: [80, 130, 255, 255],
-            border_width: 4,
+            border_color: [255, 0, 0, 255],
+            border_width: 3,
             target_fps: 60,
             capture_method: CaptureMethod::default(),
             preview_mode: PreviewMode::default(),
@@ -285,7 +286,7 @@ impl Default for Settings {
             winapi_destination_overlapped: None,
             winapi_destination_hide_taskbar_after_ms: None,
             remember_last_region: true,
-            last_region: None,
+            last_region: Some([100, 100, 600, 400]),
             show_rec_indicator: true,
             rec_indicator_size: "medium".to_string(),
         }
@@ -333,6 +334,7 @@ struct AppState {
     active_profile: Arc<Mutex<Option<String>>>,
     is_capturing: Arc<Mutex<bool>>,
     render_thread_stop: Arc<Mutex<bool>>,
+    render_thread_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,6 +504,180 @@ fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
     }
 }
 
+fn decode_argb_u32_to_rgba(color: u32) -> [u8; 4] {
+    let a = ((color >> 24) & 0xFF) as u8;
+    let r = ((color >> 16) & 0xFF) as u8;
+    let g = ((color >> 8) & 0xFF) as u8;
+    let b = (color & 0xFF) as u8;
+    [r, g, b, a]
+}
+
+fn sanitize_settings_json_for_platform(value: &mut serde_json::Value) {
+    let serde_json::Value::Object(obj) = value else {
+        return;
+    };
+
+    // Migrate legacy/bundled formats into the current Settings schema.
+    // - border_color: u32 (ARGB) -> [r,g,b,a]
+    // - capture_method: "auto" or an unsupported variant -> remove (let defaults apply)
+    // - preview_mode: variant not available on this platform -> remove (let defaults apply)
+
+    if let Some(border_color) = obj.get("border_color").and_then(|v| v.as_u64()) {
+        if border_color <= u32::MAX as u64 {
+            let rgba = decode_argb_u32_to_rgba(border_color as u32);
+            obj.insert("border_color".to_string(), serde_json::json!(rgba));
+        }
+    }
+
+    if let Some(cm) = obj.get("capture_method").and_then(|v| v.as_str()) {
+        let invalid_for_platform = cm == "auto"
+            || {
+                #[cfg(target_os = "windows")]
+                {
+                    cm == "CoreGraphics"
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    cm == "Wgc" || cm == "GdiCopy"
+                }
+            };
+
+        if invalid_for_platform {
+            obj.remove("capture_method");
+        }
+    }
+
+    if let Some(pm) = obj.get("preview_mode").and_then(|v| v.as_str()) {
+        let invalid_for_platform = {
+            #[cfg(target_os = "windows")]
+            {
+                false
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                pm == "WinApiGdi"
+            }
+        };
+
+        if invalid_for_platform {
+            obj.remove("preview_mode");
+        }
+    }
+}
+
+fn bundled_platform_default_settings_json() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/rustframe_default_settings.json"))
+}
+
+fn load_bundled_default_overrides() -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(bundled_platform_default_settings_json())
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+mod bundled_profiles {
+    include!(concat!(env!("OUT_DIR"), "/rustframe_bundled_profiles.rs"));
+}
+
+fn bundled_profiles_for_platform() -> &'static [(&'static str, &'static str)] {
+    bundled_profiles::PROFILES
+}
+
+fn bootstrap_profiles_if_missing(config_dir: &Path) {
+    let profiles_dir = config_dir.join("Profiles").join(get_os_profile_subdir());
+    let _ = std::fs::create_dir_all(&profiles_dir);
+
+    for (file_name, contents) in bundled_profiles_for_platform() {
+        let dst = profiles_dir.join(file_name);
+        if dst.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::write(&dst, contents) {
+            log::warn!("Failed to seed profile {}: {}", dst.display(), e);
+        }
+    }
+}
+
+fn bootstrap_settings_if_missing(config_dir: &Path) {
+    let settings_path = config_dir.join("settings.json");
+    if settings_path.exists() {
+        return;
+    }
+
+    // Create a fully-populated, platform-aware settings.json.
+    let mut merged = serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
+    merge_json(&mut merged, load_bundled_default_overrides());
+    let mut merged_obj = merged;
+    sanitize_settings_json_for_platform(&mut merged_obj);
+
+    let settings: Settings = serde_json::from_value(merged_obj).unwrap_or_default();
+    if let Err(e) = persist_settings_to_disk(&settings) {
+        log::warn!("Failed to bootstrap settings.json: {}", e);
+    }
+}
+
+fn persist_settings_to_disk(settings: &Settings) -> Result<(), String> {
+    let Some(rustframe_dir) = rustframe_config_dir() else {
+        return Err("Could not find config directory".to_string());
+    };
+    let _ = std::fs::create_dir_all(&rustframe_dir);
+    let settings_path = rustframe_dir.join("settings.json");
+
+    let mut existing_value: serde_json::Value = match std::fs::read_to_string(&settings_path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+
+    let new_value = serde_json::to_value(settings).map_err(|e| e.to_string())?;
+
+    if let (serde_json::Value::Object(ref mut existing_obj), serde_json::Value::Object(new_obj)) =
+        (&mut existing_value, new_value)
+    {
+        for (k, v) in new_obj {
+            existing_obj.insert(k, v);
+        }
+    } else {
+        existing_value = serde_json::to_value(settings).unwrap_or_else(|_| serde_json::json!({}));
+    }
+
+    let pretty = serde_json::to_string_pretty(&existing_value).map_err(|e| e.to_string())?;
+    std::fs::write(settings_path, pretty).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn load_settings_and_profile_from_disk(dir: &Path) -> (Settings, Option<String>) {
+    let _ = std::fs::create_dir_all(dir);
+
+    // First-run bootstrap: seed defaults and profiles only if missing.
+    bootstrap_settings_if_missing(dir);
+    bootstrap_profiles_if_missing(dir);
+
+    let settings_path = dir.join("settings.json");
+
+    let raw = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".to_string());
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+
+    let active_profile = value
+        .get("active_profile")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    sanitize_settings_json_for_platform(&mut value);
+
+    // Merge onto current defaults so missing keys don't break deserialization.
+    let mut merged = serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
+    merge_json(&mut merged, value);
+
+    let settings: Settings = serde_json::from_value(merged).unwrap_or_default();
+
+    // Ensure there is always a normalized, fully-populated settings.json on disk.
+    // This prevents cases where stop_capture only writes last_region into an otherwise incomplete file.
+    if let Err(e) = persist_settings_to_disk(&settings) {
+        log::warn!("Failed to persist normalized settings: {}", e);
+    }
+
+    (settings, active_profile)
+}
+
 fn apply_profile_overrides(base: &Settings, overrides: serde_json::Value) -> Result<Settings, String> {
     let mut merged = serde_json::to_value(base).map_err(|e| e.to_string())?;
     merge_json(&mut merged, overrides);
@@ -559,6 +735,18 @@ fn is_dev_mode() -> bool {
 async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let settings = state.settings.lock().unwrap();
     Ok(settings.clone())
+}
+
+#[tauri::command]
+fn get_border_rect() -> Option<[i32; 4]> {
+    let guard = match HOLLOW_BORDER.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.as_ref().map(|b| {
+        let r = b.get_inner_rect();
+        [r.0, r.1, r.2, r.3]
+    })
 }
 
 #[tauri::command]
@@ -621,33 +809,7 @@ async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result
     *app_settings = settings.clone();
 
     // Save to disk (merge with existing JSON to preserve unknown/manual keys)
-    if let Some(config_dir) = dirs::config_dir() {
-        let rustframe_dir = config_dir.join("RustFrame");
-        let _ = std::fs::create_dir_all(&rustframe_dir);
-        let settings_path = rustframe_dir.join("settings.json");
-
-        let mut existing_value: serde_json::Value = match std::fs::read_to_string(&settings_path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({})),
-            Err(_) => serde_json::json!({}),
-        };
-
-        let new_value = serde_json::to_value(&settings).unwrap_or_else(|_| serde_json::json!({}));
-
-        if let (serde_json::Value::Object(ref mut existing_obj), serde_json::Value::Object(new_obj)) =
-            (&mut existing_value, new_value)
-        {
-            for (k, v) in new_obj {
-                existing_obj.insert(k, v);
-            }
-        } else {
-            // If the file isn't an object for some reason, fall back to writing our settings.
-            existing_value = serde_json::to_value(&settings).unwrap_or_else(|_| serde_json::json!({}));
-        }
-
-        if let Ok(json) = serde_json::to_string_pretty(&existing_value) {
-            let _ = std::fs::write(settings_path, json);
-        }
-    }
+    let _ = persist_settings_to_disk(&settings);
 
     Ok(())
 }
@@ -822,6 +984,11 @@ async fn start_capture(
     
     // Stop render thread if running
     *state.render_thread_stop.lock().unwrap() = true;
+
+    // Wait for render thread to finish to avoid dropping windows while it's still rendering
+    if let Some(handle) = state.render_thread_handle.lock().unwrap().take() {
+        let _ = handle.join();
+    }
     
     // Clean up windows - this will trigger Drop which must be on main thread
     *HOLLOW_BORDER.lock().unwrap() = None;
@@ -882,8 +1049,18 @@ async fn start_capture(
 
     *HOLLOW_BORDER.lock().unwrap() = Some(hollow_border);
 
-    // REC indicator temporarily disabled
-    // TODO: Re-enable when stability issues are resolved
+    // Create REC indicator (separate window with screen sharing excluded)
+    if settings.show_rec_indicator {
+        log::info!("Creating REC indicator...");
+        if let Some(rec) = RecIndicator::new() {
+            rec.set_size(&settings.rec_indicator_size);
+            rec.show(x + width as i32, y, settings.border_width as i32);
+            *REC_INDICATOR.lock().unwrap() = Some(rec);
+            log::info!("REC indicator created and shown (excluded from screen sharing)");
+        } else {
+            log::warn!("Failed to create REC indicator");
+        }
+    }
     
     // Create destination window based on preview mode
     log::info!(
@@ -1032,7 +1209,7 @@ async fn start_capture(
     let click_dissolve_ms = settings.click_dissolve_ms as u64;
     let border_width = settings.border_width;
 
-    std::thread::spawn(move || {
+    let render_handle = std::thread::spawn(move || {
         log::info!("Frame rendering thread started");
         let frame_duration = std::time::Duration::from_millis(1000 / target_fps as u64);
         let mut last_region: Option<(i32, i32, i32, i32)> = None;
@@ -1066,6 +1243,45 @@ async fn start_capture(
             }; // HOLLOW_BORDER lock released here
 
             if let Some(current_rect) = current_rect {
+                // Update REC indicator position during border interaction
+                #[cfg(target_os = "macos")]
+                let is_interacting = hollow_border::is_border_interacting();
+                #[cfg(not(target_os = "macos"))]
+                let is_interacting = false;
+                
+                if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
+                    if let Some(ref rec) = *rec_lock {
+                        // Only update if position actually changed to avoid spam
+                        static mut LAST_REC_POS: Option<(i32, i32, i32)> = None;
+                        let current_pos = (current_rect.0, current_rect.1, current_rect.2);
+                        let should_update = unsafe {
+                            if LAST_REC_POS != Some(current_pos) {
+                                LAST_REC_POS = Some(current_pos);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+
+                        if should_update {
+                            // Keep REC in sync even during drag/resize.
+                            if is_interacting {
+                                println!("[MAIN] Interaction active - updating REC to x={}, y={}, w={}",
+                                    current_rect.0, current_rect.1, current_rect.2);
+                            } else {
+                                println!("[MAIN] Position changed - updating REC to x={}, y={}, w={}",
+                                    current_rect.0, current_rect.1, current_rect.2);
+                            }
+                            rec.update_position(
+                                current_rect.0,
+                                current_rect.1,
+                                current_rect.2,
+                                border_width as i32,
+                            );
+                        }
+                    }
+                }
+
                 if last_region.is_none() || last_region.unwrap() != current_rect {
                     log::info!("Border region changed: x={}, y={}, w={}, h={}", 
                         current_rect.0, current_rect.1, current_rect.2, current_rect.3);
@@ -1096,18 +1312,6 @@ async fn start_capture(
                         if let Some(ref mut dest) = *dest_lock {
                             dest.resize(current_rect.2 as u32, current_rect.3 as u32);
                             log::info!("Destination window resized to: {}x{}", current_rect.2, current_rect.3);
-                        }
-                    }
-
-                    // Update REC indicator position
-                    if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
-                        if let Some(ref rec) = *rec_lock {
-                            rec.update_position(
-                                current_rect.0,
-                                current_rect.1,
-                                current_rect.2,
-                                border_width as i32,
-                            );
                         }
                     }
                 }
@@ -1187,11 +1391,27 @@ async fn start_capture(
 
             // Frame rate limiting
             let elapsed = frame_start.elapsed();
-            if elapsed < frame_duration {
-                std::thread::sleep(frame_duration - elapsed);
+            
+            // During border interaction (drag/resize), use faster update rate for Meet sync
+            #[cfg(target_os = "macos")]
+            let is_interacting = hollow_border::is_border_interacting();
+            #[cfg(not(target_os = "macos"))]
+            let is_interacting = false;
+            
+            let min_frame_duration = if is_interacting {
+                // 5ms during interaction = ~200 FPS max for smooth Meet updates
+                std::time::Duration::from_millis(5)
+            } else {
+                frame_duration
+            };
+            
+            if elapsed < min_frame_duration {
+                std::thread::sleep(min_frame_duration - elapsed);
             }
         }
     });
+
+    *state.render_thread_handle.lock().unwrap() = Some(render_handle);
 
     log::info!("Capture started successfully");
     Ok(())
@@ -1202,65 +1422,31 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("Stopping capture");
 
     // Save last region if remember_last_region is enabled
-    let settings = state.settings.lock().unwrap().clone();
-    if settings.remember_last_region {
-        if let Ok(border_lock) = HOLLOW_BORDER.lock() {
-            if let Some(ref border) = *border_lock {
-                // Get inner rect (capture area without border thickness)
-                // IMPORTANT: On macOS, NSWindow frame access must be on main thread
-                let rect = border.get_inner_rect();
-                
-                log::info!("Read border position: x={}, y={}, w={}, h={}", rect.0, rect.1, rect.2, rect.3);
-                let mut updated_settings = settings.clone();
-                updated_settings.last_region = Some([rect.0, rect.1, rect.2, rect.3]);
-                
-                // Save to disk - merge with existing JSON to preserve other settings
-                if let Some(config_dir) = dirs::config_dir() {
-                    let rustframe_dir = config_dir.join("RustFrame");
-                    let _ = std::fs::create_dir_all(&rustframe_dir);
-                    let settings_path = rustframe_dir.join("settings.json");
-                    
-                    log::info!("Saving last_region to: {}", settings_path.display());
-                    
-                    // Read existing settings JSON
-                    let mut existing_value: serde_json::Value = if settings_path.exists() {
-                        std::fs::read_to_string(&settings_path)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok())
-                            .unwrap_or_else(|| serde_json::json!({}))
-                    } else {
-                        serde_json::json!({})
-                    };
-                    
-                    // Update last_region field
-                    if let serde_json::Value::Object(ref mut obj) = existing_value {
-                        obj.insert(
-                            "last_region".to_string(),
-                            serde_json::json!([rect.0, rect.1, rect.2, rect.3])
-                        );
-                    }
-                    
-                    // Write back to disk
-                    match serde_json::to_string_pretty(&existing_value) {
-                        Ok(json) => {
-                            match std::fs::write(&settings_path, json) {
-                                Ok(_) => {
-                                    log::info!("✓ Saved last region: x={}, y={}, w={}, h={} to {}", 
-                                        rect.0, rect.1, rect.2, rect.3, settings_path.display());
-                                }
-                                Err(e) => {
-                                    log::error!("✗ Failed to write settings file: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("✗ Failed to serialize settings: {}", e);
-                        }
-                    }
-                }
-                
-                // Update app state
-                *state.settings.lock().unwrap() = updated_settings;
+    let remember_last_region = state.settings.lock().unwrap().remember_last_region;
+    if remember_last_region {
+        let border_guard = match HOLLOW_BORDER.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let rect = border_guard.as_ref().map(|b| b.get_inner_rect());
+
+        if let Some(rect) = rect {
+            log::info!(
+                "Read border position: x={}, y={}, w={}, h={}",
+                rect.0,
+                rect.1,
+                rect.2,
+                rect.3
+            );
+
+            let updated_settings = {
+                let mut settings_guard = state.settings.lock().unwrap();
+                settings_guard.last_region = Some([rect.0, rect.1, rect.2, rect.3]);
+                settings_guard.clone()
+            };
+
+            if let Err(e) = persist_settings_to_disk(&updated_settings) {
+                log::error!("Failed to persist last_region: {}", e);
             }
         }
     }
@@ -1268,8 +1454,10 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     // Signal render thread to stop
     *state.render_thread_stop.lock().unwrap() = true;
 
-    // Give render thread time to stop
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Join render thread to ensure it isn't still touching NSWindow-backed objects.
+    if let Some(handle) = state.render_thread_handle.lock().unwrap().take() {
+        let _ = handle.join();
+    }
 
     // Stop capture engine
     let mut engine_lock = state.capture_engine.lock().unwrap();
@@ -1472,17 +1660,9 @@ fn main() {
     }));
 
     // Load settings + active profile (active_profile is stored as an extra key in settings.json)
+    // Robust to legacy/incomplete settings files: we merge onto defaults and migrate known fields.
     let (settings, active_profile) = if let Some(dir) = rustframe_config_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        let settings_path = dir.join("settings.json");
-        if settings_path.exists() {
-            let raw = std::fs::read_to_string(&settings_path).ok().unwrap_or_default();
-            let settings: Settings = serde_json::from_str(&raw).unwrap_or_default();
-            let active_profile = read_active_profile_from_settings_json(&dir);
-            (settings, active_profile)
-        } else {
-            (Settings::default(), None)
-        }
+        load_settings_and_profile_from_disk(&dir)
     } else {
         (Settings::default(), None)
     };
@@ -1498,6 +1678,7 @@ fn main() {
         active_profile: Arc::new(Mutex::new(active_profile)),
         is_capturing: Arc::new(Mutex::new(false)),
         render_thread_stop: Arc::new(Mutex::new(false)),
+        render_thread_handle: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1508,6 +1689,7 @@ fn main() {
             is_dev_mode,
             get_platform_info,
             get_settings,
+            get_border_rect,
             get_capture_profiles,
             get_active_capture_profile,
             get_capture_profile_hints,
@@ -1541,8 +1723,10 @@ fn main() {
                         // Signal render thread to stop
                         *app_state.render_thread_stop.lock().unwrap() = true;
 
-                        // Give render thread time to stop
-                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        // Join render thread to avoid dropping windows while it's rendering
+                        if let Some(handle) = app_state.render_thread_handle.lock().unwrap().take() {
+                            let _ = handle.join();
+                        }
 
                         // Stop capture engine
                         if let Ok(mut engine_lock) = app_state.capture_engine.lock() {

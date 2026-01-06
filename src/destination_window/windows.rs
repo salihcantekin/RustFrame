@@ -4,6 +4,7 @@
 //! This is necessary because Tauri's WebView2 message loop doesn't pump
 //! messages for other WinAPI windows created in the main thread.
 
+use crate::traits::PreviewWindow;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -553,4 +554,34 @@ unsafe fn paint_frame_gdi(hdc: HDC, data: &[u8], width: u32, height: u32) {
     }
 
     let _ = DeleteDC(mem_dc);
+}
+
+impl PreviewWindow for DestinationWindow {
+    type Config = DestinationWindowConfig;
+    
+    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self> where Self: Sized {
+        DestinationWindow::new(width, height, config)
+    }
+    
+    fn hwnd_value(&self) -> isize {
+        self.hwnd_value()
+    }
+    
+    fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
+        self.update_frame(data, width, height);
+    }
+    
+    fn render(&mut self, _pixels: &[u8], _width: u32, _height: u32) {
+        // Windows implementation uses update_frame() + timer-based rendering
+        // This method is not used in the Windows implementation
+        // Kept for trait compatibility
+    }
+    
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize(width, height);
+    }
+    
+    fn set_pos(&mut self, x: i32, y: i32) {
+        self.set_pos(x, y);
+    }
 }

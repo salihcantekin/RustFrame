@@ -1,6 +1,7 @@
 //! REC Indicator Overlay Window
 //! Shows a "● REC" indicator in the top-right corner of the capture region
 
+use crate::traits::RecordingIndicator;
 use lazy_static::lazy_static;
 use log::info;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +21,11 @@ use objc::{msg_send, sel, sel_impl, class};
 extern "C" {
     static _dispatch_main_q: std::ffi::c_void;
     fn dispatch_sync_f(
+        queue: *const std::ffi::c_void,
+        context: *mut std::ffi::c_void,
+        work: extern "C" fn(*mut std::ffi::c_void),
+    );
+    fn dispatch_async_f(
         queue: *const std::ffi::c_void,
         context: *mut std::ffi::c_void,
         work: extern "C" fn(*mut std::ffi::c_void),
@@ -105,6 +111,13 @@ impl RecIndicator {
         {
             info!("Creating macOS REC indicator window");
             println!("[REC] Creating macOS REC indicator");
+
+            // Clear any stale pointer from a previous session.
+            // Otherwise `new()` may think the window is already created and consumers may call
+            // show/hide/update_position using a freed NSWindow pointer.
+            if let Ok(mut hwnd_lock) = REC_HWND.lock() {
+                *hwnd_lock = 0;
+            }
 
             let stop_flag = Arc::new(AtomicBool::new(false));
             let stop_flag_clone = stop_flag.clone();
@@ -281,9 +294,8 @@ impl RecIndicator {
         region_width: i32,
         border_width: i32,
     ) {
-        if !REC_VISIBLE.load(Ordering::SeqCst) {
-            return;
-        }
+        // Always update and show - don't check REC_VISIBLE
+        // This ensures REC reappears after hide()
 
         let (width, height) = get_indicator_dimensions();
 
@@ -313,6 +325,67 @@ impl RecIndicator {
                 }
             }
         }
+        
+        #[cfg(target_os = "macos")]
+        if let Ok(hwnd_lock) = REC_HWND.lock() {
+            let window_ptr = *hwnd_lock;
+            if window_ptr != 0 {
+                struct UpdatePosContext {
+                    window_ptr: isize,
+                    pos_x: i32,
+                    pos_y: i32,
+                    height: i32,
+                }
+                
+                extern "C" fn update_pos_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+                    let ctx = unsafe { &*(ctx_ptr as *const UpdatePosContext) };
+                    unsafe {
+                        let window: id = ctx.window_ptr as *mut objc::runtime::Object;
+                        
+                        // Get screen height for coordinate conversion
+                        let screen: id = msg_send![window, screen];
+                        let screen_frame: NSRect = msg_send![screen, frame];
+                        let screen_height = screen_frame.size.height;
+                        
+                        // Convert top-left to bottom-left coordinates
+                        let origin = NSPoint::new(
+                            ctx.pos_x as f64,
+                            screen_height - (ctx.pos_y as f64) - (ctx.height as f64)
+                        );
+                        
+                        let _: () = msg_send![window, setFrameOrigin: origin];
+                        // Like Windows SetWindowPos with SWP_SHOWWINDOW - always show
+                        let _: () = msg_send![window, orderFront: nil];
+                    }
+                }
+                
+                // Use stack context for synchronous dispatch (like Windows SetWindowPos)
+                let mut context = UpdatePosContext {
+                    window_ptr,
+                    pos_x,
+                    pos_y,
+                    height,
+                };
+                
+                unsafe {
+                    let is_main = pthread_main_np() != 0;
+                    if !is_main {
+                        // SYNC dispatch: blocking but ensures immediate update like Windows
+                        dispatch_sync_f(
+                            &_dispatch_main_q,
+                            &mut context as *mut _ as *mut std::ffi::c_void,
+                            update_pos_on_main_thread,
+                        );
+                    } else {
+                        // Already on main thread, call directly
+                        update_pos_on_main_thread(&mut context as *mut _ as *mut std::ffi::c_void);
+                    }
+                }
+            }
+        }
+        
+        // Mark as visible after updating position
+        REC_VISIBLE.store(true, Ordering::SeqCst);
     }
 
     /// Set the size of the indicator
@@ -356,6 +429,11 @@ impl Drop for RecIndicator {
 
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join();
+        }
+
+        // After the thread exits (and window is closed), clear the cached pointer.
+        if let Ok(mut hwnd_lock) = REC_HWND.lock() {
+            *hwnd_lock = 0;
         }
     }
 }
@@ -610,26 +688,38 @@ extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             NSSize::new(width as f64, height as f64)
         );
         
-        // Create borderless window
-        let window = NSWindow::alloc(nil).initWithContentRect_styleMask_backing_defer_(
-            frame,
-            NSWindowStyleMask::NSBorderlessWindowMask,
-            NSBackingStoreType::NSBackingStoreBuffered,
-            NO,
-        );
+        // Create borderless panel (non-activating utility window)
+        const NS_NONACTIVATING_PANEL_MASK: u64 = 1 << 7;
+        let style_mask_raw = NSWindowStyleMask::NSBorderlessWindowMask.bits() | NS_NONACTIVATING_PANEL_MASK;
+        
+        let panel_class = class!(NSPanel);
+        let window: id = msg_send![panel_class, alloc];
+        let window: id = msg_send![window,
+            initWithContentRect:frame
+            styleMask:style_mask_raw
+            backing:NSBackingStoreType::NSBackingStoreBuffered as u64
+            defer:NO
+        ];
         
         if window == nil {
             println!("[REC] ERROR: Failed to create NSWindow");
             return;
         }
         
-        // Configure window - simplified version
-        println!("[REC] Configuring window properties...");
+        // Configure panel - non-activating
         window.setOpaque_(NO);
         let clear: id = NSColor::clearColor(nil);
         window.setBackgroundColor_(clear);
         let _: () = msg_send![window, setLevel: 3i32]; // Floating level
         window.setIgnoresMouseEvents_(YES);
+        
+        // CRITICAL: Exclude from screen capture/sharing
+        // NSWindowSharingNone = 0 - window won't appear in screen recordings/shares
+        let _: () = msg_send![window, setSharingType: 0u64];
+        
+        // NSPanel-specific: Never become key window
+        let _: () = msg_send![window, setBecomesKeyOnlyIfNeeded: YES];
+        let _: () = msg_send![window, setWorksWhenModal: YES];
         
         println!("[REC] Getting content view...");
         let content_view: id = window.contentView();
@@ -668,10 +758,10 @@ extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
         println!("[REC] Adding subview...");
         let _: () = msg_send![content_view, addSubview: text_label];
         
-        println!("[REC] Showing window...");
-        window.makeKeyAndOrderFront_(nil);
+        // Show window without making it key (prevents app activation)
+        let _: () = msg_send![window, orderFront: nil];
         
-        println!("[REC] macOS REC window created successfully");
+        log::info!("macOS REC indicator created (non-activating panel)");
         
         // Store result
         ctx.result_window = window;
@@ -725,11 +815,58 @@ fn run_rec_thread_macos(stop_flag: Arc<AtomicBool>) {
     
     // Clean up
     if result_window != nil {
-        unsafe {
-            let _: () = msg_send![result_window, close];
+        extern "C" fn close_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+            let window = ctx_ptr as id;
+            unsafe {
+                let _pool = NSAutoreleasePool::new(nil);
+                let _: () = msg_send![window, orderOut: nil];
+                let _: () = msg_send![window, close];
+            }
         }
+
+        let is_main = unsafe { pthread_main_np() } != 0;
+        if !is_main {
+            unsafe {
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    result_window as *mut std::ffi::c_void,
+                    close_on_main_thread,
+                );
+            }
+        } else {
+            close_on_main_thread(result_window as *mut std::ffi::c_void);
+        }
+    }
+
+    // Clear global pointer on exit.
+    if let Ok(mut hwnd_lock) = REC_HWND.lock() {
+        *hwnd_lock = 0;
     }
     
     REC_THREAD_RUNNING.store(false, Ordering::SeqCst);
     println!("[REC] macOS REC thread exiting");
 }
+
+// Implement cross-platform RecordingIndicator trait
+impl RecordingIndicator for RecIndicator {
+    fn new() -> Option<Self> {
+        RecIndicator::new()
+    }
+
+    fn show(&self, x: i32, y: i32, border_width: i32) {
+        self.show(x, y, border_width)
+    }
+
+    fn hide(&self) {
+        self.hide()
+    }
+
+    fn update_position(&self, region_x: i32, region_y: i32, region_width: i32, border_width: i32) {
+        self.update_position(region_x, region_y, region_width, border_width)
+    }
+
+    fn set_size(&self, size: &str) {
+        self.set_size(size)
+    }
+}
+

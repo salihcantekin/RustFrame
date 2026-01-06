@@ -1,0 +1,20 @@
+{
+  "show_cursor": true,
+  "capture_clicks": false,
+  "click_highlight_color": [255, 255, 0, 180],
+  "click_dissolve_ms": 300,
+
+  "show_border": true,
+  "border_color": [255, 0, 0, 255],
+  "border_width": 3,
+
+  "target_fps": 60,
+  "capture_method": "CoreGraphics",
+  "preview_mode": "TauriCanvas",
+
+  "remember_last_region": true,
+  "last_region": [100, 100, 600, 400],
+
+  "show_rec_indicator": true,
+  "rec_indicator_size": "medium"
+}

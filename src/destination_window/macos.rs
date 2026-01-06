@@ -6,6 +6,7 @@
 //! - Discord: May require different settings
 //! - Zoom: Similar to Meet
 
+use crate::traits::PreviewWindow;
 use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSColor, NSView};
 use cocoa::base::{id, nil, YES, NO};
 use cocoa::foundation::{NSRect, NSPoint, NSSize, NSAutoreleasePool};
@@ -492,5 +493,33 @@ impl Drop for DestinationWindow {
         }
         
         println!("[DEST_WINDOW] Drop completed");
+    }
+}
+
+impl PreviewWindow for DestinationWindow {
+    type Config = DestinationWindowConfig;
+    
+    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self> where Self: Sized {
+        DestinationWindow::new(width, height, config)
+    }
+    
+    fn hwnd_value(&self) -> isize {
+        self.hwnd_value()
+    }
+    
+    fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
+        self.update_frame(data, width, height);
+    }
+    
+    fn render(&mut self, pixels: &[u8], width: u32, height: u32) {
+        self.render(pixels, width, height);
+    }
+    
+    fn resize(&mut self, width: u32, height: u32) {
+        self.resize(width, height);
+    }
+    
+    fn set_pos(&mut self, x: i32, y: i32) {
+        self.set_pos(x, y);
     }
 }

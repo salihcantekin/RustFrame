@@ -12,6 +12,15 @@
 - Support multiple capture methods optimized for each platform
 - Maintain high performance with minimal memory footprint
 
+### Non-Negotiable Core Features (Do Not Break)
+- **Hollow Border Window**: A dedicated border window for region selection/moving/resizing.
+- **Click-Through Capture Mode**: In capture mode, the border’s interior must remain click-through; only the border edges/corners should be interactive.
+- **Preview Window**: A destination/preview window that displays the captured region and can be selected in screen sharing pickers (Meet/Zoom/Discord/Teams).
+- **Settings as Source of Truth**: Settings must be persisted in the user config directory and loaded reliably on next startup; changes must not silently reset to defaults.
+- **Last Region Memory**: When enabled, the last capture region must be saved and restored on startup.
+
+If you make changes in this repo, you MUST verify that these core features still work on the affected platform(s). If preserving these invariants conflicts with a change, prefer the invariant and adjust the change.
+
 ---
 
 ## Cross-Platform Architecture
