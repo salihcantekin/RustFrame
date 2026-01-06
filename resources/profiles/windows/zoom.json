@@ -1,0 +1,13 @@
+{
+  "name": "Zoom",
+  "description": "Optimized for Zoom - uses standard window flags for maximum compatibility",
+  "winapi_destination_overlapped": false,
+  "winapi_destination_appwindow": true,
+  "winapi_destination_toolwindow": false,
+  "winapi_destination_layered": true,
+  "winapi_destination_alpha": 255,
+  "winapi_destination_topmost": true,
+  "winapi_destination_click_through": true,
+  "winapi_destination_noactivate": true,
+  "winapi_destination_hide_taskbar_after_ms": null
+}

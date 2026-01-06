@@ -1,0 +1,10 @@
+{
+  "name": "Microsoft Teams (macOS)",
+  "description": "Optimized for Microsoft Teams on macOS - standard window sharing settings",
+  "macos_floating_level": false,
+  "macos_sharing_type": 1,
+  "macos_participates_in_cycle": true,
+  "alpha": 255,
+  "topmost": false,
+  "click_through": true
+}

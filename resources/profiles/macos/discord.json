@@ -1,0 +1,10 @@
+{
+  "name": "Discord (macOS)",
+  "description": "Optimized for Discord on macOS - normal window level with cycle participation",
+  "macos_floating_level": false,
+  "macos_sharing_type": 1,
+  "macos_participates_in_cycle": true,
+  "alpha": 255,
+  "topmost": false,
+  "click_through": true
+}

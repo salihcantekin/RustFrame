@@ -37,20 +37,13 @@ const EDGE_TOP: i32 = 1 << 3;
 extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
     let ctx = unsafe { &mut *(context as *mut CreateBorderContext) };
     
-    println!("[HOLLOW_BORDER] create_border_on_main_thread ENTERED");
-    
     unsafe {
         let _pool = NSAutoreleasePool::new(nil);
-        
-        println!("[HOLLOW_BORDER] Getting main screen...");
         let screen: id = msg_send![class!(NSScreen), mainScreen];
         let screen_frame: NSRect = msg_send![screen, frame];
         let screen_height = screen_frame.size.height;
         
         let macos_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
-        
-        println!("[HOLLOW_BORDER] Creating NSWindow at ({}, {}) size {}x{}",
-            ctx.x, macos_y, ctx.width, ctx.height);
         
         let style_mask = NSWindowStyleMask::NSBorderlessWindowMask | NSWindowStyleMask::NSResizableWindowMask;
         
@@ -66,24 +59,33 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
             NO,
         );
         
-        println!("[HOLLOW_BORDER] NSWindow created: {:?}", window);
-        
         if window == nil {
-            println!("[HOLLOW_BORDER] ERROR: Failed to create NSWindow");
+            log::error!("Failed to create hollow border NSWindow");
             ctx.result_window = None;
             return;
         }
         
-        println!("[HOLLOW_BORDER] Configuring window...");
         window.setOpaque_(NO);
         PREVIEW_MODE.store(true, Ordering::SeqCst);
         let preview_bg: id = msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
         window.setBackgroundColor_(preview_bg);
         let _: () = msg_send![window, setMovableByWindowBackground: YES];
-        let _: () = msg_send![window, setLevel: 3i32];
-        window.setIgnoresMouseEvents_(YES); // Click-through enabled
         
-        println!("[HOLLOW_BORDER] Creating custom view...");
+        // Set window level to floating (3) - always on top
+        let _: () = msg_send![window, setLevel: 3i32];
+        
+        // Configure collection behavior to prevent affecting main window
+        // - Stay in all spaces (CanJoinAllSpaces)
+        // - Don't show in Cmd+Tab (IgnoresCycle)
+        // Note: Removed Transient and Stationary to allow main window activation
+        let collection_behavior = 
+            (1u64 << 0) | // CanJoinAllSpaces
+            (1u64 << 6);  // IgnoresCycle
+        let _: () = msg_send![window, setCollectionBehavior: collection_behavior];
+        
+        // Initially click-through (mouse events ignored)
+        window.setIgnoresMouseEvents_(YES);
+        
         register_border_view_class();
         
         let view_class = Class::get("HollowBorderView").expect("HollowBorderView class not registered");
@@ -557,16 +559,71 @@ impl HollowBorder {
     }
 
     pub fn get_rect(&self) -> (i32, i32, i32, i32) {
-        (self.x, self.y, self.width, self.height)
+        // Get current window frame from NSWindow (user may have moved/resized)
+        // Must run on main thread for Cocoa API safety
+        
+        extern "C" fn get_rect_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+            #[repr(C)]
+            struct GetRectContext {
+                window: id,
+                result: *mut (i32, i32, i32, i32),
+            }
+            
+            let ctx = unsafe { &mut *(ctx_ptr as *mut GetRectContext) };
+            
+            unsafe {
+                let frame: NSRect = msg_send![ctx.window, frame];
+                let screen: id = msg_send![class!(NSScreen), mainScreen];
+                let screen_frame: NSRect = msg_send![screen, frame];
+                let screen_height = screen_frame.size.height;
+                
+                // Convert from macOS coordinates (bottom-left) to our coordinates (top-left)
+                let x = frame.origin.x as i32;
+                let y = (screen_height - frame.origin.y - frame.size.height) as i32;
+                let width = frame.size.width as i32;
+                let height = frame.size.height as i32;
+                
+                *ctx.result = (x, y, width, height);
+            }
+        }
+        
+        unsafe {
+            let is_main = pthread_main_np() != 0;
+            let mut result = (0, 0, 0, 0);
+            
+            struct GetRectContext {
+                window: id,
+                result: *mut (i32, i32, i32, i32),
+            }
+            
+            let mut context = GetRectContext {
+                window: self.window,
+                result: &mut result as *mut (i32, i32, i32, i32),
+            };
+            
+            if !is_main {
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    &mut context as *mut _ as *mut std::ffi::c_void,
+                    get_rect_on_main_thread,
+                );
+            } else {
+                get_rect_on_main_thread(&mut context as *mut _ as *mut std::ffi::c_void);
+            }
+            
+            result
+        }
     }
 
     pub fn get_inner_rect(&self) -> (i32, i32, i32, i32) {
+        // Get current window frame (may have been moved/resized by user)
+        let (x, y, width, height) = self.get_rect();
         let bw = self.border_width;
         (
-            self.x + bw,
-            self.y + bw,
-            self.width - 2 * bw,
-            self.height - 2 * bw,
+            x + bw,
+            y + bw,
+            width - 2 * bw,
+            height - 2 * bw,
         )
     }
 
@@ -718,7 +775,6 @@ impl HollowBorder {
     }
 
     pub fn hide(&self) {
-        println!("[HOLLOW_BORDER] hide() called");
         log::info!("Hiding macOS hollow border");
         
         extern "C" fn hide_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
@@ -783,7 +839,6 @@ impl HollowBorder {
     /// Set capture mode: interior click-through, only border is interactive
     pub fn set_capture_mode(&mut self) {
         println!("[HOLLOW_BORDER] set_capture_mode() called");
-        log::info!("Setting hollow border to capture mode (click-through)");
         PREVIEW_MODE.store(false, Ordering::SeqCst);
         
         struct SetCaptureModeContext {
@@ -812,14 +867,12 @@ impl HollowBorder {
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
-                println!("[HOLLOW_BORDER] set_capture_mode dispatching to main");
                 dispatch_sync_f(
                     &_dispatch_main_q,
                     &mut context as *mut _ as *mut std::ffi::c_void,
                     set_capture_mode_on_main_thread,
                 );
             } else {
-                println!("[HOLLOW_BORDER] set_capture_mode on main thread");
                 set_capture_mode_on_main_thread(&mut context as *mut _ as *mut std::ffi::c_void);
             }
         }
@@ -844,12 +897,9 @@ impl HollowBorder {
 
 impl Drop for HollowBorder {
     fn drop(&mut self) {
-        println!("[HOLLOW_BORDER] Drop called");
-        
         extern "C" fn close_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
-                println!("[HOLLOW_BORDER] Hiding and closing window on main thread");
                 let _: () = msg_send![window, orderOut: nil];
                 let _: () = msg_send![window, close];
             }
@@ -857,22 +907,17 @@ impl Drop for HollowBorder {
         
         unsafe {
             let is_main = pthread_main_np() != 0;
-            println!("[HOLLOW_BORDER] Drop on main thread: {}", is_main);
             
             if !is_main {
-                println!("[HOLLOW_BORDER] Dispatching window close to main thread");
                 dispatch_sync_f(
                     &_dispatch_main_q,
                     self.window as *mut std::ffi::c_void,
                     close_window_on_main_thread,
                 );
             } else {
-                println!("[HOLLOW_BORDER] Closing window directly on main thread");
                 let _: () = msg_send![self.window, orderOut: nil];
                 let _: () = msg_send![self.window, close];
             }
         }
-        
-        println!("[HOLLOW_BORDER] Drop completed");
     }
 }

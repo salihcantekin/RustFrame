@@ -35,6 +35,7 @@ opt-level = 1
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
+dirs = "5.0"
 
 [dependencies]
 # Tauri framework

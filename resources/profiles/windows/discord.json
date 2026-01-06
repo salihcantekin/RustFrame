@@ -1,0 +1,13 @@
+{
+  "name": "Discord",
+  "description": "Optimized for Discord screen sharing - uses WS_OVERLAPPEDWINDOW to appear in Discord's window list",
+  "winapi_destination_overlapped": true,
+  "winapi_destination_appwindow": false,
+  "winapi_destination_toolwindow": false,
+  "winapi_destination_layered": true,
+  "winapi_destination_alpha": 255,
+  "winapi_destination_topmost": true,
+  "winapi_destination_click_through": true,
+  "winapi_destination_noactivate": true,
+  "winapi_destination_hide_taskbar_after_ms": 3000
+}

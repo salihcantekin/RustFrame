@@ -46,13 +46,24 @@ fn get_macos_version() -> (isize, isize, isize) {
     }
 }
 
-/// Check if we should use legacy CGWindowListCreateImage (always show permission prompt)
-/// or modern approach with better privacy handling
+/// Check if we should use legacy CGWindowListCreateImage
+/// or modern CGDisplayCreateImageForRect (macOS 15+/Sequoia)
+/// 
+/// BOTH APIs require Screen Recording permission (one-time setup).
+/// After permission is granted once, no more prompts appear.
+/// 
+/// Note: macOS internal versioning:
+/// - macOS 11 Big Sur = 20.x
+/// - macOS 12 Monterey = 21.x
+/// - macOS 13 Ventura = 22.x
+/// - macOS 14 Sonoma = 23.x
+/// - macOS 15 Sequoia = 24.x, 25.x, 26.x (depending on build)
 #[cfg(target_os = "macos")]
 fn should_use_legacy_capture() -> bool {
     let (major, _minor, _patch) = get_macos_version();
-    // Use legacy for macOS < 15.0
-    major < 15
+    // Use legacy for anything before Sequoia (macOS 15)
+    // Sequoia uses internal version 24, 25, or 26
+    major < 24
 }
 
 /// Log the capture method being used
@@ -60,9 +71,9 @@ fn should_use_legacy_capture() -> bool {
 fn log_capture_method() {
     let (major, minor, patch) = get_macos_version();
     if should_use_legacy_capture() {
-        info!("macOS {}.{}.{}: Using legacy CGWindowListCreateImage (may show privacy prompt)", major, minor, patch);
+        info!("macOS {}.{}.{}: Using legacy CGWindowListCreateImage (one-time permission required)", major, minor, patch);
     } else {
-        info!("macOS {}.{}.{}: Using improved capture with better privacy handling", major, minor, patch);
+        info!("macOS {}.{}.{}: Using modern CGDisplayCreateImageForRect (one-time permission required)", major, minor, patch);
     }
 }
 
@@ -101,6 +112,7 @@ extern "C" {
 // CGWindowImageOption values
 const kCGWindowImageDefault: u32 = 0;
 const kCGWindowImageNominalResolution: u32 = 1 << 4;
+const kCGWindowImageBestResolution: u32 = 1 << 5;
 
 /// macOS capture engine using CoreGraphics
 pub struct MacOSCaptureEngine {
@@ -128,28 +140,20 @@ struct CaptureContext {
 /// Supports both legacy and modern capture APIs based on macOS version
 #[cfg(target_os = "macos")]
 extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
-    println!("[CAPTURE] capture_on_main_thread callback ENTERED");
     let ctx = unsafe { &mut *(context as *mut CaptureContext) };
     
     autoreleasepool(|| {
-        println!("[CAPTURE] Inside autoreleasepool");
-        
         // Check permission first
-        println!("[CAPTURE] Checking screen capture permission...");
         unsafe {
             let has_perm = CGPreflightScreenCaptureAccess();
-            println!("[CAPTURE] Permission check returned: {}", has_perm);
             if !has_perm {
-                println!("[CAPTURE] No permission, requesting access...");
                 let granted = CGRequestScreenCaptureAccess();
-                println!("[CAPTURE] Permission request result: {}", granted);
                 
                 if !granted {
                     ctx.error = Some("Screen Recording permission denied. Please enable it in System Settings > Privacy & Security > Screen Recording and restart the app".to_string());
-                    println!("[CAPTURE] ERROR: Permission denied");
+                    log::error!("Screen capture permission denied");
                     return;
                 }
-                println!("[CAPTURE] Permission granted, proceeding with capture");
             }
         }
         
@@ -164,45 +168,34 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             },
         };
         
-        println!("[CAPTURE] Capturing at ({}, {}) size {}x{}",
-            ctx.region.x, ctx.region.y, ctx.region.width, ctx.region.height);
-        
         // Choose capture method based on macOS version
         let image_ptr = if should_use_legacy_capture() {
-            println!("[CAPTURE] Using legacy CGWindowListCreateImage");
             unsafe {
                 CGWindowListCreateImage(
                     capture_rect,
                     kCGWindowListOptionOnScreenOnly,
                     kCGNullWindowID,
-                    kCGWindowImageDefault | kCGWindowImageNominalResolution,
+                    kCGWindowImageDefault | kCGWindowImageBestResolution,
                 )
             }
         } else {
-            println!("[CAPTURE] Using modern CGDisplayCreateImageForRect (macOS 15+)");
             unsafe {
                 let display_id = CGMainDisplayID();
                 CGDisplayCreateImageForRect(display_id, capture_rect)
             }
         };
-
-        println!("[CAPTURE] Capture API returned: {:?}", image_ptr);
         
         if image_ptr.is_null() {
             ctx.error = Some("Screen capture returned NULL - screen recording permission may be denied or region may be invalid".to_string());
-            println!("[CAPTURE] ERROR: NULL image");
             return;
         }
         
         // Take ownership of the image
-        println!("[CAPTURE] Creating CGImage from pointer...");
         let screen_image: CGImage = unsafe { CGImage::from_ptr(image_ptr) };
-        println!("[CAPTURE] CGImage created successfully");
 
         // Convert to RGBA8 - ALL on main thread
         let img_width = screen_image.width();
         let img_height = screen_image.height();
-        println!("[CAPTURE] Image dimensions: {}x{}", img_width, img_height);
         if img_width == 0 || img_height == 0 {
             ctx.error = Some("Captured image has zero dimensions".to_string());
             return;
@@ -212,12 +205,8 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
         let height = img_height as u32;
         let bytes_per_row = width as usize * 4;
         
-        println!("[CAPTURE] Creating color space...");
         let color_space = core_graphics::color_space::CGColorSpace::create_device_rgb();
         let mut pixel_data = vec![0u8; bytes_per_row * height as usize];
-        println!("[CAPTURE] Allocated {} bytes for pixel data", pixel_data.len());
-
-        println!("[CAPTURE] Creating bitmap context...");
         let cg_context = core_graphics::context::CGContext::create_bitmap_context(
             Some(pixel_data.as_mut_ptr() as *mut _),
             width as usize,
@@ -227,9 +216,7 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             &color_space,
             core_graphics::base::kCGImageAlphaPremultipliedLast,
         );
-        println!("[CAPTURE] Bitmap context created");
 
-        println!("[CAPTURE] Drawing image to context...");
         cg_context.draw_image(
             core_graphics::geometry::CGRect {
                 origin: core_graphics::geometry::CGPoint { x: 0.0, y: 0.0 },
@@ -241,16 +228,11 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             &screen_image,
         );
         
-        println!("[CAPTURE] Image drawn successfully");
-        
         // Store results
         ctx.pixel_data = Some(pixel_data);
         ctx.result_width = width;
         ctx.result_height = height;
-        println!("[CAPTURE] Capture completed: {}x{}", width, height);
     });
-    
-    println!("[CAPTURE] capture_on_main_thread callback EXITING");
 }
 
 impl MacOSCaptureEngine {
@@ -272,18 +254,6 @@ impl MacOSCaptureEngine {
     /// Capture a region of the screen - dispatches ALL work to main thread
     #[cfg(target_os = "macos")]
     fn capture_region(&mut self, region: CaptureRect) -> Result<()> {
-        println!("[CAPTURE] capture_region called for ({}, {}) size {}x{}",
-            region.x, region.y, region.width, region.height);
-        
-        // Check if we're on main thread
-        let is_main = unsafe { pthread_main_np() } != 0;
-        println!("[CAPTURE] Current thread is main: {}", is_main);
-        
-        log::info!(
-            "capture_region: capturing at ({}, {}) size: {}x{}",
-            region.x, region.y, region.width, region.height
-        );
-        
         // Create context for the callback
         let mut ctx = CaptureContext {
             region,
@@ -294,7 +264,6 @@ impl MacOSCaptureEngine {
         };
         
         // Dispatch ALL capture work to main thread synchronously
-        println!("[CAPTURE] Dispatching to main thread via dispatch_sync_f");
         unsafe {
             let main_queue = &_dispatch_main_q as *const std::ffi::c_void;
             dispatch_sync_f(
@@ -303,7 +272,6 @@ impl MacOSCaptureEngine {
                 capture_on_main_thread,
             );
         }
-        println!("[CAPTURE] dispatch_sync_f returned");
         
         // Check for errors from the callback
         if let Some(err) = ctx.error {

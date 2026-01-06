@@ -354,28 +354,73 @@ fn rustframe_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("RustFrame"))
 }
 
+fn rustframe_profiles_dir() -> Option<PathBuf> {
+    rustframe_config_dir().map(|d| d.join("Profiles"))
+}
+
+fn get_os_profile_subdir() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    }
+}
+
 fn scan_capture_profiles(dir: &Path) -> Vec<CaptureProfileInfo> {
     let mut profiles = Vec::new();
+    
+    // First, check OS-specific subdirectory
+    let os_dir = dir.join(get_os_profile_subdir());
+    if os_dir.exists() {
+        scan_profiles_from_dir(&os_dir, &mut profiles);
+    }
+    
+    // Also scan root directory for backward compatibility
+    scan_profiles_from_dir(dir, &mut profiles);
+    
+    profiles.sort_by(|a, b| a.id.cmp(&b.id));
+    profiles.dedup_by(|a, b| a.id == b.id);
+    profiles
+}
+
+fn scan_profiles_from_dir(dir: &Path, profiles: &mut Vec<CaptureProfileInfo>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
-        return profiles;
+        return;
     };
 
     for entry in entries.flatten() {
         let path = entry.path();
+        
+        // Skip directories
+        if path.is_dir() {
+            continue;
+        }
+        
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
+        
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
             None => continue,
         };
-        if !file_name.starts_with("profile_") {
-            continue;
-        }
-        let id = file_name
-            .trim_start_matches("profile_")
-            .trim_end_matches(".json")
-            .to_string();
+        
+        // Support both "profile_xyz.json" (old) and "xyz.json" (new) formats
+        let id = if file_name.starts_with("profile_") {
+            file_name
+                .trim_start_matches("profile_")
+                .trim_end_matches(".json")
+                .to_string()
+        } else {
+            file_name
+                .trim_end_matches(".json")
+                .to_string()
+        };
+        
         if id.is_empty() {
             continue;
         }
@@ -393,17 +438,50 @@ fn scan_capture_profiles(dir: &Path) -> Vec<CaptureProfileInfo> {
 
         profiles.push(CaptureProfileInfo { id, file_name });
     }
-
-    profiles.sort_by(|a, b| a.id.cmp(&b.id));
-    profiles
 }
 
 fn read_profile_overrides(dir: &Path, profile_id: &str) -> Option<serde_json::Value> {
-    let file_name = format!("profile_{}.json", profile_id);
-    let path = dir.join(file_name);
-    let raw = std::fs::read_to_string(path).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    if value.is_object() { Some(value) } else { None }
+    // Try new format first: Profiles/os/profilename.json
+    let os_subdir = dir.join(get_os_profile_subdir());
+    let new_format_path = os_subdir.join(format!("{}.json", profile_id));
+    
+    if new_format_path.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&new_format_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if value.is_object() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    
+    // Try old format: profile_profilename.json in root
+    let old_format_name = format!("profile_{}.json", profile_id);
+    let old_format_path = dir.join(&old_format_name);
+    
+    if old_format_path.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&old_format_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if value.is_object() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    
+    // Try simple format in root: profilename.json
+    let simple_format_path = dir.join(format!("{}.json", profile_id));
+    if simple_format_path.exists() {
+        if let Ok(raw) = std::fs::read_to_string(&simple_format_path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if value.is_object() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 fn merge_json(base: &mut serde_json::Value, overlay: serde_json::Value) {
@@ -485,11 +563,15 @@ async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
 
 #[tauri::command]
 async fn get_capture_profiles() -> Result<Vec<CaptureProfileInfo>, String> {
-    let Some(dir) = rustframe_config_dir() else {
+    let Some(profiles_dir) = rustframe_profiles_dir() else {
         return Ok(vec![]);
     };
-    let _ = std::fs::create_dir_all(&dir);
-    Ok(scan_capture_profiles(&dir))
+    
+    // Ensure Profiles directory exists
+    let _ = std::fs::create_dir_all(&profiles_dir);
+    
+    // Scan profiles from the Profiles directory
+    Ok(scan_capture_profiles(&profiles_dir))
 }
 
 #[tauri::command]
@@ -499,13 +581,13 @@ async fn get_active_capture_profile(state: State<'_, AppState>) -> Result<Option
 
 #[tauri::command]
 async fn get_capture_profile_hints(profile: String) -> Result<CaptureProfileHints, String> {
-    let Some(dir) = rustframe_config_dir() else {
+    let Some(profiles_dir) = rustframe_profiles_dir() else {
         return Ok(CaptureProfileHints {
             hide_taskbar_after_ms: None,
         });
     };
 
-    let Some(overrides) = read_profile_overrides(&dir, &profile) else {
+    let Some(overrides) = read_profile_overrides(&profiles_dir, &profile) else {
         return Ok(CaptureProfileHints {
             hide_taskbar_after_ms: None,
         });
@@ -684,6 +766,11 @@ fn show_preview_border(
 #[tauri::command]
 fn hide_preview_border() -> Result<(), String> {
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
+    
+    // Note: Preview border position is tracked by get_preview_border_rect()
+    // which is polled by frontend. Settings dialog saves position when user
+    // confirms changes.
+    
     *preview = None;
     Ok(())
 }
@@ -724,14 +811,12 @@ async fn start_capture(
     height: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("[START_CAPTURE] Function called with x={}, y={}, width={}, height={}", x, y, width, height);
+    log::info!("Starting capture at ({}, {}) size {}x{}", x, y, width, height);
     
     // Clean up any previous capture session first (always, not just if capturing)
-    println!("[START_CAPTURE] Cleaning up previous session...");
     
     // Stop capture engine if running
     if let Some(ref mut engine) = *state.capture_engine.lock().unwrap() {
-        println!("[START_CAPTURE] Stopping existing capture engine");
         engine.stop();
     }
     
@@ -739,13 +824,8 @@ async fn start_capture(
     *state.render_thread_stop.lock().unwrap() = true;
     
     // Clean up windows - this will trigger Drop which must be on main thread
-    println!("[START_CAPTURE] Cleaning up HOLLOW_BORDER");
     *HOLLOW_BORDER.lock().unwrap() = None;
-    
-    println!("[START_CAPTURE] Cleaning up DESTINATION_WINDOW");
     *DESTINATION_WINDOW.lock().unwrap() = None;
-    
-    println!("[START_CAPTURE] Cleaning up REC_INDICATOR");
     *REC_INDICATOR.lock().unwrap() = None;
     
     // Reset capturing state
@@ -754,13 +834,11 @@ async fn start_capture(
     // Give a moment for cleanup
     std::thread::sleep(std::time::Duration::from_millis(100));
     
-    println!("[START_CAPTURE] Cleanup complete");
-    
     // Base settings + optional active profile overrides
     let base_settings = state.settings.lock().unwrap().clone();
     let active_profile = state.active_profile.lock().unwrap().clone();
-    let settings = if let (Some(dir), Some(profile_id)) = (rustframe_config_dir(), active_profile) {
-        match read_profile_overrides(&dir, &profile_id) {
+    let settings = if let (Some(profiles_dir), Some(profile_id)) = (rustframe_profiles_dir(), active_profile) {
+        match read_profile_overrides(&profiles_dir, &profile_id) {
             Some(overrides) => match apply_profile_overrides(&base_settings, overrides) {
                 Ok(s) => s,
                 Err(e) => {
@@ -778,25 +856,12 @@ async fn start_capture(
         base_settings
     };
 
-    log::info!(
-        "Starting capture at ({}, {}) with size {}x{}",
-        x,
-        y,
-        width,
-        height
-    );
-
     // Create hollow border (always WinAPI)
     // COLORREF format is 0x00BBGGRR, border_color is [R, G, B, A]
     let border_color = (settings.border_color[0] as u32)
         | ((settings.border_color[1] as u32) << 8)
         | ((settings.border_color[2] as u32) << 16);
 
-    log::info!(
-        "Creating hollow border with color: 0x{:06X}, width: {}",
-        border_color,
-        settings.border_width
-    );
     let mut hollow_border = HollowBorder::new(
         x,
         y,
@@ -807,8 +872,6 @@ async fn start_capture(
     )
     .ok_or("Failed to create hollow border")?;
 
-    log::info!("Hollow border created successfully");
-
     // Capture mode: interior is click-through, only top edge drags
     hollow_border.set_capture_mode();
 
@@ -817,35 +880,16 @@ async fn start_capture(
         hollow_border.hide();
     }
 
-    println!("[START_CAPTURE] Storing HOLLOW_BORDER in global...");
     *HOLLOW_BORDER.lock().unwrap() = Some(hollow_border);
-    println!("[START_CAPTURE] HOLLOW_BORDER stored successfully");
 
-    // Create and show REC indicator if enabled
-    if settings.show_rec_indicator {
-        println!("[START_CAPTURE] REC indicator temporarily disabled for debugging");
-        /*
-        println!("[START_CAPTURE] Creating REC indicator...");
-        let rec = RecIndicator::new().ok_or("Failed to create REC indicator")?;
-        println!("[START_CAPTURE] REC indicator created, setting size...");
-        rec.set_size(&settings.rec_indicator_size);
-        println!("[START_CAPTURE] Showing REC indicator...");
-        rec.show(x + width as i32, y, settings.border_width as i32);
-        println!("[START_CAPTURE] Storing REC indicator...");
-        *REC_INDICATOR.lock().unwrap() = Some(rec);
-        log::info!("REC indicator created and shown");
-        println!("[START_CAPTURE] REC indicator setup complete");
-        */
-    }
-
-    println!("[START_CAPTURE] After REC indicator, before destination window");
+    // REC indicator temporarily disabled
+    // TODO: Re-enable when stability issues are resolved
     
     // Create destination window based on preview mode
     log::info!(
         "Creating destination window in {:?} mode",
         settings.preview_mode
     );
-    println!("[START_CAPTURE] Preview mode: {:?}", settings.preview_mode);
     #[cfg(target_os = "windows")]
     match settings.preview_mode {
         PreviewMode::WinApiGdi => {
@@ -915,14 +959,25 @@ async fn start_capture(
 
     #[cfg(not(target_os = "windows"))]
     {
-        // On macOS/Linux, create a basic destination window
-        log::info!("Creating destination window for non-Windows platform");
-        println!("[START_CAPTURE] About to create DestinationWindow");
+        // On macOS/Linux, create a destination window optimized for screen sharing
         
+        // macOS configuration optimized for screen sharing apps (Meet, Zoom, Discord)
         let config = DestinationWindowConfig {
             alpha: Some(255),
-            topmost: Some(true),
+            // Don't use floating level - it hides from screen sharing pickers
+            topmost: Some(false),
             click_through: Some(true),
+            
+            #[cfg(target_os = "macos")]
+            macos_floating_level: Some(false), // Use normal level for visibility
+            #[cfg(target_os = "macos")]
+            macos_sharing_type: Some(1), // NSWindowSharingReadOnly
+            #[cfg(target_os = "macos")]
+            macos_collection_behavior: None, // Use defaults (managed, joinable, etc.)
+            #[cfg(target_os = "macos")]
+            macos_participates_in_cycle: Some(true), // Visible in window pickers
+            
+            // Windows fields (ignored on macOS)
             toolwindow: None,
             layered: None,
             appwindow: None,
@@ -933,12 +988,10 @@ async fn start_capture(
         let dest_window = DestinationWindow::new(width, height, config)
             .ok_or("Failed to create destination window")?;
         
-        log::info!("Destination window created successfully");
         *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
     }
 
     // Start capture engine
-    log::info!("Starting capture engine");
     let mut engine_lock = state.capture_engine.lock().unwrap();
     // (Re)create capture engine so users can change capture_method from Settings
     if let Some(ref mut existing) = *engine_lock {
@@ -957,7 +1010,6 @@ async fn start_capture(
             log::error!("Capture engine start failed: {}", e);
             e.to_string()
         })?;
-        log::info!("Capture engine started successfully");
     }
     drop(engine_lock);
 
@@ -965,8 +1017,6 @@ async fn start_capture(
     if settings.capture_clicks {
         if let Err(e) = platform::input::start_click_capture() {
             log::warn!("Failed to start click capture: {}", e);
-        } else {
-            log::info!("Click capture started");
         }
     }
 
@@ -983,7 +1033,6 @@ async fn start_capture(
     let border_width = settings.border_width;
 
     std::thread::spawn(move || {
-        println!("[RENDER] Frame rendering thread started");
         log::info!("Frame rendering thread started");
         let frame_duration = std::time::Duration::from_millis(1000 / target_fps as u64);
         let mut last_region: Option<(i32, i32, i32, i32)> = None;
@@ -995,11 +1044,6 @@ async fn start_capture(
         loop {
             // Check stop flag
             if *stop_flag.lock().unwrap() {
-                log::info!(
-                    "Render thread stopping. Stats: {} frames rendered, {} lock skips",
-                    frame_count,
-                    lock_skip_count
-                );
                 break;
             }
 
@@ -1017,16 +1061,14 @@ async fn start_capture(
                 } else {
                     // Lock contention - skip this frame's region check
                     lock_skip_count += 1;
-                    if lock_skip_count % 10 == 0 {
-                        log::warn!("HOLLOW_BORDER lock contention: {} skips", lock_skip_count);
-                    }
                     None
                 }
             }; // HOLLOW_BORDER lock released here
 
             if let Some(current_rect) = current_rect {
                 if last_region.is_none() || last_region.unwrap() != current_rect {
-                    log::info!("Border region changed to: {:?}", current_rect);
+                    log::info!("Border region changed: x={}, y={}, w={}, h={}", 
+                        current_rect.0, current_rect.1, current_rect.2, current_rect.3);
                     last_region = Some(current_rect);
 
                     // Update capture engine region (HOLLOW_BORDER lock already released)
@@ -1042,10 +1084,20 @@ async fn start_capture(
                         if let Err(e) = eng.update_region(new_region) {
                             log::error!("Failed to update capture region: {}", e);
                         } else {
-                            log::info!("Capture region updated successfully");
+                            log::info!("Capture engine region updated to: x={}, y={}, w={}, h={}",
+                                new_region.x, new_region.y, new_region.width, new_region.height);
                         }
                     }
                     drop(engine);
+                    
+                    // Resize destination window to match new region size
+                    // This ensures pixel-perfect display without stretching
+                    if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+                        if let Some(ref mut dest) = *dest_lock {
+                            dest.resize(current_rect.2 as u32, current_rect.3 as u32);
+                            log::info!("Destination window resized to: {}x{}", current_rect.2, current_rect.3);
+                        }
+                    }
 
                     // Update REC indicator position
                     if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
@@ -1114,13 +1166,13 @@ async fn start_capture(
                         frame_count += 1;
                         stats_frame_count += 1;
 
-                        // Print FPS stats every 2 seconds
+                        // Print FPS stats every 10 seconds
                         let elapsed_since_stats = last_stats_time.elapsed();
-                        if elapsed_since_stats.as_secs() >= 2 {
+                        if elapsed_since_stats.as_secs() >= 10 {
                             let actual_fps =
                                 stats_frame_count as f64 / elapsed_since_stats.as_secs_f64();
-                            println!(
-                                "[RENDER] FPS: {:.1}, Total frames: {}, Lock skips: {}",
+                            log::info!(
+                                "Render stats - FPS: {:.1}, Total: {}, Lock skips: {}",
                                 actual_fps, frame_count, lock_skip_count
                             );
                             last_stats_time = std::time::Instant::now();
@@ -1129,7 +1181,6 @@ async fn start_capture(
                     }
                 } else {
                     // Lock contention on destination window
-                    log::warn!("DESTINATION_WINDOW lock contention, frame dropped");
                     lock_skip_count += 1;
                 }
             } // DESTINATION_WINDOW lock released here
@@ -1140,8 +1191,6 @@ async fn start_capture(
                 std::thread::sleep(frame_duration - elapsed);
             }
         }
-
-        log::info!("Frame rendering thread stopped");
     });
 
     log::info!("Capture started successfully");
@@ -1151,6 +1200,70 @@ async fn start_capture(
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("Stopping capture");
+
+    // Save last region if remember_last_region is enabled
+    let settings = state.settings.lock().unwrap().clone();
+    if settings.remember_last_region {
+        if let Ok(border_lock) = HOLLOW_BORDER.lock() {
+            if let Some(ref border) = *border_lock {
+                // Get inner rect (capture area without border thickness)
+                // IMPORTANT: On macOS, NSWindow frame access must be on main thread
+                let rect = border.get_inner_rect();
+                
+                log::info!("Read border position: x={}, y={}, w={}, h={}", rect.0, rect.1, rect.2, rect.3);
+                let mut updated_settings = settings.clone();
+                updated_settings.last_region = Some([rect.0, rect.1, rect.2, rect.3]);
+                
+                // Save to disk - merge with existing JSON to preserve other settings
+                if let Some(config_dir) = dirs::config_dir() {
+                    let rustframe_dir = config_dir.join("RustFrame");
+                    let _ = std::fs::create_dir_all(&rustframe_dir);
+                    let settings_path = rustframe_dir.join("settings.json");
+                    
+                    log::info!("Saving last_region to: {}", settings_path.display());
+                    
+                    // Read existing settings JSON
+                    let mut existing_value: serde_json::Value = if settings_path.exists() {
+                        std::fs::read_to_string(&settings_path)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or_else(|| serde_json::json!({}))
+                    } else {
+                        serde_json::json!({})
+                    };
+                    
+                    // Update last_region field
+                    if let serde_json::Value::Object(ref mut obj) = existing_value {
+                        obj.insert(
+                            "last_region".to_string(),
+                            serde_json::json!([rect.0, rect.1, rect.2, rect.3])
+                        );
+                    }
+                    
+                    // Write back to disk
+                    match serde_json::to_string_pretty(&existing_value) {
+                        Ok(json) => {
+                            match std::fs::write(&settings_path, json) {
+                                Ok(_) => {
+                                    log::info!("✓ Saved last region: x={}, y={}, w={}, h={} to {}", 
+                                        rect.0, rect.1, rect.2, rect.3, settings_path.display());
+                                }
+                                Err(e) => {
+                                    log::error!("✗ Failed to write settings file: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("✗ Failed to serialize settings: {}", e);
+                        }
+                    }
+                }
+                
+                // Update app state
+                *state.settings.lock().unwrap() = updated_settings;
+            }
+        }
+    }
 
     // Signal render thread to stop
     *state.render_thread_stop.lock().unwrap() = true;
