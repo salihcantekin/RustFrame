@@ -22,22 +22,23 @@ lazy_static! {
 }
 
 // Flag indicating border is being dragged/resized
-// When true, REC indicator should be hidden to avoid laggy appearance
+// When true, capture should be paused for performance
 static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
 
-// Callback for immediate border updates (bypassing 60 FPS render thread)
-type BorderUpdateCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
+// Callback to notify when border interaction completes (mouseUp)
+// Called once after drag/resize finishes - updates capture region and windows
+type BorderInteractionCompleteCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
 lazy_static! {
-    static ref BORDER_UPDATE_CALLBACK: Arc<Mutex<Option<BorderUpdateCallback>>> = Arc::new(Mutex::new(None));
+    static ref BORDER_INTERACTION_COMPLETE_CALLBACK: Arc<Mutex<Option<BorderInteractionCompleteCallback>>> = Arc::new(Mutex::new(None));
 }
 
-/// Register a callback to be notified immediately when border position/size changes
-/// This provides real-time updates (0ms latency) instead of waiting for render thread (16.7ms @ 60 FPS)
-pub fn set_border_update_callback<F>(callback: F)
+/// Register callback to be notified when border drag/resize completes
+/// Fires only on mouseUp - allows pausing capture during interaction for performance
+pub fn set_border_interaction_complete_callback<F>(callback: F)
 where
     F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
 {
-    if let Ok(mut cb) = BORDER_UPDATE_CALLBACK.lock() {
+    if let Ok(mut cb) = BORDER_INTERACTION_COMPLETE_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -218,11 +219,14 @@ fn start_mouse_poll(window: id) {
                             ctx.last_interactive = true;
                         }
 
-                        let kind = desired_cursor_kind(window, view, x, y, frame.size.width, frame.size.height);
-                        if kind != ctx.last_cursor_kind {
-                            set_cursor_kind(kind);
-                            ctx.last_cursor_kind = kind;
-                        }
+                        // CURSOR CHANGE DISABLED: macOS doesn't support cursor change when window inactive
+                        // Cursor will only change when user clicks and window becomes active
+                        // This is macOS limitation, works fine on Windows
+                        // let kind = desired_cursor_kind(window, view, x, y, frame.size.width, frame.size.height);
+                        // if kind != ctx.last_cursor_kind {
+                        //     set_cursor_kind(kind);
+                        //     ctx.last_cursor_kind = kind;
+                        // }
                     } else {
                         if ctx.last_interactive {
                             let _: () = msg_send![window, setIgnoresMouseEvents: YES];
@@ -233,6 +237,7 @@ fn start_mouse_poll(window: id) {
                 }
             }
 
+            // Polling thread for click-through management (still needed for capture mode)
             let mut ctx = PollCtx { window_ptr, last_interactive: false, last_cursor_kind: CURSOR_NONE };
             while MOUSE_POLL_RUNNING.load(Ordering::SeqCst) {
                 unsafe {
@@ -731,44 +736,10 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
         let width = new_frame.size.width as i32;
         let height = new_frame.size.height as i32;
         
-        // Retry cache update to ensure it succeeds (critical for resize)
-        let mut retry_count = 0;
-        let _cache_updated = loop {
-            if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
-                *cache = (x, y, width, height);
-                break true;
-            }
-            retry_count += 1;
-            if retry_count >= 10 {
-                break false;
-            }
-            std::thread::sleep(std::time::Duration::from_micros(100));
-        };
-        
-        // Immediately notify callback for real-time updates (bypass 60 FPS render thread latency)
-        // Throttle to max 120 FPS (8.3ms) to avoid spam during fast drag
-        static mut LAST_CALLBACK_TIME: Option<std::time::Instant> = None;
-        let should_notify = unsafe {
-            let now = std::time::Instant::now();
-            if let Some(last) = LAST_CALLBACK_TIME {
-                if now.duration_since(last).as_millis() >= 8 {
-                    LAST_CALLBACK_TIME = Some(now);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                LAST_CALLBACK_TIME = Some(now);
-                true
-            }
-        };
-        
-        if should_notify {
-            if let Ok(cb_lock) = BORDER_UPDATE_CALLBACK.try_lock() {
-                if let Some(ref callback) = *cb_lock {
-                    callback(x, y, width, height);
-                }
-            }
+        // Update cache for render thread to read
+        // No callback during drag - we only update on mouseUp for performance
+        if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
+            *cache = (x, y, width, height);
         }
     }
 }
@@ -791,6 +762,24 @@ extern "C" fn mouse_up(this: &mut Object, _cmd: Sel, _event: id) {
             // Force display update for screen sharing apps
             let _: () = msg_send![this, setNeedsDisplay: YES];
             let _: () = msg_send![window, displayIfNeeded];
+            
+            // Notify callback: interaction complete - update capture region and windows
+            let frame: NSRect = msg_send![window, frame];
+            let screen: id = msg_send![class!(NSScreen), mainScreen];
+            let screen_frame: NSRect = msg_send![screen, frame];
+            let screen_height = screen_frame.size.height;
+            
+            let x = frame.origin.x as i32;
+            let y = (screen_height - frame.origin.y - frame.size.height) as i32;
+            let width = frame.size.width as i32;
+            let height = frame.size.height as i32;
+            
+            if let Ok(cb_lock) = BORDER_INTERACTION_COMPLETE_CALLBACK.try_lock() {
+                if let Some(ref callback) = *cb_lock {
+                    println!("[HOLLOW_BORDER] Interaction complete - notifying callback: x={}, y={}, w={}, h={}", x, y, width, height);
+                    callback(x, y, width, height);
+                }
+            }
         }
         
         // Interaction complete

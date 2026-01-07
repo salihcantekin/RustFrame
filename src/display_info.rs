@@ -104,6 +104,39 @@ impl DisplayInfo {
             self.pixels_to_points(y_pixels) as i32,
         )
     }
+    
+    /// Convert macOS CGEvent coordinates to screen capture pixel coordinates
+    /// 
+    /// IMPORTANT: CGEventGetLocation returns coordinates in:
+    /// - Origin: TOP-LEFT (not bottom-left like NSEvent.mouseLocation!)
+    /// - Units: POINTS (not pixels)
+    /// 
+    /// Screen capture uses:
+    /// - Origin: TOP-LEFT (same as CGEvent)
+    /// - Units: PIXELS
+    /// 
+    /// So we ONLY need to scale, NO Y-axis flip!
+    #[cfg(target_os = "macos")]
+    pub fn macos_event_to_screen_pixels(&self, x_points: f64, y_points: f64) -> (i32, i32) {
+        // CGEvent already uses top-left origin, so just scale to pixels
+        let x_pixels = (x_points * self.scale_factor) as i32;
+        let y_pixels = (y_points * self.scale_factor) as i32;
+        
+        (x_pixels, y_pixels)
+    }
+    
+    /// Convert screen pixels (top-left origin) to macOS NSEvent coordinates (bottom-left origin, points)
+    #[cfg(target_os = "macos")]
+    pub fn screen_pixels_to_macos_event(&self, x_pixels: i32, y_pixels: i32) -> (f64, f64) {
+        // Convert to points
+        let x_points = x_pixels as f64 / self.scale_factor;
+        let y_points = y_pixels as f64 / self.scale_factor;
+        
+        // Flip Y coordinate (macOS uses bottom-left origin)
+        let y_flipped_points = self.height_points - y_points;
+        
+        (x_points, y_flipped_points)
+    }
 }
 
 /// Initialize display information from the operating system
