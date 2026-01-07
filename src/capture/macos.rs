@@ -16,6 +16,13 @@ use log::info;
 use foreign_types_shared::ForeignType;
 
 #[cfg(target_os = "macos")]
+#[path = "macos_sck.rs"]
+mod macos_sck;
+
+#[cfg(target_os = "macos")]
+use macos_sck::ScreenCaptureKitCapture;
+
+#[cfg(target_os = "macos")]
 use cocoa::base::nil;
 
 #[cfg(target_os = "macos")]
@@ -81,6 +88,14 @@ fn log_capture_method() {
     } else {
         info!("macOS {}.{}.{}: Using modern CGDisplayCreateImageForRect (one-time permission required)", major, minor, patch);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn supports_screen_capture_kit() -> bool {
+    let (major, minor, patch) = get_macos_version();
+    (major > 12)
+        || (major == 12 && minor > 3)
+        || (major == 12 && minor == 3 && patch >= 0)
 }
 
 #[cfg(target_os = "macos")]
@@ -342,6 +357,12 @@ pub struct MacOSCaptureEngine {
     last_frame: Option<Arc<Vec<u8>>>,
     frame_width: u32,
     frame_height: u32,
+
+    // ScreenCaptureKit backend (macOS 12.3+). When active, this captures frames
+    // with the system cursor composited by the OS.
+    sck: Option<ScreenCaptureKitCapture>,
+    sck_last_seq: u64,
+    using_sck: bool,
 }
 
 /// Context for dispatch_sync callback - returns raw pixel data, not CGImage
@@ -368,7 +389,7 @@ fn ensure_screen_recording_permission() -> Result<()> {
     }
 
     Err(anyhow!(
-        "Screen Recording permission is not granted. Enable it in System Settings > Privacy & Security > Screen Recording, then restart the app."
+        "Screen Recording permission is not granted. Enable it in System Settings > Privacy & Security > Screen Recording, then restart the app.\n\nTip: if you're running via `cargo run`/VS Code, macOS may require granting Screen Recording to the launcher (Terminal / Visual Studio Code) rather than showing a stable 'rustframe' entry."
     ))
 }
 
@@ -532,10 +553,27 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
 
 impl MacOSCaptureEngine {
     pub fn new() -> Result<Self> {
+        log::info!("[MACOS_ENGINE] new() called");
+        
         // Log which capture method will be used
         #[cfg(target_os = "macos")]
         log_capture_method();
         
+        log::info!("[MACOS_ENGINE] Checking SCK availability...");
+        log::info!("[MACOS_ENGINE]   cfg!(target_os = \"macos\"): {}", cfg!(target_os = "macos"));
+        log::info!("[MACOS_ENGINE]   supports_screen_capture_kit(): {}", supports_screen_capture_kit());
+        log::info!("[MACOS_ENGINE]   ScreenCaptureKitCapture::is_available(): {}", ScreenCaptureKitCapture::is_available());
+        
+        let sck = if cfg!(target_os = "macos") && supports_screen_capture_kit() && ScreenCaptureKitCapture::is_available() {
+            log::info!("[MACOS_ENGINE] Creating ScreenCaptureKit instance...");
+            Some(ScreenCaptureKitCapture::new())
+        } else {
+            log::warn!("[MACOS_ENGINE] ScreenCaptureKit NOT available, will use CoreGraphics fallback");
+            None
+        };
+        
+        log::info!("[MACOS_ENGINE] sck.is_some() = {}", sck.is_some());
+
         Ok(Self {
             is_active: false,
             region: None,
@@ -543,6 +581,10 @@ impl MacOSCaptureEngine {
             last_frame: None,
             frame_width: 0,
             frame_height: 0,
+
+            sck,
+            sck_last_seq: 0,
+            using_sck: false,
         })
     }
 
@@ -603,22 +645,68 @@ impl MacOSCaptureEngine {
 
 impl CaptureEngine for MacOSCaptureEngine {
     fn start(&mut self, region: CaptureRect, show_cursor: bool) -> Result<()> {
-        println!("[CAPTURE] MacOSCaptureEngine::start called");
-        info!("Starting macOS capture for region: {:?}", region);
+        log::info!("[MACOS_ENGINE] start() called with region: {:?}, cursor: {}", region, show_cursor);
+
+        // IMPORTANT: If Screen Recording permission is not granted, calling into
+        // ScreenCaptureKit/CoreGraphics can fail in non-obvious ways. Preflight
+        // here and fail gracefully (no crash) so the user can grant permission.
+        #[cfg(target_os = "macos")]
+        {
+            log::info!("[MACOS_ENGINE] Checking Screen Recording permission...");
+            if let Err(e) = ensure_screen_recording_permission() {
+                log::error!("[MACOS_ENGINE] Permission check failed: {}", e);
+                self.is_active = false;
+                self.using_sck = false;
+                return Err(e);
+            }
+            log::info!("[MACOS_ENGINE] Permission check passed");
+        }
 
         self.region = Some(region);
         self.show_cursor = show_cursor;
         self.is_active = true;
 
-        println!("[CAPTURE] About to call capture_region from start");
+        // Prefer ScreenCaptureKit when available; it includes the real system cursor.
+        log::info!("[MACOS_ENGINE] Checking if SCK is available... self.sck.is_some()={}", self.sck.is_some());
+        if let Some(ref mut sck) = self.sck {
+            log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
+            if supports_screen_capture_kit() {
+                log::info!("[MACOS_ENGINE] SCK is supported, calling sck.start()...");
+                match sck.start(region.x, region.y, region.width, region.height, show_cursor) {
+                    Ok(()) => {
+                        log::info!("[MACOS_ENGINE] SCK start succeeded!");
+                        self.using_sck = true;
+                        self.sck_last_seq = 0;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::warn!("[MACOS_ENGINE] ScreenCaptureKit init failed, falling back to CoreGraphics: {}", e);
+                        self.using_sck = false;
+                    }
+                }
+            } else {
+                log::info!("[MACOS_ENGINE] ScreenCaptureKit not supported on this macOS version");
+            }
+        } else {
+            log::warn!("[MACOS_ENGINE] self.sck is None!");
+        }
+
+        // Fallback: legacy CoreGraphics screenshot capture.
+        log::info!("[MACOS_ENGINE] Using CoreGraphics fallback");
         self.capture_region(region)?;
-        println!("[CAPTURE] start completed successfully");
+        self.using_sck = false;
         Ok(())
     }
 
     fn stop(&mut self) {
         self.is_active = false;
         self.last_frame = None;
+        if self.using_sck {
+            if let Some(ref mut sck) = self.sck {
+                sck.stop();
+            }
+        }
+        self.using_sck = false;
         info!("Stopped macOS capture");
     }
 
@@ -627,11 +715,43 @@ impl CaptureEngine for MacOSCaptureEngine {
     }
 
     fn has_new_frame(&self) -> bool {
-        self.is_active
+        if !self.is_active {
+            return false;
+        }
+
+        if self.using_sck {
+            if let Some(ref sck) = self.sck {
+                return sck.latest_seq() != self.sck_last_seq;
+            }
+            return false;
+        }
+
+        true
     }
 
     fn get_frame(&mut self) -> Option<CaptureFrame> {
         if !self.is_active {
+            return None;
+        }
+
+        if self.using_sck {
+            if let Some(region) = self.region {
+                if let Some(ref sck) = self.sck {
+                    if let Some((data, w, h, seq)) = sck.latest_frame_rgba() {
+                        if seq != self.sck_last_seq {
+                            self.sck_last_seq = seq;
+                        }
+                        return Some(CaptureFrame {
+                            data,
+                            width: w,
+                            height: h,
+                            stride: w * 4,
+                            offset_x: region.x,
+                            offset_y: region.y,
+                        });
+                    }
+                }
+            }
             return None;
         }
 
@@ -654,11 +774,20 @@ impl CaptureEngine for MacOSCaptureEngine {
 
     fn set_cursor_visible(&mut self, visible: bool) -> Result<()> {
         self.show_cursor = visible;
+
+        // ScreenCaptureKit cursor visibility is a stream configuration; for now,
+        // we apply it on next start (or by stopping/starting capture).
         Ok(())
     }
 
     fn update_region(&mut self, region: CaptureRect) -> Result<()> {
         self.region = Some(region);
+
+        if self.using_sck {
+            if let Some(ref sck) = self.sck {
+                sck.update_region_points(region.x, region.y, region.width, region.height);
+            }
+        }
         Ok(())
     }
 

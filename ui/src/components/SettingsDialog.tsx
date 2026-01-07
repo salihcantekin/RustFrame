@@ -322,11 +322,14 @@ function SettingsDialog({
                 </div>
               </div>
 
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Click Highlight</h3>
+              <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <span>💡</span>
+                  <span>Click Highlight</span>
+                </h3>
                 <div className="space-y-4">
                   <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-400">Color:</span>
+                    <span className="text-sm text-gray-400 min-w-[60px]">Color:</span>
                     <input
                       type="color"
                       value={rgbaToHex(localSettings.click_highlight_color)}
@@ -343,25 +346,47 @@ function SettingsDialog({
                       RGB({localSettings.click_highlight_color[0]}, {localSettings.click_highlight_color[1]}, {localSettings.click_highlight_color[2]})
                     </span>
                   </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-2">
-                      Dissolve Duration: {localSettings.click_dissolve_ms}ms
-                    </label>
-                    <input
-                      type="range"
-                      min="100"
-                      max="1000"
-                      step="50"
-                      value={localSettings.click_dissolve_ms}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          click_dissolve_ms: parseInt(e.target.value),
-                        })
-                      }
-                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                      disabled={!localSettings.capture_clicks}
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Duration: {localSettings.click_dissolve_ms}ms
+                      </label>
+                      <input
+                        type="range"
+                        min="100"
+                        max="10000"
+                        step="100"
+                        value={localSettings.click_dissolve_ms}
+                        onChange={(e) =>
+                          setLocalSettings({
+                            ...localSettings,
+                            click_dissolve_ms: parseInt(e.target.value),
+                          })
+                        }
+                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        disabled={!localSettings.capture_clicks}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Size: {localSettings.click_highlight_radius}px
+                      </label>
+                      <input
+                        type="range"
+                        min="10"
+                        max="60"
+                        step="2"
+                        value={localSettings.click_highlight_radius}
+                        onChange={(e) =>
+                          setLocalSettings({
+                            ...localSettings,
+                            click_highlight_radius: parseInt(e.target.value),
+                          })
+                        }
+                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                        disabled={!localSettings.capture_clicks}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

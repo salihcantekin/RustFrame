@@ -13,6 +13,7 @@ use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRe
 
 // Import modules
 mod destination_window;
+mod display_info;
 mod hollow_border;
 mod platform;
 mod platform_info;
@@ -100,11 +101,11 @@ fn draw_click_highlight(
     height: i32,
     center_x: i32,
     center_y: i32,
-    color: [u8; 4],    // RGBA
+    color: [u8; 4],    // RGBA format
     alpha_factor: f32, // 0.0 to 1.0 for fade effect
+    radius: i32,       // Outer radius (scaled for display)
 ) {
-    let radius = 20i32; // Click highlight radius
-    let inner_radius = 8i32; // Solid inner circle
+    let inner_radius = (radius as f32 * 0.4).max(4.0) as i32; // Inner circle = 40% of radius, min 4px
 
     for dy in -radius..=radius {
         for dx in -radius..=radius {
@@ -144,14 +145,20 @@ fn draw_click_highlight(
                 continue;
             }
 
-            // Alpha blend (BGRA format)
+            // Alpha blend (frame buffer is RGBA on macOS, BGRA on Windows)
             let inv_alpha = 1.0 - final_alpha;
-            data[idx] = (color[2] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8; // B
-            data[idx + 1] =
-                (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
-            data[idx + 2] =
-                (color[0] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8;
-            // R
+            #[cfg(target_os = "macos")]
+            {
+                data[idx] = (color[0] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8;     // R
+                data[idx + 1] = (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
+                data[idx + 2] = (color[2] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8; // B
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                data[idx] = (color[2] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8;     // B
+                data[idx + 1] = (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
+                data[idx + 2] = (color[0] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8; // R
+            }
             // Keep original alpha at data[idx + 3]
         }
     }
@@ -163,9 +170,11 @@ fn draw_click_highlight(
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum PreviewMode {
-    TauriCanvas,      // Cross-platform, WebView overhead
+    TauriCanvas,      // Cross-platform, WebView overhead (not implemented on macOS/Linux)
     #[cfg(windows)]
-    WinApiGdi,        // Windows-only, lightweight
+    WinApiGdi,        // Windows-only, lightweight native
+    #[cfg(not(windows))]
+    Native,           // macOS/Linux native preview window
 }
 
 impl Default for PreviewMode {
@@ -176,7 +185,7 @@ impl Default for PreviewMode {
         }
         #[cfg(not(windows))]
         {
-            PreviewMode::TauriCanvas
+            PreviewMode::Native
         }
     }
 }
@@ -211,9 +220,14 @@ impl Default for CaptureMethod {
 pub struct Settings {
     // Mouse & Cursor
     pub show_cursor: bool,
+    #[serde(default = "default_capture_clicks")]
     pub capture_clicks: bool,
+    #[serde(default = "default_click_color")]
     pub click_highlight_color: [u8; 4],
+    #[serde(default = "default_click_dissolve_ms")]
     pub click_dissolve_ms: u32,
+    #[serde(default = "default_click_radius")]
+    pub click_highlight_radius: u32,
 
     // Border
     pub show_border: bool,
@@ -263,13 +277,31 @@ pub struct Settings {
     pub rec_indicator_size: String, // "small", "medium", "large"
 }
 
+// Default functions for serde
+fn default_capture_clicks() -> bool {
+    true // Enable click capture by default
+}
+
+fn default_click_color() -> [u8; 4] {
+    [255, 255, 0, 180] // Yellow with alpha
+}
+
+fn default_click_radius() -> u32 {
+    20 // Default radius in points (will be scaled for Retina)
+}
+
+fn default_click_dissolve_ms() -> u32 {
+    300
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             show_cursor: true,
-            capture_clicks: false,
+            capture_clicks: true, // Default to enabled for testing
             click_highlight_color: [255, 255, 0, 180],
-            click_dissolve_ms: 300,
+            click_dissolve_ms: 5000,
+            click_highlight_radius: 20,
             show_border: true,
             border_color: [255, 0, 0, 255],
             border_width: 3,
@@ -973,6 +1005,10 @@ async fn start_capture(
     height: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    println!("========================================");
+    println!("[MAIN] start_capture() CALLED!");
+    println!("[MAIN] Parameters: x={}, y={}, width={}, height={}", x, y, width, height);
+    println!("========================================");
     log::info!("Starting capture at ({}, {}) size {}x{}", x, y, width, height);
     
     // Clean up any previous capture session first (always, not just if capturing)
@@ -991,20 +1027,34 @@ async fn start_capture(
     }
     
     // Clean up windows - this will trigger Drop which must be on main thread
+    println!("[CLEANUP] Clearing HOLLOW_BORDER...");
     *HOLLOW_BORDER.lock().unwrap() = None;
+    println!("[CLEANUP] Clearing DESTINATION_WINDOW...");
     *DESTINATION_WINDOW.lock().unwrap() = None;
+    println!("[CLEANUP] Clearing REC_INDICATOR...");
     *REC_INDICATOR.lock().unwrap() = None;
     
     // Reset capturing state
     *state.is_capturing.lock().unwrap() = false;
     
+    println!("[DEBUG] Line 1020: Before sleep");
     // Give a moment for cleanup
     std::thread::sleep(std::time::Duration::from_millis(100));
     
+    println!("[DEBUG] Line 1024: After sleep, about to load settings");
+    log::info!("[MAIN] About to load settings...");
+    
     // Base settings + optional active profile overrides
+    println!("[DEBUG] Line 1028: Getting base_settings lock");
     let base_settings = state.settings.lock().unwrap().clone();
+    println!("[DEBUG] Line 1030: Getting active_profile lock");
     let active_profile = state.active_profile.lock().unwrap().clone();
+    
+    println!("[DEBUG] Line 1033: active_profile={:?}", active_profile);
+    println!("[MAIN] Base settings loaded, active_profile={:?}", active_profile);
+    
     let settings = if let (Some(profiles_dir), Some(profile_id)) = (rustframe_profiles_dir(), active_profile) {
+        println!("[MAIN] Loading profile '{}' from {:?}", profile_id, profiles_dir);
         match read_profile_overrides(&profiles_dir, &profile_id) {
             Some(overrides) => match apply_profile_overrides(&base_settings, overrides) {
                 Ok(s) => s,
@@ -1022,9 +1072,14 @@ async fn start_capture(
     } else {
         base_settings
     };
+    
+    println!("[MAIN] Settings loaded: show_rec_indicator={}, capture_clicks={}", 
+        settings.show_rec_indicator, settings.capture_clicks);
 
     // Create hollow border (always WinAPI)
     // COLORREF format is 0x00BBGGRR, border_color is [R, G, B, A]
+    log::info!("[MAIN] Creating hollow border...");
+    
     let border_color = (settings.border_color[0] as u32)
         | ((settings.border_color[1] as u32) << 8)
         | ((settings.border_color[2] as u32) << 16);
@@ -1048,25 +1103,27 @@ async fn start_capture(
     }
 
     *HOLLOW_BORDER.lock().unwrap() = Some(hollow_border);
+    log::info!("[MAIN] Hollow border created successfully");
 
     // Create REC indicator (separate window with screen sharing excluded)
     if settings.show_rec_indicator {
-        log::info!("Creating REC indicator...");
+        println!("[MAIN] Creating REC indicator...");
         if let Some(rec) = RecIndicator::new() {
             rec.set_size(&settings.rec_indicator_size);
+            println!("[MAIN] About to call rec.show()...");
             rec.show(x + width as i32, y, settings.border_width as i32);
+            println!("[MAIN] rec.show() returned, storing in REC_INDICATOR...");
             *REC_INDICATOR.lock().unwrap() = Some(rec);
-            log::info!("REC indicator created and shown (excluded from screen sharing)");
+            println!("[MAIN] REC indicator created and shown (excluded from screen sharing)");
         } else {
-            log::warn!("Failed to create REC indicator");
+            log::warn!("[MAIN] RecIndicator::new() returned None");
         }
+    } else {
+        println!("[MAIN] REC indicator disabled in settings");
     }
     
-    // Create destination window based on preview mode
-    log::info!(
-        "Creating destination window in {:?} mode",
-        settings.preview_mode
-    );
+    println!("[MAIN] About to create destination window in {:?} mode", settings.preview_mode);
+    
     #[cfg(target_os = "windows")]
     match settings.preview_mode {
         PreviewMode::WinApiGdi => {
@@ -1136,7 +1193,10 @@ async fn start_capture(
 
     #[cfg(not(target_os = "windows"))]
     {
-        // On macOS/Linux, create a destination window optimized for screen sharing
+        println!("[MAIN] Creating destination window (Native mode - {})", 
+            if cfg!(target_os = "macos") { "macOS" } else { "Linux" });
+        // On macOS/Linux, always use native destination window (ignore preview_mode setting)
+        // TauriCanvas is not implemented yet
         
         // macOS configuration optimized for screen sharing apps (Meet, Zoom, Discord)
         let config = DestinationWindowConfig {
@@ -1162,43 +1222,125 @@ async fn start_capture(
             overlapped: None,
         };
         
+        println!("[MAIN] Calling DestinationWindow::new()...");
         let dest_window = DestinationWindow::new(width, height, config)
             .ok_or("Failed to create destination window")?;
         
+        println!("[MAIN] Destination window created successfully");
         *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
+        
+        // Verify window is stored
+        {
+            let lock = DESTINATION_WINDOW.lock().unwrap();
+            if lock.is_some() {
+                println!("[MAIN] ✅ Destination window STORED in DESTINATION_WINDOW");
+            } else {
+                println!("[MAIN] ❌ DESTINATION_WINDOW is None after storing!");
+            }
+        }
     }
 
     // Start capture engine
+    println!("[MAIN] Starting capture engine...");
     let mut engine_lock = state.capture_engine.lock().unwrap();
+    
     // (Re)create capture engine so users can change capture_method from Settings
     if let Some(ref mut existing) = *engine_lock {
+        println!("[MAIN] Stopping existing capture engine");
         existing.stop();
     }
+    
+    println!("[MAIN] Creating new capture engine for settings: {:?}", settings.capture_method);
     *engine_lock = Some(create_capture_engine_for_settings(&settings)?);
 
     if let Some(ref mut engine) = *engine_lock {
+        // Offset capture region inward by border_width to exclude border from capture
+        let border_offset = settings.border_width as i32;
         let region = CaptureRect {
-            x,
-            y,
-            width,
-            height,
+            x: x + border_offset,
+            y: y + border_offset,
+            width: (width as i32 - border_offset * 2).max(1) as u32,
+            height: (height as i32 - border_offset * 2).max(1) as u32,
         };
+        log::info!("[MAIN] Calling engine.start() with region: {:?}", region);
         engine.start(region, settings.show_cursor).map_err(|e| {
-            log::error!("Capture engine start failed: {}", e);
+            println!("[MAIN] ❌ Capture engine start FAILED: {}", e);
             e.to_string()
         })?;
+        println!("[MAIN] ✅ engine.start() completed successfully");
+    } else {
+        println!("[MAIN] Capture engine is None after creation!");
     }
     drop(engine_lock);
-
+    
+    println!("[MAIN] Settings.capture_clicks = {}", settings.capture_clicks);
+    
     // Start click capture if enabled
     if settings.capture_clicks {
+        println!("[MAIN] Capture clicks ENABLED, starting click capture...");
         if let Err(e) = platform::input::start_click_capture() {
-            log::warn!("Failed to start click capture: {}", e);
+            println!("[MAIN] Failed to start click capture: {}", e);
+        } else {
+            println!("[MAIN] Click capture started successfully");
         }
+    } else {
+        println!("[MAIN] Capture clicks DISABLED");
     }
 
     *state.is_capturing.lock().unwrap() = true;
     *state.render_thread_stop.lock().unwrap() = false;
+
+    // Register event-driven border update callback (only fires when border actually moves/resizes)
+    // This replaces the old approach of checking every frame (60 FPS = 16.7ms latency + wasted CPU)
+    // New approach: Update ONLY when border changes (0 CPU overhead when idle)
+    #[cfg(target_os = "macos")]
+    {
+        use crate::hollow_border::set_border_update_callback;
+        let engine_for_cb = state.capture_engine.clone();
+        let border_w = settings.border_width;
+        
+        set_border_update_callback(move |x, y, width, height| {
+            log::info!("Border position/size changed (event-driven): x={}, y={}, w={}, h={}", x, y, width, height);
+            
+            // Update capture engine region
+            let mut engine = engine_for_cb.lock().unwrap();
+            if let Some(ref mut eng) = *engine {
+                let border_offset = border_w as i32;
+                let new_region = crate::CaptureRect {
+                    x: x + border_offset,
+                    y: y + border_offset,
+                    width: (width - border_offset * 2).max(1) as u32,
+                    height: (height - border_offset * 2).max(1) as u32,
+                };
+                if let Err(e) = eng.update_region(new_region) {
+                    log::error!("Failed to update capture region: {}", e);
+                } else {
+                    log::info!("Capture region updated: x={}, y={}, w={}, h={}", 
+                        new_region.x, new_region.y, new_region.width, new_region.height);
+                }
+            }
+            drop(engine);
+            
+            // Resize destination window
+            let border_offset = border_w as i32;
+            let inner_width = (width - border_offset * 2).max(1);
+            let inner_height = (height - border_offset * 2).max(1);
+            
+            if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+                if let Some(ref mut dest) = *dest_lock {
+                    dest.resize(inner_width as u32, inner_height as u32);
+                    log::info!("Destination window resized: {}x{}", inner_width, inner_height);
+                }
+            }
+            
+            // Update REC indicator position
+            if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
+                if let Some(ref rec) = *rec_lock {
+                    rec.update_position(x, y, width, border_w as i32);
+                }
+            }
+        });
+    }
 
     // Start frame rendering thread
     let engine_clone = state.capture_engine.clone();
@@ -1207,14 +1349,12 @@ async fn start_capture(
     let capture_clicks = settings.capture_clicks;
     let click_color = settings.click_highlight_color;
     let click_dissolve_ms = settings.click_dissolve_ms as u64;
-    let border_width = settings.border_width;
+    let click_radius = settings.click_highlight_radius;
 
     let render_handle = std::thread::spawn(move || {
         log::info!("Frame rendering thread started");
         let frame_duration = std::time::Duration::from_millis(1000 / target_fps as u64);
-        let mut last_region: Option<(i32, i32, i32, i32)> = None;
         let mut frame_count = 0u64;
-        let mut lock_skip_count = 0u64;
         let mut last_stats_time = std::time::Instant::now();
         let mut stats_frame_count = 0u64;
 
@@ -1226,96 +1366,8 @@ async fn start_capture(
 
             let frame_start = std::time::Instant::now();
 
-            // Check if hollow border region changed (use try_lock to avoid deadlock during resize)
-            let current_rect = {
-                if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
-                    if let Some(hollow_border) = border_lock.as_ref() {
-                        // Get inner rect (excludes the visual border)
-                        Some(hollow_border.get_inner_rect())
-                    } else {
-                        None
-                    }
-                } else {
-                    // Lock contention - skip this frame's region check
-                    lock_skip_count += 1;
-                    None
-                }
-            }; // HOLLOW_BORDER lock released here
-
-            if let Some(current_rect) = current_rect {
-                // Update REC indicator position during border interaction
-                #[cfg(target_os = "macos")]
-                let is_interacting = hollow_border::is_border_interacting();
-                #[cfg(not(target_os = "macos"))]
-                let is_interacting = false;
-                
-                if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
-                    if let Some(ref rec) = *rec_lock {
-                        // Only update if position actually changed to avoid spam
-                        static mut LAST_REC_POS: Option<(i32, i32, i32)> = None;
-                        let current_pos = (current_rect.0, current_rect.1, current_rect.2);
-                        let should_update = unsafe {
-                            if LAST_REC_POS != Some(current_pos) {
-                                LAST_REC_POS = Some(current_pos);
-                                true
-                            } else {
-                                false
-                            }
-                        };
-
-                        if should_update {
-                            // Keep REC in sync even during drag/resize.
-                            if is_interacting {
-                                println!("[MAIN] Interaction active - updating REC to x={}, y={}, w={}",
-                                    current_rect.0, current_rect.1, current_rect.2);
-                            } else {
-                                println!("[MAIN] Position changed - updating REC to x={}, y={}, w={}",
-                                    current_rect.0, current_rect.1, current_rect.2);
-                            }
-                            rec.update_position(
-                                current_rect.0,
-                                current_rect.1,
-                                current_rect.2,
-                                border_width as i32,
-                            );
-                        }
-                    }
-                }
-
-                if last_region.is_none() || last_region.unwrap() != current_rect {
-                    log::info!("Border region changed: x={}, y={}, w={}, h={}", 
-                        current_rect.0, current_rect.1, current_rect.2, current_rect.3);
-                    last_region = Some(current_rect);
-
-                    // Update capture engine region (HOLLOW_BORDER lock already released)
-                    let mut engine = engine_clone.lock().unwrap();
-                    if let Some(ref mut eng) = *engine {
-                        let new_region = CaptureRect {
-                            x: current_rect.0,
-                            y: current_rect.1,
-                            width: current_rect.2 as u32,
-                            height: current_rect.3 as u32,
-                        };
-
-                        if let Err(e) = eng.update_region(new_region) {
-                            log::error!("Failed to update capture region: {}", e);
-                        } else {
-                            log::info!("Capture engine region updated to: x={}, y={}, w={}, h={}",
-                                new_region.x, new_region.y, new_region.width, new_region.height);
-                        }
-                    }
-                    drop(engine);
-                    
-                    // Resize destination window to match new region size
-                    // This ensures pixel-perfect display without stretching
-                    if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
-                        if let Some(ref mut dest) = *dest_lock {
-                            dest.resize(current_rect.2 as u32, current_rect.3 as u32);
-                            log::info!("Destination window resized to: {}x{}", current_rect.2, current_rect.3);
-                        }
-                    }
-                }
-            }
+            // Border updates are now event-driven via callback (see set_border_update_callback above)
+            // No need to check every frame - saves CPU and eliminates 16.7ms latency
 
             // Get frame from capture engine
             let frame = {
@@ -1331,26 +1383,56 @@ async fn start_capture(
             if let Some(mut frame) = frame {
                 // Overlay click highlights if enabled
                 if capture_clicks {
+                    // Get display info for coordinate conversion
+                    let display_info = display_info::get();
+                    
+                    // frame.offset_x/y are in points, but clicks are stored in pixels
+                    // Convert to pixels using centralized display info
+                    let offset_x_pixels = display_info.points_to_pixels(frame.offset_x as f64);
+                    let offset_y_pixels = display_info.points_to_pixels(frame.offset_y as f64);
+                    let width_pixels = display_info.points_to_pixels(frame.width as f64) as u32;
+                    let height_pixels = display_info.points_to_pixels(frame.height as f64) as u32;
+                    
+                    println!("[RENDER] Frame: offset=({},{}) pts -> ({},{}) px, size={}x{} pts -> {}x{} px @ {:.1}x", 
+                        frame.offset_x, frame.offset_y, offset_x_pixels, offset_y_pixels,
+                        frame.width, frame.height, width_pixels, height_pixels, 
+                        display_info.scale_factor);
+                    
                     // Use frame's offset for accurate click detection
                     // frame.offset_x/y tell us where the frame starts in screen coordinates
                     // This handles clipped regions correctly
                     let clicks = platform::input::get_recent_clicks(
-                        frame.offset_x,
-                        frame.offset_y,
-                        frame.width,
-                        frame.height,
+                        offset_x_pixels,
+                        offset_y_pixels,
+                        width_pixels,
+                        height_pixels,
                         click_dissolve_ms,
                     );
+                    
+                    println!("[RENDER] Checking clicks: found {} in region ({},{}) {}x{} pixels", 
+                        clicks.len(), offset_x_pixels, offset_y_pixels, width_pixels, height_pixels);
+                    
+                    if !clicks.is_empty() {
+                        println!("[RENDER] ✅ RENDERING {} CLICK(S)!", clicks.len());
+                        log::info!("[RENDER] Found {} click(s) to render in region ({},{}) {}x{}", 
+                            clicks.len(), offset_x_pixels, offset_y_pixels, width_pixels, height_pixels);
+                    }
 
                     for click in clicks {
-                        // Convert screen coordinates to frame coordinates
-                        // Frame starts at offset_x, offset_y in screen space
-                        let frame_x = click.x - frame.offset_x;
-                        let frame_y = click.y - frame.offset_y;
+                        // Convert screen coordinates (pixels) to frame coordinates (pixels)
+                        // Frame buffer is already in pixels, so direct subtraction
+                        let frame_x = click.x - offset_x_pixels;
+                        let frame_y = click.y - offset_y_pixels;
+                        
+                        println!("[RENDER] 🎯 Drawing click at screen ({},{}) -> frame ({},{}) in {}x{} buffer",
+                            click.x, click.y, frame_x, frame_y, frame.width, frame.height);
 
                         // Draw click highlight circle (fading based on age)
                         let age_ms = click.timestamp.elapsed().as_millis() as f32;
                         let alpha_factor = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
+
+                        // Scale radius for display (frame buffer is in pixels)
+                        let scaled_radius = display_info.points_to_pixels(click_radius as f64);
 
                         draw_click_highlight(
                             &mut frame.data,
@@ -1360,6 +1442,7 @@ async fn start_capture(
                             frame_y,
                             click_color,
                             alpha_factor,
+                            scaled_radius,
                         );
                     }
                 }
@@ -1376,16 +1459,13 @@ async fn start_capture(
                             let actual_fps =
                                 stats_frame_count as f64 / elapsed_since_stats.as_secs_f64();
                             log::info!(
-                                "Render stats - FPS: {:.1}, Total: {}, Lock skips: {}",
-                                actual_fps, frame_count, lock_skip_count
+                                "Render stats - FPS: {:.1}, Total frames: {}",
+                                actual_fps, frame_count
                             );
                             last_stats_time = std::time::Instant::now();
                             stats_frame_count = 0;
                         }
                     }
-                } else {
-                    // Lock contention on destination window
-                    lock_skip_count += 1;
                 }
             } // DESTINATION_WINDOW lock released here
 
@@ -1419,6 +1499,7 @@ async fn start_capture(
 
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
+    println!("[STOP_CAPTURE] stop_capture() CALLED!");
     log::info!("Stopping capture");
 
     // Save last region if remember_last_region is enabled
@@ -1476,7 +1557,9 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     }
 
     // Clean up capture-related windows
+    println!("[STOP_CAPTURE] Clearing DESTINATION_WINDOW...");
     *DESTINATION_WINDOW.lock().unwrap() = None;
+    println!("[STOP_CAPTURE] Clearing REC_INDICATOR...");
     *REC_INDICATOR.lock().unwrap() = None;
     log::info!("Capture windows cleaned up");
 
@@ -1651,6 +1734,11 @@ fn get_platform_info() -> platform_info::PlatformInfo {
 // ============================================================================
 
 fn main() {
+    // Initialize display information first (needed for all coordinate calculations)
+    if let Err(e) = display_info::initialize() {
+        eprintln!("Warning: Failed to initialize display info: {}", e);
+    }
+
     // Set up panic hook for cleanup on crash
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {

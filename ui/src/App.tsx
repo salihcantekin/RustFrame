@@ -11,6 +11,7 @@ export interface Settings {
   capture_clicks: boolean;
   click_highlight_color: [number, number, number, number];
   click_dissolve_ms: number;
+  click_highlight_radius: number;
   
   // Border
   show_border: boolean;
@@ -216,18 +217,30 @@ function App() {
   };
 
   const handleStartCapture = async () => {
+    console.log("[DEBUG] handleStartCapture called");
+    console.log("[DEBUG] captureRegion:", captureRegion);
+    console.log("[DEBUG] captureRegion values:", {
+      x: captureRegion.x,
+      y: captureRegion.y,
+      width: captureRegion.width,
+      height: captureRegion.height
+    });
+    
     try {
       console.log("Starting capture with region:", captureRegion);
+      console.log("[DEBUG] About to invoke start_capture...");
       await invoke("start_capture", {
         x: captureRegion.x,
         y: captureRegion.y,
         width: captureRegion.width,
         height: captureRegion.height,
       });
+      console.log("[DEBUG] invoke completed successfully");
       setIsCapturing(true);
       console.log("Capture started successfully!");
       //alert("Capture started successfully! Check for hollow border and preview window.");
     } catch (error) {
+      console.error("[DEBUG] invoke failed with error:", error);
       console.error("Failed to start capture:", error);
       //alert(`Failed to start capture: ${error}`);
     }

@@ -98,6 +98,7 @@ core-graphics = "0.24"
 core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
+block = "0.1"
 libc = "0.2"
 foreign-types-shared = "0.3"
 

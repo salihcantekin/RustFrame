@@ -117,17 +117,22 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         let style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
         
         // Create window frame
-        // In release: off-screen but still capturable by Meet/Zoom
-        // In debug: on-screen for visual debugging
+        // Position strategy:
+        // - Debug mode: On-screen at (100, 100) for debugging
+        // - Release mode: Off-screen to keep it completely hidden from user
+        //   Note: Off-screen windows are NOT visible in screen sharing pickers (Meet/Zoom)
+        //   but user experience (complete invisibility) is more important
         let (x_pos, y_pos) = if cfg!(debug_assertions) {
-            (0.0, 0.0)
+            (100.0, 100.0)
         } else {
             (-10000.0, -10000.0)
         };
+        let width = ctx.width as f64;
+        let height = ctx.height as f64;
         
         let frame = NSRect::new(
             NSPoint::new(x_pos, y_pos),
-            NSSize::new(ctx.width as f64, ctx.height as f64)
+            NSSize::new(width, height)
         );
         
         // Create the window
@@ -144,17 +149,23 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         }
         
         // Configure window properties
-        window.setOpaque_(NO);
-        window.setBackgroundColor_(NSColor::clearColor(nil));
+        // IMPORTANT: Keep opaque=YES and use solid background for CGWindowList
+        // Window transparency is controlled via setAlphaValue instead
+        // If we use clearColor + opaque=NO, CGWindowList captures a black window
+        window.setOpaque_(YES);
+        let black_color: id = msg_send![class!(NSColor), blackColor];
+        window.setBackgroundColor_(black_color);
         
-        // Set window title for screen sharing apps to detect
-        let title = cocoa::foundation::NSString::alloc(nil);
-        let title = cocoa::foundation::NSString::init_str(title, "RustFrame Preview");
-        window.setTitle_(title);
+        // Set window title (optional, mainly for debugging)
+        // Using CFSTR to avoid NSString lifecycle issues
+        use core_foundation::string::CFString;
+        use core_foundation::base::TCFType;
+        let title_cf = CFString::new("RustFrame Preview");
+        let _: () = msg_send![window, setTitle: title_cf.as_concrete_TypeRef()];
         
         // Configure window level based on config
         // For screen sharing (Meet, Zoom, etc.): Use NORMAL level (0)
-        // For always-on-top overlay: Use FLOATING level (3)
+        // Level -1 doesn't work - CGWindowList filters it out
         let use_floating = ctx.config.macos_floating_level.unwrap_or(false);
         let window_level = if use_floating {
             NS_FLOATING_WINDOW_LEVEL
@@ -215,21 +226,20 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         // Use standard content view
         let content_view = window.contentView();
         
-        // Set alpha if specified
-        if let Some(alpha) = ctx.config.alpha {
-            window.setAlphaValue_((alpha as f64) / 255.0);
-        }
+        // Set alpha: Full opacity for proper CGWindowList capture
+        // Window is invisible due to level=-1 (below desktop), not alpha
+        let window_alpha = ctx.config.alpha.unwrap_or(255);
+        window.setAlphaValue_((window_alpha as f64) / 255.0);
         
         // Show the window
-        // In release: orderBack (no activation, off-screen anyway)
-        // In debug: makeKeyAndOrderFront (visible for debugging)
         if cfg!(debug_assertions) {
             window.makeKeyAndOrderFront_(nil);
         } else {
-            let _: () = msg_send![window, orderBack: nil];
+            let _: () = msg_send![window, orderFront: nil];
         }
         
-        log::info!("Destination window created successfully");
+        log::info!("Destination window created at ({}, {}) size {}x{} alpha={}", 
+                   x_pos, y_pos, width, height, window_alpha);
         
         // Store results
         *ctx.result_window = window;
@@ -270,7 +280,6 @@ impl DestinationWindow {
             log::error!("Failed to create destination window");
             return None;
         }
-        
         Some(Self {
             window: result_window,
             view: result_view,
@@ -330,6 +339,9 @@ impl DestinationWindow {
                 if layer.is_null() {
                     return;
                 }
+                
+                // Make layer opaque for proper rendering
+                let _: () = msg_send![layer, setOpaque: YES];
                 
                 // CRITICAL: Set contentsScale on EVERY frame for Retina displays
                 let window: id = msg_send![ctx.view, window];
@@ -463,7 +475,7 @@ impl DestinationWindow {
 
 impl Drop for DestinationWindow {
     fn drop(&mut self) {
-        println!("[DEST_WINDOW] Drop called");
+        println!("[DEST_WINDOW] Drop called for window {:p}", self.window);
         
         extern "C" fn close_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;

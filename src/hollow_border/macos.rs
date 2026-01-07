@@ -25,6 +25,23 @@ lazy_static! {
 // When true, REC indicator should be hidden to avoid laggy appearance
 static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
 
+// Callback for immediate border updates (bypassing 60 FPS render thread)
+type BorderUpdateCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
+lazy_static! {
+    static ref BORDER_UPDATE_CALLBACK: Arc<Mutex<Option<BorderUpdateCallback>>> = Arc::new(Mutex::new(None));
+}
+
+/// Register a callback to be notified immediately when border position/size changes
+/// This provides real-time updates (0ms latency) instead of waiting for render thread (16.7ms @ 60 FPS)
+pub fn set_border_update_callback<F>(callback: F)
+where
+    F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
+{
+    if let Ok(mut cb) = BORDER_UPDATE_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
 static MOUSE_POLL_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Check if border is currently being dragged or resized
@@ -727,6 +744,32 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
             }
             std::thread::sleep(std::time::Duration::from_micros(100));
         };
+        
+        // Immediately notify callback for real-time updates (bypass 60 FPS render thread latency)
+        // Throttle to max 120 FPS (8.3ms) to avoid spam during fast drag
+        static mut LAST_CALLBACK_TIME: Option<std::time::Instant> = None;
+        let should_notify = unsafe {
+            let now = std::time::Instant::now();
+            if let Some(last) = LAST_CALLBACK_TIME {
+                if now.duration_since(last).as_millis() >= 8 {
+                    LAST_CALLBACK_TIME = Some(now);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                LAST_CALLBACK_TIME = Some(now);
+                true
+            }
+        };
+        
+        if should_notify {
+            if let Ok(cb_lock) = BORDER_UPDATE_CALLBACK.try_lock() {
+                if let Some(ref callback) = *cb_lock {
+                    callback(x, y, width, height);
+                }
+            }
+        }
     }
 }
 

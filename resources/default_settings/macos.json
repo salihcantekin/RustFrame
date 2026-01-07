@@ -8,7 +8,7 @@
   "border_color": [255, 0, 0, 255],
   "border_width": 3,
 
-  "target_fps": 60,
+  "target_fps": 30,
   "capture_method": "CoreGraphics",
   "preview_mode": "TauriCanvas",
 

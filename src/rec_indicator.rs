@@ -8,12 +8,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+fn rec_indicator_disabled_by_env() -> bool {
+    match std::env::var("RUSTFRAME_DISABLE_REC_INDICATOR") {
+        Ok(val) => {
+            let val = val.trim().to_ascii_lowercase();
+            val == "1" || val == "true" || val == "yes" || val == "on"
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(target_os = "macos")]
 use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSColor, NSView, NSTextField};
 #[cfg(target_os = "macos")]
 use cocoa::base::{id, nil, YES, NO};
 #[cfg(target_os = "macos")]
-use cocoa::foundation::{NSRect, NSPoint, NSSize, NSString, NSAutoreleasePool};
+use cocoa::foundation::{NSRect, NSPoint, NSSize, NSString};
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl, class};
 
@@ -80,6 +90,11 @@ unsafe impl Sync for RecIndicator {}
 impl RecIndicator {
     #[cfg(windows)]
     pub fn new() -> Option<Self> {
+        if rec_indicator_disabled_by_env() {
+            log::warn!("REC indicator disabled via RUSTFRAME_DISABLE_REC_INDICATOR");
+            return None;
+        }
+
         info!("Creating REC indicator window");
 
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -109,6 +124,11 @@ impl RecIndicator {
     pub fn new() -> Option<Self> {
         #[cfg(target_os = "macos")]
         {
+            if rec_indicator_disabled_by_env() {
+                log::warn!("REC indicator disabled via RUSTFRAME_DISABLE_REC_INDICATOR");
+                return None;
+            }
+
             info!("Creating macOS REC indicator window");
             println!("[REC] Creating macOS REC indicator");
 
@@ -194,13 +214,34 @@ impl RecIndicator {
                     height: i32,
                 }
                 
+                extern "C" fn show_on_main_thread_async(ctx_ptr: *mut std::ffi::c_void) {
+                    // Take ownership of the boxed context
+                    let ctx = unsafe { Box::from_raw(ctx_ptr as *mut ShowContext) };
+                    show_on_main_thread(&*ctx as *const _ as *mut std::ffi::c_void);
+                }
+                
                 extern "C" fn show_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
                     let ctx = unsafe { &*(ctx_ptr as *const ShowContext) };
                     unsafe {
                         let window: id = ctx.window_ptr as *mut objc::runtime::Object;
+
+                        println!("[REC] show_on_main_thread: window_ptr=0x{:x}", ctx.window_ptr);
                         
-                        // Get screen height for coordinate conversion
+                        // Get screen height for coordinate conversion (avoid CoreGraphics struct-return FFI)
+                        println!("[REC] show_on_main_thread: getting screen...");
                         let screen: id = msg_send![window, screen];
+                        let screen: id = if screen != nil {
+                            screen
+                        } else {
+                            msg_send![class!(NSScreen), mainScreen]
+                        };
+
+                        if screen == nil {
+                            println!("[REC] show_on_main_thread: ERROR screen is nil, aborting show");
+                            return;
+                        }
+
+                        println!("[REC] show_on_main_thread: getting screen frame...");
                         let screen_frame: NSRect = msg_send![screen, frame];
                         let screen_height = screen_frame.size.height;
                         
@@ -209,9 +250,15 @@ impl RecIndicator {
                             ctx.pos_x as f64,
                             screen_height - (ctx.pos_y as f64) - (ctx.height as f64)
                         );
-                        
+
+                        println!("[REC] show_on_main_thread: calling setFrameOrigin");
                         let _: () = msg_send![window, setFrameOrigin: origin];
-                        let _: () = msg_send![window, orderFront: nil];
+                        println!("[REC] show_on_main_thread: setFrameOrigin OK, calling orderWindow");
+                        
+                        // Use orderWindow:relativeTo: instead of orderFront to avoid potential delegate issues
+                        // NSWindowAbove = 1 (bring window above all others)
+                        let _: () = msg_send![window, orderWindow: 1i64 relativeTo: 0i64];
+                        println!("[REC] show_on_main_thread: orderWindow OK");
                     }
                 }
                 
@@ -224,12 +271,13 @@ impl RecIndicator {
                 
                 let is_main = unsafe { pthread_main_np() } != 0;
                 if !is_main {
-                    println!("[REC] Not on main thread, dispatching show to main queue");
+                    println!("[REC] Not on main thread, dispatching show to main queue (ASYNC to avoid deadlock)");
                     unsafe {
-                        dispatch_sync_f(
+                        // Use dispatch_async to avoid deadlock if caller is on main thread
+                        dispatch_async_f(
                             &_dispatch_main_q,
-                            &mut context as *mut _ as *mut std::ffi::c_void,
-                            show_on_main_thread,
+                            Box::into_raw(Box::new(context)) as *mut std::ffi::c_void,
+                            show_on_main_thread_async,
                         );
                     }
                 } else {
@@ -678,8 +726,6 @@ extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
     let ctx = unsafe { &mut *(ctx_ptr as *mut CreateRecWindowContext) };
     
     unsafe {
-        let _pool = NSAutoreleasePool::new(nil);
-        
         let (width, height) = get_indicator_dimensions();
         
         // Create window frame
@@ -705,17 +751,20 @@ extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             println!("[REC] ERROR: Failed to create NSWindow");
             return;
         }
+
+        // Keep lifetime explicit; we manually retain/release this window.
+        let _: () = msg_send![window, setReleasedWhenClosed: NO];
         
         // Configure panel - non-activating
         window.setOpaque_(NO);
         let clear: id = NSColor::clearColor(nil);
         window.setBackgroundColor_(clear);
-        let _: () = msg_send![window, setLevel: 3i32]; // Floating level
+        let _: () = msg_send![window, setLevel: 3i64]; // Floating level (NSInteger)
         window.setIgnoresMouseEvents_(YES);
         
         // CRITICAL: Exclude from screen capture/sharing
         // NSWindowSharingNone = 0 - window won't appear in screen recordings/shares
-        let _: () = msg_send![window, setSharingType: 0u64];
+        let _: () = msg_send![window, setSharingType: 0i64];
         
         // NSPanel-specific: Never become key window
         let _: () = msg_send![window, setBecomesKeyOnlyIfNeeded: YES];
@@ -758,8 +807,13 @@ extern "C" fn create_rec_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
         println!("[REC] Adding subview...");
         let _: () = msg_send![content_view, addSubview: text_label];
         
-        // Show window without making it key (prevents app activation)
-        let _: () = msg_send![window, orderFront: nil];
+        // Keep hidden until explicit show() to avoid AppKit doing work before positioning.
+        let _: () = msg_send![window, orderOut: nil];
+
+        // Keep the window alive across threads.
+        // We store a raw pointer globally; without an explicit retain, it is possible
+        // to end up with a stale pointer depending on AppKit lifecycle/autorelease.
+        let _: id = msg_send![window, retain];
         
         log::info!("macOS REC indicator created (non-activating panel)");
         
@@ -818,9 +872,11 @@ fn run_rec_thread_macos(stop_flag: Arc<AtomicBool>) {
         extern "C" fn close_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
-                let _pool = NSAutoreleasePool::new(nil);
                 let _: () = msg_send![window, orderOut: nil];
                 let _: () = msg_send![window, close];
+
+                // Balance the explicit retain done at creation time.
+                let _: () = msg_send![window, release];
             }
         }
 

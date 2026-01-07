@@ -28,11 +28,13 @@ pub mod window {
 
 /// Platform-specific input utilities
 pub mod input {
-    use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
     use std::sync::Mutex;
 
     lazy_static::lazy_static! {
         static ref CLICK_POSITIONS: Mutex<Vec<ClickEvent>> = Mutex::new(Vec::new());
+        static ref SCREEN_SCALE_FACTOR: AtomicU64 = AtomicU64::new(0); // Store as u64 (f64 bits)
+        static ref SCREEN_HEIGHT: AtomicU64 = AtomicU64::new(0); // Store as u64 (f64 bits)
     }
 
     static MOUSE_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -180,42 +182,146 @@ pub mod input {
 
     #[cfg(not(windows))]
     pub fn start_click_capture() -> anyhow::Result<()> {
-        // macOS implementation uses NSEvent monitoring
-        // For now, we use a polling approach that's compatible with Tauri
-        
-        static MONITORING_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        
-        if MONITORING_ACTIVE.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            return Ok(()); // Already monitoring
-        }
-
-        std::thread::spawn(|| {
+        #[cfg(target_os = "macos")]
+        {
+            use cocoa::base::{id, nil};
+            use cocoa::foundation::{NSPoint, NSRect};
+            use core_foundation::base::TCFType;
+            use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
             use std::sync::atomic::Ordering;
+            use objc::*;
             
-            // Store thread ID for potential cleanup
-            let _thread_id = unsafe { 
-                #[cfg(target_os = "macos")]
-                {
-                    use std::ffi::c_uint;
-                    libc::pthread_self() as c_uint
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    0
-                }
-            };
-
-            log::info!("Mouse event monitoring started on non-Windows platform");
-
-            while MONITORING_ACTIVE.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                // Polling for mouse events happens in the main thread via Tauri event system
+            log::info!("[MACOS_CLICK] start_click_capture() called");
+            
+            if MOUSE_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+                log::warn!("[MACOS_CLICK] Already monitoring, skipping");
+                return Ok(()); // Already monitoring
             }
 
-            log::info!("Mouse event monitoring stopped");
-        });
+            // Get screen info once from main thread before spawning background thread
+            unsafe {
+                let screen: id = msg_send![class!(NSScreen), mainScreen];
+                if screen != nil {
+                    let frame: NSRect = msg_send![screen, frame];
+                    let scale_factor: f64 = msg_send![screen, backingScaleFactor];
+                    
+                    // Store as bits in atomic
+                    SCREEN_HEIGHT.store(frame.size.height.to_bits(), Ordering::Relaxed);
+                    SCREEN_SCALE_FACTOR.store(scale_factor.to_bits(), Ordering::Relaxed);
+                    
+                    log::info!("[MACOS_CLICK] Screen info cached: height={:.1}, scale={:.1}x", 
+                        frame.size.height, scale_factor);
+                } else {
+                    log::error!("[MACOS_CLICK] Failed to get main screen!");
+                    return Err(anyhow::anyhow!("Could not get main screen"));
+                }
+            }
 
-        Ok(())
+            log::info!("[MACOS_CLICK] Spawning click capture thread...");
+            
+            // Since macOS doesn't allow global event monitoring easily from Rust,
+            // we'll poll using CGEventSourceButtonState which doesn't require accessibility permissions
+            std::thread::spawn(|| {
+                log::info!("[MACOS_CLICK] Click capture thread STARTED, entering poll loop");
+                
+                let mut last_left_state = false;
+                let mut last_right_state = false;
+                let mut last_other_state = false;
+                
+                while MOUSE_HOOK_INSTALLED.load(Ordering::SeqCst) {
+                    unsafe {
+                        // Use CGEventSourceButtonState to check button states
+                        // 0 = left, 1 = right, 2 = middle
+                        extern "C" {
+                            fn CGEventSourceButtonState(
+                                stateID: u32,
+                                button: u32,
+                            ) -> bool;
+                            
+                            fn CGEventGetLocation(event: *const std::ffi::c_void) -> core_graphics::geometry::CGPoint;
+                        }
+                        
+                        // kCGEventSourceStateHIDSystemState = 1
+                        let left_down = CGEventSourceButtonState(1, 0);  // Left button
+                        let right_down = CGEventSourceButtonState(1, 1); // Right button  
+                        let other_down = CGEventSourceButtonState(1, 2); // Middle button
+                        
+                        // Get current mouse location using Cocoa
+                        let mouse_loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+                        
+                        // Use cached screen info (avoid calling NSScreen from background thread)
+                        let screen_height = f64::from_bits(SCREEN_HEIGHT.load(Ordering::Relaxed));
+                        let scale_factor = f64::from_bits(SCREEN_SCALE_FACTOR.load(Ordering::Relaxed));
+                        
+                        if screen_height > 0.0 && scale_factor > 0.0 {
+                            // NSEvent mouseLocation is in screen coordinates with bottom-left origin (in POINTS)
+                            // We need top-left origin in PIXELS for screen capture coordinates
+                            // 1. Flip Y coordinate: bottom-left -> top-left (still in points)
+                            let flipped_y_points = screen_height - mouse_loc.y;
+                            
+                            // 2. Scale to pixels (multiply by backingScaleFactor)
+                            let x_pixels = (mouse_loc.x * scale_factor) as i32;
+                            let y_pixels = (flipped_y_points * scale_factor) as i32;
+                            
+                            // Detect button down transitions
+                            if left_down && !last_left_state {
+                                log::debug!("[MACOS_CLICK] Raw: ({:.1}pt, {:.1}pt), Scale: {:.1}x, Pixels: ({}, {})", 
+                                    mouse_loc.x, mouse_loc.y, scale_factor, x_pixels, y_pixels);
+                                log_click(x_pixels, y_pixels, MouseButton::Left);
+                            }
+                            if right_down && !last_right_state {
+                                log::debug!("[MACOS_CLICK] Raw: ({:.1}pt, {:.1}pt), Scale: {:.1}x, Pixels: ({}, {})", 
+                                    mouse_loc.x, mouse_loc.y, scale_factor, x_pixels, y_pixels);
+                                log_click(x_pixels, y_pixels, MouseButton::Right);
+                            }
+                            if other_down && !last_other_state {
+                                log::debug!("[MACOS_CLICK] Raw: ({:.1}pt, {:.1}pt), Scale: {:.1}x, Pixels: ({}, {})", 
+                                    mouse_loc.x, mouse_loc.y, scale_factor, x_pixels, y_pixels);
+                                log_click(x_pixels, y_pixels, MouseButton::Middle);
+                            }
+                        }
+                        
+                        last_left_state = left_down;
+                        last_right_state = right_down;
+                        last_other_state = other_down;
+                    }
+                    
+                    std::thread::sleep(std::time::Duration::from_millis(10)); // Poll at 100Hz
+                }
+                
+                log::info!("[MACOS_CLICK] Mouse event polling stopped");
+            });
+            
+            Ok(())
+        }
+        
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Stub for Linux
+            log::warn!("Click capture not implemented for this platform");
+            Ok(())
+        }
+    }
+    
+    #[cfg(target_os = "macos")]
+    fn log_click(x: i32, y: i32, button: MouseButton) {
+        let click = ClickEvent {
+            x,
+            y,
+            button,
+            timestamp: std::time::Instant::now(),
+        };
+        
+        log::debug!("[MACOS_CLICK] Click detected: ({}, {}) button {:?}", x, y, button);
+        
+        if let Ok(mut clicks) = CLICK_POSITIONS.lock() {
+            clicks.push(click);
+            println!("[CLICK_STORED] Position ({}, {}), total stored: {}", x, y, clicks.len());
+            log::info!("[CLICK_STORED] Position ({}, {}), total stored: {}", x, y, clicks.len());
+            // Keep only recent clicks (last 5 seconds)
+            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(5);
+            clicks.retain(|c| c.timestamp >= cutoff);
+        }
     }
 
     /// Get recent click events within the specified region and time window
@@ -249,6 +355,24 @@ pub mod input {
     pub fn clear_clicks() {
         if let Ok(mut clicks) = CLICK_POSITIONS.lock() {
             clicks.clear();
+        }
+    }
+
+    /// Get the screen scale factor (e.g., 2.0 for Retina displays)
+    /// Returns 1.0 if not yet initialized
+    pub fn get_screen_scale_factor() -> f64 {
+        // Use centralized display info if available
+        if crate::display_info::is_initialized() {
+            return crate::display_info::scale_factor();
+        }
+        
+        // Fallback to atomic cache for backward compatibility
+        use std::sync::atomic::Ordering;
+        let bits = SCREEN_SCALE_FACTOR.load(Ordering::Relaxed);
+        if bits == 0 {
+            1.0 // Default if not initialized
+        } else {
+            f64::from_bits(bits)
         }
     }
 }
