@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { Settings, MonitorInfo } from "../App";
 import { PlatformInfo } from "../config";
 
@@ -44,6 +44,15 @@ function SettingsDialog({
   const [positionPreset, setPositionPreset] = useState<string>("center");
   const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false); // Flag to prevent update loops
   const [devMode, setDevMode] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Auto-hide toast after 3 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Load dev mode status
   useEffect(() => {
@@ -197,6 +206,7 @@ function SettingsDialog({
     onSave(localSettings);
     onRegionChange(localRegion);
     onMonitorChange(localMonitor);
+    onClose(); // Close dialog after saving
   };
 
   const handleExportSettings = async () => {
@@ -257,6 +267,13 @@ function SettingsDialog({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-4 right-4 z-[60] bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 shadow-xl max-w-md animate-slide-in">
+          <p className="text-white text-sm">{toastMessage}</p>
+        </div>
+      )}
+      
       <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
@@ -1016,6 +1033,117 @@ function SettingsDialog({
                   </div>
                 </div>
               )}
+
+              {/* Logging */}
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Logging</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Log Level</label>
+                    <select
+                      value={localSettings.log_level}
+                      onChange={(e) => setLocalSettings({ ...localSettings, log_level: e.target.value })}
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="Off">Off - No logging</option>
+                      <option value="Error">Error - Only critical failures (recommended)</option>
+                      <option value="Warn">Warn - Errors + warnings</option>
+                      <option value="Info">Info - Lifecycle events + errors</option>
+                      <option value="Debug">Debug - Detailed diagnostics</option>
+                      <option value="Trace">Trace - Verbose (frame-by-frame)</option>
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Controls how much information is logged. Error level is recommended for normal use.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Save Logs to File</label>
+                      <p className="text-xs text-gray-400">Enable file logging for troubleshooting</p>
+                    </div>
+                    <button
+                      onClick={() => setLocalSettings({ ...localSettings, log_to_file: !localSettings.log_to_file })}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        localSettings.log_to_file ? "bg-blue-600" : "bg-gray-600"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          localSettings.log_to_file ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {localSettings.log_to_file && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">Log Retention (days)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="365"
+                        value={localSettings.log_retention_days}
+                        onChange={(e) => setLocalSettings({ ...localSettings, log_retention_days: parseInt(e.target.value) || 30 })}
+                        className="w-32 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">
+                        Logs older than this will be automatically deleted. Default is 30 days.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={async () => {
+                        try {
+                          await invoke("open_logs_folder");
+                        } catch (err) {
+                          console.error("Failed to open logs folder:", err);
+                        }
+                      }}
+                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                      </svg>
+                      Open Logs Folder
+                    </button>
+                    <button
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        // Use Tauri's native dialog (independent of React state)
+                        const confirmed = await ask(
+                          `Delete logs older than ${localSettings.log_retention_days} days?`,
+                          { title: 'Clear Old Logs', kind: 'warning' }
+                        );
+                        
+                        if (!confirmed) {
+                          return; // User cancelled, do nothing
+                        }
+                        
+                        // User confirmed, proceed with deletion
+                        try {
+                          const deleted = await invoke<number>("clear_old_logs", { keepDays: localSettings.log_retention_days });
+                          // Show toast notification after deletion completes
+                          setToastMessage(`✅ Deleted ${deleted} old log file(s)`);
+                        } catch (err) {
+                          console.error("Failed to clear logs:", err);
+                          setToastMessage(`❌ Failed to clear logs: ${err}`);
+                        }
+                      }}
+                      className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded-lg transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Clear Old Logs
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               {/* Settings Management */}
               <div>

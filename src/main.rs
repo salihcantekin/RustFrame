@@ -15,6 +15,7 @@ use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRe
 mod destination_window;
 mod display_info;
 mod hollow_border;
+mod logging;
 mod platform;
 mod platform_info;
 mod rec_indicator;
@@ -42,21 +43,21 @@ lazy_static! {
 fn perform_cleanup() {
     // Check if cleanup has already been performed
     if CLEANUP_PERFORMED.swap(true, Ordering::SeqCst) {
-        log::info!("Cleanup already performed, skipping");
+        tracing::debug!("Cleanup already performed, skipping");
         return;
     }
 
-    log::info!("Performing cleanup of all capture resources...");
+    tracing::info!("Performing cleanup of all capture resources");
 
     // Stop mouse hook first (before destroying windows)
     platform::input::stop_click_capture();
-    log::info!("Mouse hook stopped");
+    tracing::debug!("Mouse hook stopped");
 
     // Clean up hollow border window
     if let Ok(mut border) = HOLLOW_BORDER.try_lock() {
         if border.is_some() {
             *border = None;
-            log::info!("Hollow border cleaned up");
+            tracing::debug!("Hollow border cleaned up");
         }
     }
 
@@ -64,7 +65,7 @@ fn perform_cleanup() {
     if let Ok(mut dest) = DESTINATION_WINDOW.try_lock() {
         if dest.is_some() {
             *dest = None;
-            log::info!("Destination window cleaned up");
+            tracing::debug!("Destination window cleaned up");
         }
     }
 
@@ -72,15 +73,15 @@ fn perform_cleanup() {
     if let Ok(mut rec) = REC_INDICATOR.try_lock() {
         if rec.is_some() {
             *rec = None;
-            log::info!("REC indicator cleaned up");
+            tracing::debug!("REC indicator cleaned up");
         }
     }
 
     // Clear click capture data
     platform::input::clear_clicks();
-    log::info!("Click capture data cleared");
+    tracing::debug!("Click capture data cleared");
 
-    log::info!("Cleanup completed successfully");
+    tracing::info!("Cleanup completed successfully");
 }
 
 /// Reset cleanup flag (for testing or restart scenarios)
@@ -216,6 +217,19 @@ impl Default for CaptureMethod {
     }
 }
 
+impl std::fmt::Display for CaptureMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(windows)]
+            CaptureMethod::Wgc => write!(f, "WGC"),
+            #[cfg(windows)]
+            CaptureMethod::GdiCopy => write!(f, "GdiCopy"),
+            #[cfg(not(windows))]
+            CaptureMethod::CoreGraphics => write!(f, "CoreGraphics"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     // Mouse & Cursor
@@ -275,6 +289,14 @@ pub struct Settings {
     // REC Indicator
     pub show_rec_indicator: bool,
     pub rec_indicator_size: String, // "small", "medium", "large"
+
+    // Logging
+    #[serde(default = "default_log_level")]
+    pub log_level: String, // "Off", "Error", "Warn", "Info", "Debug", "Trace"
+    #[serde(default = "default_log_to_file")]
+    pub log_to_file: bool,
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: u32,
 }
 
 // Default functions for serde
@@ -292,6 +314,18 @@ fn default_click_radius() -> u32 {
 
 fn default_click_dissolve_ms() -> u32 {
     300
+}
+
+fn default_log_level() -> String {
+    "Error".to_string() // Default: only errors
+}
+
+fn default_log_to_file() -> bool {
+    true // Enable file logging by default
+}
+
+fn default_log_retention_days() -> u32 {
+    30 // Keep logs for 30 days
 }
 
 impl Default for Settings {
@@ -321,6 +355,9 @@ impl Default for Settings {
             last_region: Some([100, 100, 600, 400]),
             show_rec_indicator: true,
             rec_indicator_size: "medium".to_string(),
+            log_level: "Error".to_string(),
+            log_to_file: true,
+            log_retention_days: 30,
         }
     }
 }
@@ -837,11 +874,44 @@ async fn set_active_capture_profile(
 
 #[tauri::command]
 async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+    let old_log_level = state.settings.lock().unwrap().log_level.clone();
+    let old_log_to_file = state.settings.lock().unwrap().log_to_file;
+    
     let mut app_settings = state.settings.lock().unwrap();
     *app_settings = settings.clone();
+    drop(app_settings); // Release lock before potentially blocking operations
 
     // Save to disk (merge with existing JSON to preserve unknown/manual keys)
     let _ = persist_settings_to_disk(&settings);
+
+    // If logging settings changed, reinitialize logger
+    if settings.log_level != old_log_level || settings.log_to_file != old_log_to_file {
+        tracing::info!(
+            old_level = %old_log_level,
+            new_level = %settings.log_level,
+            old_file = old_log_to_file,
+            new_file = settings.log_to_file,
+            "Logging settings changed, reinitializing logger"
+        );
+        
+        let log_level = settings.log_level.parse::<logging::LogLevel>()
+            .unwrap_or(logging::LogLevel::Error);
+        
+        if let Err(e) = logging::init_logging(log_level, settings.log_to_file) {
+            tracing::error!(error = %e, "Failed to reinitialize logging");
+        } else {
+            tracing::info!(
+                log_level = %log_level.to_string(),
+                log_to_file = settings.log_to_file,
+                "Logging reinitialized successfully"
+            );
+        }
+        
+        // If retention days changed, trigger cleanup
+        if settings.log_to_file {
+            logging::auto_cleanup_old_logs(settings.log_retention_days);
+        }
+    }
 
     Ok(())
 }
@@ -890,6 +960,44 @@ fn open_settings_folder() -> Result<(), String> {
     } else {
         Err("Could not find config directory".to_string())
     }
+}
+
+#[tauri::command]
+fn open_logs_folder() -> Result<(), String> {
+    let logs_dir = logging::get_logs_dir().map_err(|e| e.to_string())?;
+    let _ = std::fs::create_dir_all(&logs_dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&logs_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&logs_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&logs_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_old_logs(keep_days: u32) -> Result<usize, String> {
+    let logs_dir = logging::get_logs_dir().map_err(|e| e.to_string())?;
+    logging::cleanup_old_logs(&logs_dir, keep_days).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1005,10 +1113,13 @@ async fn start_capture(
     height: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    println!("========================================");
-    println!("[MAIN] start_capture() CALLED!");
-    println!("[MAIN] Parameters: x={}, y={}, width={}, height={}", x, y, width, height);
-    println!("========================================");
+    tracing::info!(
+        x = x,
+        y = y,
+        width = width,
+        height = height,
+        "Starting capture"
+    );
     log::info!("Starting capture at ({}, {}) size {}x{}", x, y, width, height);
     
     // Clean up any previous capture session first (always, not just if capturing)
@@ -1027,34 +1138,33 @@ async fn start_capture(
     }
     
     // Clean up windows - this will trigger Drop which must be on main thread
-    println!("[CLEANUP] Clearing HOLLOW_BORDER...");
+    tracing::debug!("Clearing HOLLOW_BORDER");
     *HOLLOW_BORDER.lock().unwrap() = None;
-    println!("[CLEANUP] Clearing DESTINATION_WINDOW...");
+    tracing::debug!("Clearing DESTINATION_WINDOW");
     *DESTINATION_WINDOW.lock().unwrap() = None;
-    println!("[CLEANUP] Clearing REC_INDICATOR...");
+    tracing::debug!("Clearing REC_INDICATOR");
     *REC_INDICATOR.lock().unwrap() = None;
     
     // Reset capturing state
     *state.is_capturing.lock().unwrap() = false;
     
-    println!("[DEBUG] Line 1020: Before sleep");
+    tracing::debug!("Waiting for cleanup to complete");
     // Give a moment for cleanup
     std::thread::sleep(std::time::Duration::from_millis(100));
     
-    println!("[DEBUG] Line 1024: After sleep, about to load settings");
+    tracing::debug!("Loading settings for capture start");
     log::info!("[MAIN] About to load settings...");
     
     // Base settings + optional active profile overrides
-    println!("[DEBUG] Line 1028: Getting base_settings lock");
+    tracing::debug!("Acquiring base_settings lock");
     let base_settings = state.settings.lock().unwrap().clone();
-    println!("[DEBUG] Line 1030: Getting active_profile lock");
+    tracing::debug!("Acquiring active_profile lock");
     let active_profile = state.active_profile.lock().unwrap().clone();
     
-    println!("[DEBUG] Line 1033: active_profile={:?}", active_profile);
-    println!("[MAIN] Base settings loaded, active_profile={:?}", active_profile);
+    tracing::debug!(active_profile = ?active_profile, "Profile settings loaded");
     
     let settings = if let (Some(profiles_dir), Some(profile_id)) = (rustframe_profiles_dir(), active_profile) {
-        println!("[MAIN] Loading profile '{}' from {:?}", profile_id, profiles_dir);
+        tracing::info!(profile_id = %profile_id, profiles_dir = ?profiles_dir, "Loading capture profile");
         match read_profile_overrides(&profiles_dir, &profile_id) {
             Some(overrides) => match apply_profile_overrides(&base_settings, overrides) {
                 Ok(s) => s,
@@ -1073,8 +1183,12 @@ async fn start_capture(
         base_settings
     };
     
-    println!("[MAIN] Settings loaded: show_rec_indicator={}, capture_clicks={}", 
-        settings.show_rec_indicator, settings.capture_clicks);
+    tracing::debug!(
+        show_rec_indicator = settings.show_rec_indicator,
+        capture_clicks = settings.capture_clicks,
+        preview_mode = ?settings.preview_mode,
+        "Capture settings loaded"
+    );
 
     // Create hollow border (always WinAPI)
     // COLORREF format is 0x00BBGGRR, border_color is [R, G, B, A]
@@ -1107,22 +1221,22 @@ async fn start_capture(
 
     // Create REC indicator (separate window with screen sharing excluded)
     if settings.show_rec_indicator {
-        println!("[MAIN] Creating REC indicator...");
+        tracing::debug!("Creating REC indicator");
         if let Some(rec) = RecIndicator::new() {
             rec.set_size(&settings.rec_indicator_size);
-            println!("[MAIN] About to call rec.show()...");
-            rec.show(x + width as i32, y, settings.border_width as i32);
-            println!("[MAIN] rec.show() returned, storing in REC_INDICATOR...");
+            tracing::debug!("Showing REC indicator");
+            rec.show(x, y, width as i32, settings.border_width as i32);
+            tracing::debug!("Storing REC indicator in global state");
             *REC_INDICATOR.lock().unwrap() = Some(rec);
-            println!("[MAIN] REC indicator created and shown (excluded from screen sharing)");
+            tracing::info!("REC indicator created and shown");
         } else {
             log::warn!("[MAIN] RecIndicator::new() returned None");
         }
     } else {
-        println!("[MAIN] REC indicator disabled in settings");
+        tracing::debug!("REC indicator disabled in settings");
     }
     
-    println!("[MAIN] About to create destination window in {:?} mode", settings.preview_mode);
+    tracing::info!(preview_mode = ?settings.preview_mode, "Creating destination window");
     
     #[cfg(target_os = "windows")]
     match settings.preview_mode {
@@ -1193,8 +1307,10 @@ async fn start_capture(
 
     #[cfg(not(target_os = "windows"))]
     {
-        println!("[MAIN] Creating destination window (Native mode - {})", 
-            if cfg!(target_os = "macos") { "macOS" } else { "Linux" });
+        tracing::debug!(
+            os = if cfg!(target_os = "macos") { "macOS" } else { "Linux" },
+            "Creating native destination window"
+        );
         // On macOS/Linux, always use native destination window (ignore preview_mode setting)
         // TauriCanvas is not implemented yet
         
@@ -1222,35 +1338,38 @@ async fn start_capture(
             overlapped: None,
         };
         
-        println!("[MAIN] Calling DestinationWindow::new()...");
+        tracing::debug!(width, height, "Creating DestinationWindow");
         let dest_window = DestinationWindow::new(width, height, config)
             .ok_or("Failed to create destination window")?;
         
-        println!("[MAIN] Destination window created successfully");
+        tracing::info!("Destination window created successfully");
         *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
         
         // Verify window is stored
         {
             let lock = DESTINATION_WINDOW.lock().unwrap();
             if lock.is_some() {
-                println!("[MAIN] ✅ Destination window STORED in DESTINATION_WINDOW");
+                tracing::debug!("Destination window stored successfully");
             } else {
-                println!("[MAIN] ❌ DESTINATION_WINDOW is None after storing!");
+                tracing::error!("Failed to store destination window - is None after assignment");
             }
         }
     }
 
     // Start capture engine
-    println!("[MAIN] Starting capture engine...");
+    tracing::debug!("Starting capture engine");
     let mut engine_lock = state.capture_engine.lock().unwrap();
     
     // (Re)create capture engine so users can change capture_method from Settings
     if let Some(ref mut existing) = *engine_lock {
-        println!("[MAIN] Stopping existing capture engine");
+        tracing::debug!("Stopping existing capture engine");
         existing.stop();
     }
     
-    println!("[MAIN] Creating new capture engine for settings: {:?}", settings.capture_method);
+    tracing::info!(
+        capture_method = ?settings.capture_method,
+        "Creating new capture engine"
+    );
     *engine_lock = Some(create_capture_engine_for_settings(&settings)?);
 
     if let Some(ref mut engine) = *engine_lock {
@@ -1264,27 +1383,27 @@ async fn start_capture(
         };
         log::info!("[MAIN] Calling engine.start() with region: {:?}", region);
         engine.start(region, settings.show_cursor).map_err(|e| {
-            println!("[MAIN] ❌ Capture engine start FAILED: {}", e);
+            tracing::error!(error = %e, "Capture engine start failed");
             e.to_string()
         })?;
-        println!("[MAIN] ✅ engine.start() completed successfully");
+        tracing::info!("Capture engine started successfully");
     } else {
-        println!("[MAIN] Capture engine is None after creation!");
+        tracing::error!("Capture engine is None after creation");
     }
     drop(engine_lock);
     
-    println!("[MAIN] Settings.capture_clicks = {}", settings.capture_clicks);
+    tracing::debug!(capture_clicks = settings.capture_clicks, "Checking click capture setting");
     
     // Start click capture if enabled
     if settings.capture_clicks {
-        println!("[MAIN] Capture clicks ENABLED, starting click capture...");
+        tracing::info!("Starting click capture");
         if let Err(e) = platform::input::start_click_capture() {
-            println!("[MAIN] Failed to start click capture: {}", e);
+            tracing::error!(error = %e, "Failed to start click capture");
         } else {
-            println!("[MAIN] Click capture started successfully");
+            tracing::debug!("Click capture started successfully");
         }
     } else {
-        println!("[MAIN] Capture clicks DISABLED");
+        tracing::debug!("Click capture disabled in settings");
     }
 
     *state.is_capturing.lock().unwrap() = true;
@@ -1354,9 +1473,6 @@ async fn start_capture(
     let render_handle = std::thread::spawn(move || {
         log::info!("Frame rendering thread started");
         let frame_duration = std::time::Duration::from_millis(1000 / target_fps as u64);
-        let mut frame_count = 0u64;
-        let mut last_stats_time = std::time::Instant::now();
-        let mut stats_frame_count = 0u64;
 
         loop {
             // Check stop flag
@@ -1404,11 +1520,6 @@ async fn start_capture(
                     let width_pixels = display_info.points_to_pixels(frame.width as f64) as u32;
                     let height_pixels = display_info.points_to_pixels(frame.height as f64) as u32;
                     
-                    println!("[RENDER] Frame: offset=({},{}) pts -> ({},{}) px, size={}x{} pts -> {}x{} px @ {:.1}x", 
-                        frame.offset_x, frame.offset_y, offset_x_pixels, offset_y_pixels,
-                        frame.width, frame.height, width_pixels, height_pixels, 
-                        display_info.scale_factor);
-                    
                     // Use frame's offset for accurate click detection
                     // frame.offset_x/y tell us where the frame starts in screen coordinates
                     // This handles clipped regions correctly
@@ -1419,24 +1530,12 @@ async fn start_capture(
                         height_pixels,
                         click_dissolve_ms,
                     );
-                    
-                    println!("[RENDER] Checking clicks: found {} in region ({},{}) {}x{} pixels", 
-                        clicks.len(), offset_x_pixels, offset_y_pixels, width_pixels, height_pixels);
-                    
-                    if !clicks.is_empty() {
-                        println!("[RENDER] ✅ RENDERING {} CLICK(S)!", clicks.len());
-                        log::info!("[RENDER] Found {} click(s) to render in region ({},{}) {}x{}", 
-                            clicks.len(), offset_x_pixels, offset_y_pixels, width_pixels, height_pixels);
-                    }
 
                     for click in clicks {
                         // Convert screen coordinates (pixels) to frame coordinates (pixels)
                         // Frame buffer is already in pixels, so direct subtraction
                         let frame_x = click.x - offset_x_pixels;
                         let frame_y = click.y - offset_y_pixels;
-                        
-                        println!("[RENDER] 🎯 Drawing click at screen ({},{}) -> frame ({},{}) in {}x{} buffer",
-                            click.x, click.y, frame_x, frame_y, frame.width, frame.height);
 
                         // Draw click highlight circle (fading based on age)
                         let age_ms = click.timestamp.elapsed().as_millis() as f32;
@@ -1461,21 +1560,6 @@ async fn start_capture(
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(window) = dest_lock.as_ref() {
                         window.update_frame(frame.data, frame.width, frame.height);
-                        frame_count += 1;
-                        stats_frame_count += 1;
-
-                        // Print FPS stats every 10 seconds
-                        let elapsed_since_stats = last_stats_time.elapsed();
-                        if elapsed_since_stats.as_secs() >= 10 {
-                            let actual_fps =
-                                stats_frame_count as f64 / elapsed_since_stats.as_secs_f64();
-                            log::info!(
-                                "Render stats - FPS: {:.1}, Total frames: {}",
-                                actual_fps, frame_count
-                            );
-                            last_stats_time = std::time::Instant::now();
-                            stats_frame_count = 0;
-                        }
                     }
                 }
             } // DESTINATION_WINDOW lock released here
@@ -1510,7 +1594,7 @@ async fn start_capture(
 
 #[tauri::command]
 async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
-    println!("[STOP_CAPTURE] stop_capture() CALLED!");
+    tracing::info!("Stopping capture");
     log::info!("Stopping capture");
 
     // Save last region if remember_last_region is enabled
@@ -1568,9 +1652,9 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     }
 
     // Clean up capture-related windows
-    println!("[STOP_CAPTURE] Clearing DESTINATION_WINDOW...");
+    tracing::debug!("Clearing DESTINATION_WINDOW");
     *DESTINATION_WINDOW.lock().unwrap() = None;
-    println!("[STOP_CAPTURE] Clearing REC_INDICATOR...");
+    tracing::debug!("Clearing REC_INDICATOR");
     *REC_INDICATOR.lock().unwrap() = None;
     log::info!("Capture windows cleaned up");
 
@@ -1745,31 +1829,125 @@ fn get_platform_info() -> platform_info::PlatformInfo {
 // ============================================================================
 
 fn main() {
-    // Initialize display information first (needed for all coordinate calculations)
-    if let Err(e) = display_info::initialize() {
-        eprintln!("Warning: Failed to initialize display info: {}", e);
-    }
-
-    // Set up panic hook for cleanup on crash
-    let default_panic = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        log::error!("Application panic detected! Performing emergency cleanup...");
-        perform_cleanup();
-        default_panic(panic_info);
-    }));
-
-    // Load settings + active profile (active_profile is stored as an extra key in settings.json)
-    // Robust to legacy/incomplete settings files: we merge onto defaults and migrate known fields.
-    let (settings, active_profile) = if let Some(dir) = rustframe_config_dir() {
+    // Initialize logging system FIRST (before any other operations)
+    // Load settings early to get log level configuration
+    let (initial_settings, _) = if let Some(dir) = rustframe_config_dir() {
         load_settings_and_profile_from_disk(&dir)
     } else {
         (Settings::default(), None)
     };
 
+    // Parse log level and initialize logger
+    let log_level = initial_settings.log_level.parse::<logging::LogLevel>()
+        .unwrap_or(logging::LogLevel::Error);
+    
+    if let Err(e) = logging::init_logging(log_level, initial_settings.log_to_file) {
+        eprintln!("Failed to initialize logging: {}", e);
+    } else {
+        // Log startup header with visual markers for easy identification
+        tracing::info!("***********************************************************************");
+        tracing::info!("*                        RUSTFRAME STARTUP                            *");
+        tracing::info!("***********************************************************************");
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            platform = std::env::consts::OS,
+            log_level = %log_level.to_string(),
+            "Application started"
+        );
+        tracing::info!("***********************************************************************");
+        
+        // Log system information for debugging
+        tracing::debug!("");
+        tracing::debug!("=== SYSTEM INFORMATION ===");
+        tracing::debug!(
+            os = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+            "Platform details"
+        );
+    }
+
+    // Auto-cleanup old logs in background
+    if initial_settings.log_to_file {
+        logging::auto_cleanup_old_logs(initial_settings.log_retention_days);
+    }
+
+    // Initialize display information (needed for all coordinate calculations)
+    if let Err(e) = display_info::initialize() {
+        tracing::warn!(error = %e, "Failed to initialize display info");
+        eprintln!("Warning: Failed to initialize display info: {}", e);
+    } else {
+        tracing::debug!("Display info initialized successfully");
+        
+        // Log display configuration for debugging
+        tracing::debug!("");
+        tracing::debug!("=== DISPLAY CONFIGURATION ===");
+        let display_config = display_info::get();
+        tracing::debug!(
+            scale_factor = display_config.scale_factor,
+            width_points = display_config.width_points,
+            height_points = display_config.height_points,
+            width_pixels = display_config.width_pixels,
+            height_pixels = display_config.height_pixels,
+            "Display details"
+        );
+    }
+
+    // Set up panic hook for cleanup on crash
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(?panic_info, "Application panic detected! Performing emergency cleanup");
+        log::error!("Application panic detected! Performing emergency cleanup...");
+        perform_cleanup();
+        default_panic(panic_info);
+    }));
+
+    // Load settings + active profile (we already loaded them above for logging, reuse them)
+    let settings = initial_settings;
+    let active_profile = if let Some(dir) = rustframe_config_dir() {
+        load_settings_and_profile_from_disk(&dir).1
+    } else {
+        None
+    };
+    
+    // Log active settings for debugging
+    tracing::debug!("");
+    tracing::debug!("=== ACTIVE SETTINGS ===");
+    tracing::debug!(
+        capture_method = ?settings.capture_method,
+        target_fps = settings.target_fps,
+        show_cursor = settings.show_cursor,
+        show_border = settings.show_border,
+        border_width = settings.border_width,
+        border_color = ?settings.border_color,
+        show_rec_indicator = settings.show_rec_indicator,
+        rec_indicator_size = ?settings.rec_indicator_size,
+        remember_last_region = settings.remember_last_region,
+        active_profile = ?active_profile,
+        log_level = ?settings.log_level,
+        log_to_file = settings.log_to_file,
+        log_retention_days = settings.log_retention_days,
+        "Settings configuration"
+    );
+    tracing::debug!("");
+    tracing::debug!("***********************************************************************");
+    tracing::debug!("*                   INITIALIZATION COMPLETE                           *");
+    tracing::debug!("***********************************************************************");
+    tracing::debug!("");
+
     // Initialize capture engine (depends on settings)
+    tracing::info!(
+        capture_method = %settings.capture_method.to_string(),
+        "Initializing capture engine"
+    );
+    
     let capture_engine = create_capture_engine_for_settings(&settings)
-        .or_else(|_| create_capture_engine().map_err(|e| e.to_string()))
+        .or_else(|e| {
+            tracing::warn!(error = %e, "Failed to create capture engine with settings, using default");
+            create_capture_engine().map_err(|e| e.to_string())
+        })
         .expect("Failed to initialize capture engine");
+    
+    tracing::debug!("Capture engine created successfully");
 
     let app_state = AppState {
         capture_engine: Arc::new(Mutex::new(Some(capture_engine))),
@@ -1796,6 +1974,8 @@ fn main() {
             save_settings,
             get_settings_path,
             open_settings_folder,
+            open_logs_folder,
+            clear_old_logs,
             export_settings,
             import_settings,
             show_preview_border,

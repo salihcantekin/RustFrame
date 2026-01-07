@@ -475,12 +475,12 @@ impl DestinationWindow {
 
 impl Drop for DestinationWindow {
     fn drop(&mut self) {
-        println!("[DEST_WINDOW] Drop called for window {:p}", self.window);
+        tracing::debug!(window_ptr = ?self.window, "Dropping destination window");
         
         extern "C" fn close_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
-                println!("[DEST_WINDOW] Hiding and closing window on main thread");
+                tracing::debug!("Hiding and closing window on main thread");
                 let _: () = msg_send![window, orderOut: nil];
                 let _: () = msg_send![window, close];
             }
@@ -488,23 +488,23 @@ impl Drop for DestinationWindow {
         
         unsafe {
             let is_main = pthread_main_np() != 0;
-            println!("[DEST_WINDOW] Drop on main thread: {}", is_main);
+            tracing::debug!(is_main_thread = is_main, "Drop on main thread check");
             
             if !is_main {
-                println!("[DEST_WINDOW] Dispatching window close to main thread");
+                tracing::debug!("Dispatching window close to main thread");
                 dispatch_sync_f(
                     &_dispatch_main_q,
                     self.window as *mut std::ffi::c_void,
                     close_window_on_main_thread,
                 );
             } else {
-                println!("[DEST_WINDOW] Closing window directly on main thread");
+                tracing::debug!("Closing window directly on main thread");
                 let _: () = msg_send![self.window, orderOut: nil];
                 let _: () = msg_send![self.window, close];
             }
         }
         
-        println!("[DEST_WINDOW] Drop completed");
+        tracing::debug!("Destination window drop completed");
     }
 }
 

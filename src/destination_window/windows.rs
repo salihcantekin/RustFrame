@@ -211,7 +211,7 @@ fn run_window_thread(
     config: DestinationWindowConfig,
     stop_flag: Arc<AtomicBool>,
 ) {
-    println!("[DEST] Window thread started");
+    tracing::debug!("Destination window thread started");
 
     unsafe {
         let hinstance = match GetModuleHandleW(None) {
@@ -365,15 +365,15 @@ fn run_window_thread(
                 let alpha = config.alpha.unwrap_or(0);
                 let result = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
                 if result.is_ok() {
-                    println!("[DEST] Window alpha set to {}/255", alpha);
+                    tracing::debug!(alpha, "Window alpha set");
                 } else {
-                    println!("[DEST] Warning: Failed to set window transparency");
+                    tracing::warn!("Failed to set window transparency");
                 }
             }
         }
 
         WINDOW_THREAD_RUNNING.store(true, Ordering::SeqCst);
-        println!("[DEST] WinAPI destination window created: {:?}", hwnd);
+        tracing::info!(hwnd = ?hwnd, "Destination window created");
 
         // Set timer for periodic repaint as backup
         let _ = SetTimer(Some(hwnd), TIMER_ID, TIMER_INTERVAL_MS, None);
@@ -399,7 +399,7 @@ fn run_window_thread(
         // Cleanup
         let _ = KillTimer(Some(hwnd), TIMER_ID);
         WINDOW_THREAD_RUNNING.store(false, Ordering::SeqCst);
-        println!("[DEST] Window thread exiting");
+        tracing::debug!("Destination window thread exiting");
     }
 }
 

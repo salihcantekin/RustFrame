@@ -65,8 +65,9 @@ pub trait RecordingIndicator: Send + Sync {
 
     /// Show indicator at specified position (typically top-right of capture region)
     /// - x, y: top-left corner of capture region
+    /// - region_width: capture region width (to calculate right edge)
     /// - border_width: border thickness to account for
-    fn show(&self, x: i32, y: i32, border_width: i32);
+    fn show(&self, x: i32, y: i32, region_width: i32, border_width: i32);
 
     /// Hide the indicator
     fn hide(&self);

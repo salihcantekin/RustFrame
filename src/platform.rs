@@ -373,7 +373,7 @@ pub mod input {
         
         if let Ok(mut clicks) = CLICK_POSITIONS.lock() {
             clicks.push(click);
-            println!("[CLICK_STORED] Position ({}, {}), total stored: {}", x, y, clicks.len());
+            tracing::debug!(x, y, total = clicks.len(), "Click stored in buffer");
             log::info!("[CLICK_STORED] Position ({}, {}), total stored: {}", x, y, clicks.len());
             
             // Lazy cleanup: only every 100 clicks instead of per-click (performance optimization)

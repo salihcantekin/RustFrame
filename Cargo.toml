@@ -53,6 +53,11 @@ lazy_static = "1.5"
 log = "0.4"
 anyhow = "1.0"
 
+# Logging infrastructure
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "local-time", "ansi"] }
+tracing-appender = "0.2"
+
 # Windows-specific dependencies
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

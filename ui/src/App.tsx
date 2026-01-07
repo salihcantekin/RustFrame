@@ -46,6 +46,11 @@ export interface Settings {
   // REC Indicator
   show_rec_indicator: boolean;
   rec_indicator_size: "small" | "medium" | "large";
+  
+  // Logging
+  log_level: string;
+  log_to_file: boolean;
+  log_retention_days: number;
 }
 
 export interface MonitorInfo {

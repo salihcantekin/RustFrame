@@ -420,13 +420,13 @@ fn run_window_thread(
     use windows::core::PCWSTR;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
-    println!("[HOLLOW] Window thread started");
+    tracing::debug!("Hollow border window thread started");
 
     unsafe {
         let hinstance = match GetModuleHandleW(None) {
             Ok(h) => h,
             Err(e) => {
-                println!("[HOLLOW] Failed to get module handle: {}", e);
+                tracing::error!(error = %e, "Failed to get module handle");
                 return;
             }
         };
@@ -452,7 +452,7 @@ fn run_window_thread(
             };
 
             if RegisterClassExW(&wc) == 0 {
-                println!("[HOLLOW] Failed to register window class");
+                tracing::error!("Failed to register window class");
                 CLASS_REGISTERED.store(false, Ordering::SeqCst);
                 return;
             }
@@ -483,7 +483,7 @@ fn run_window_thread(
         ) {
             Ok(h) => h,
             Err(e) => {
-                println!("[HOLLOW] Failed to create window: {}", e);
+                tracing::error!(error = %e, "Failed to create hollow border window");
                 return;
             }
         };
@@ -508,7 +508,7 @@ fn run_window_thread(
         let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 1, 0);
 
         WINDOW_THREAD_RUNNING.store(true, Ordering::SeqCst);
-        println!("[HOLLOW] Hollow border window created: {:?}", hwnd);
+        tracing::info!(hwnd = ?hwnd, "Hollow border window created");
 
         // Message loop - THIS IS THE KEY!
         let mut msg = MSG::default();
@@ -529,7 +529,7 @@ fn run_window_thread(
         // Cleanup
         let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), 1);
         WINDOW_THREAD_RUNNING.store(false, Ordering::SeqCst);
-        println!("[HOLLOW] Window thread exiting");
+        tracing::debug!("Hollow border window thread exiting");
     }
 }
 
@@ -796,7 +796,7 @@ unsafe extern "system" fn subclass_proc(
         }
 
         let _ = InvalidateRect(Some(hwnd), None, true);
-        println!("[HOLLOW] Resize complete: {:?}", win_rect);
+        tracing::debug!(rect = ?win_rect, "Hollow border resize complete");
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 
