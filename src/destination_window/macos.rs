@@ -8,7 +8,7 @@
 
 use crate::traits::PreviewWindow;
 use cocoa::appkit::{NSWindow, NSWindowStyleMask, NSBackingStoreType, NSColor, NSView};
-use cocoa::base::{id, nil, YES, NO};
+use cocoa::base::{id, nil, YES, NO, BOOL};
 use cocoa::foundation::{NSRect, NSPoint, NSSize, NSAutoreleasePool};
 use objc::{msg_send, sel, sel_impl, class};
 use objc::declare::ClassDecl;
@@ -27,6 +27,19 @@ extern "C" {
         work: extern "C" fn(*mut std::ffi::c_void),
     );
     fn pthread_main_np() -> i32; // Returns non-zero if on main thread
+    
+    // IOSurface APIs for GPU-accelerated rendering
+    fn IOSurfaceLookup(iosurface_id: u32) -> *mut std::ffi::c_void;
+    fn IOSurfaceGetWidth(iosurface: *mut std::ffi::c_void) -> usize;
+    fn IOSurfaceGetHeight(iosurface: *mut std::ffi::c_void) -> usize;
+    fn IOSurfaceGetBytesPerRow(iosurface: *mut std::ffi::c_void) -> usize;
+    fn IOSurfaceGetBaseAddress(iosurface: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn IOSurfaceLock(iosurface: *mut std::ffi::c_void, options: u32, seed: *mut u32) -> i32;
+    fn IOSurfaceUnlock(iosurface: *mut std::ffi::c_void, options: u32, seed: *mut u32) -> i32;
+    
+    // CoreFoundation memory management
+    fn CFRetain(cf: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CFRelease(cf: *mut std::ffi::c_void);
 }
 
 // NSWindow constants for screen sharing and window management
@@ -116,6 +129,18 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         // Create window style mask
         let style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
         
+        // IMPORTANT: Frontend sends dimensions in POINTS (not pixels)
+        // On macOS, NSWindow uses points, and the hollow border also uses points
+        // No conversion needed - use the values directly
+        let main_screen: id = msg_send![class!(NSScreen), mainScreen];
+        let backing_scale: f64 = if !main_screen.is_null() {
+            msg_send![main_screen, backingScaleFactor]
+        } else {
+            2.0 // Default to 2x Retina if we can't get screen
+        };
+        
+        log::info!("[DestWindow] Display backing scale: {}", backing_scale);
+        
         // Create window frame
         // Position strategy:
         // - Debug mode: On-screen at (100, 100) for debugging
@@ -127,8 +152,14 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         } else {
             (-10000.0, -10000.0)
         };
+        
+        // Use dimensions directly as they're already in POINTS
         let width = ctx.width as f64;
         let height = ctx.height as f64;
+        
+        log::info!("[DestWindow] Window size: {}x{} points @ {}x scale ({}x{} pixels)",
+                   width, height, backing_scale, (width * backing_scale) as u32, (height * backing_scale) as u32);
+        log::info!("[DestWindow] Window position: ({}, {})", x_pos, y_pos);
         
         let frame = NSRect::new(
             NSPoint::new(x_pos, y_pos),
@@ -147,6 +178,8 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
             log::error!("Failed to create destination NSWindow");
             return;
         }
+        
+        log::info!("[DestWindow] Window created successfully");
         
         // Configure window properties
         // IMPORTANT: Keep opaque=YES and use solid background for CGWindowList
@@ -226,6 +259,46 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         // Use standard content view
         let content_view = window.contentView();
         
+        // CRITICAL: Enable layer-backing and disable animations ONCE at window creation
+        // Doing this on every frame causes performance issues and may re-enable animations
+        let _: () = msg_send![content_view, setWantsLayer: YES];
+        let layer: id = msg_send![content_view, layer];
+        
+        if !layer.is_null() {
+            // CRITICAL: Permanently disable ALL implicit animations
+            // Setting layer.actions to NSNull for all animated properties
+            let null_class = class!(NSNull);
+            let ns_null: id = msg_send![null_class, null];
+            let dict_class = class!(NSMutableDictionary);
+            let actions_dict: id = msg_send![dict_class, dictionary];
+            
+            // Disable animations for ALL layer properties that might animate
+            let properties = [
+                "contents",
+                "contentsRect",
+                "contentsScale",
+                "bounds",
+                "position",
+                "frame",
+                "opacity",
+                "backgroundColor",
+            ];
+            
+            for property in &properties {
+                let key = cocoa::foundation::NSString::alloc(nil);
+                let key = cocoa::foundation::NSString::init_str(key, property);
+                let _: () = msg_send![actions_dict, setObject:ns_null forKey:key];
+            }
+            
+            let _: () = msg_send![layer, setActions: actions_dict];
+            log::info!("[DestWindow] Layer animations permanently disabled");
+            
+            // Make layer opaque for performance
+            let _: () = msg_send![layer, setOpaque: YES];
+        } else {
+            log::warn!("[DestWindow] Failed to get layer from content view");
+        }
+        
         // Set alpha: Full opacity for proper CGWindowList capture
         // Window is invisible due to level=-1 (below desktop), not alpha
         let window_alpha = ctx.config.alpha.unwrap_or(255);
@@ -238,8 +311,14 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
             let _: () = msg_send![window, orderFront: nil];
         }
         
+        // Log window visibility and position
+        let is_visible: BOOL = msg_send![window, isVisible];
+        let final_frame: NSRect = msg_send![window, frame];
         log::info!("Destination window created at ({}, {}) size {}x{} alpha={}", 
                    x_pos, y_pos, width, height, window_alpha);
+        log::info!("[DestWindow] Window visibility: {}, Actual frame: origin=({}, {}), size={}x{}",
+                   is_visible == YES, final_frame.origin.x, final_frame.origin.y,
+                   final_frame.size.width, final_frame.size.height);
         
         // Store results
         *ctx.result_window = window;
@@ -324,24 +403,12 @@ impl DestinationWindow {
                     core_graphics::base::kCGRenderingIntentDefault,
                 );
                 
-                // Get or create CALayer
+                // Get layer (already created and configured at window creation)
                 let layer: id = msg_send![ctx.view, layer];
                 if layer.is_null() {
-                    // Enable layer-backing
-                    let _: () = msg_send![ctx.view, setWantsLayer: YES];
-                    let layer: id = msg_send![ctx.view, layer];
-                    if layer.is_null() {
-                        return;
-                    }
-                }
-                
-                let layer: id = msg_send![ctx.view, layer];
-                if layer.is_null() {
+                    log::error!("[DestWindow CPU] Layer is null - should have been created at window creation!");
                     return;
                 }
-                
-                // Make layer opaque for proper rendering
-                let _: () = msg_send![layer, setOpaque: YES];
                 
                 // CRITICAL: Set contentsScale on EVERY frame for Retina displays
                 let window: id = msg_send![ctx.view, window];
@@ -361,10 +428,27 @@ impl DestinationWindow {
                 let _: () = msg_send![layer, setMagnificationFilter: nearest];
                 let _: () = msg_send![layer, setMinificationFilter: nearest];
                 
+                // CRITICAL: Reset contentsRect to full (0,0,1,1) for CPU rendering
+                // GPU path uses cropped contentsRect, but CPU path provides already-cropped CGImage
+                // If we don't reset, layer will apply GPU's crop to CPU's already-cropped image!
+                use core_graphics::geometry::CGRect;
+                let full_rect = CGRect::new(
+                    &core_graphics::geometry::CGPoint::new(0.0, 0.0),
+                    &core_graphics::geometry::CGSize::new(1.0, 1.0)
+                );
+                let _: () = msg_send![layer, setContentsRect: full_rect];
+                
+                // CRITICAL: Wrap CALayer property changes in CATransaction with disabled animations
+                let transaction_class = class!(CATransaction);
+                let _: () = msg_send![transaction_class, begin];
+                let _: () = msg_send![transaction_class, setDisableActions: YES];
+                
                 // Set CGImage as layer contents
                 use foreign_types_shared::ForeignType;
                 let cg_image_ref = cg_image.as_ptr() as *const std::ffi::c_void;
                 let _: () = msg_send![layer, setContents: cg_image_ref];
+                
+                let _: () = msg_send![transaction_class, commit];
             }
         }
         
@@ -404,26 +488,214 @@ impl DestinationWindow {
         self.update_frame(pixels.to_vec(), width, height);
     }
     
+    /// GPU-accelerated rendering from retained IOSurface pointer with cropping
+    /// This is significantly faster than CPU-based rendering for large regions
+    /// Uses retained pointer directly - no lookup needed!
+    pub fn update_frame_from_iosurface_ptr(&self, iosurface_ptr: *mut std::ffi::c_void, crop_x: i64, crop_y: i64, crop_w: i64, crop_h: i64) {
+        // GPU rendering with CALayer contentsRect for cropping
+        // No need for CPU fallback - CALayer handles cropping on GPU!
+        
+        extern "C" fn update_from_iosurface_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
+            #[repr(C)]
+            struct UpdateContext {
+                view: id,
+                iosurface_ptr: *mut std::ffi::c_void,
+                crop_x: i64,
+                crop_y: i64,
+                crop_w: i64,
+                crop_h: i64,
+            }
+            
+            let ctx = unsafe { &*(ctx_ptr as *const UpdateContext) };
+            
+            unsafe {
+                // Get IOSurface pointer (already retained by get_iosurface(), we own this reference)
+                let iosurface = ctx.iosurface_ptr;
+                if iosurface.is_null() {
+                    tracing::warn!("IOSurface pointer is null");
+                    return;
+                }
+                
+                // NOTE: Pointer already retained by get_iosurface() - we MUST CFRelease when done!
+                // NO LOCK/UNLOCK needed - CALayer can access GPU memory directly!
+                
+                // Get or create CALayer
+                // Get layer from view (layer-backing already enabled at window creation)
+                let layer: id = msg_send![ctx.view, layer];
+                if layer.is_null() {
+                    tracing::warn!("Failed to get layer from view");
+                    CFRelease(iosurface);
+                    return;
+                }
+                
+                // CRITICAL: Set contentsScale for Retina displays
+                let window: id = msg_send![ctx.view, window];
+                if !window.is_null() {
+                    let backing_scale: f64 = msg_send![window, backingScaleFactor];
+                    let _: () = msg_send![layer, setContentsScale: backing_scale];
+                }
+                
+                // Get IOSurface dimensions to calculate normalized crop rect
+                let surface_width = IOSurfaceGetWidth(iosurface);
+                let surface_height = IOSurfaceGetHeight(iosurface);
+                
+                // Calculate normalized contentsRect for GPU-accelerated cropping
+                // contentsRect uses normalized coordinates (0.0 - 1.0)
+                // CRITICAL: CALayer contentsRect has bottom-left origin, but IOSurface is top-left
+                // We MUST flip Y coordinate: Y_bottom_left = 1.0 - (Y_top_left + Height) / Total_Height
+                
+                // Wrap contentsRect changes in CATransaction to prevent animation
+                let transaction_class = class!(CATransaction);
+                let _: () = msg_send![transaction_class, begin];
+                let _: () = msg_send![transaction_class, setDisableActions: YES];
+                
+                if ctx.crop_x != 0 || ctx.crop_y != 0 || 
+                   (ctx.crop_w > 0 && ctx.crop_w != surface_width as i64) ||
+                   (ctx.crop_h > 0 && ctx.crop_h != surface_height as i64) {
+                    let x_norm = (ctx.crop_x as f64) / (surface_width as f64);
+                    let w_norm = (ctx.crop_w as f64) / (surface_width as f64);
+                    let h_norm = (ctx.crop_h as f64) / (surface_height as f64);
+                    
+                    // Flip Y coordinate: CALayer uses bottom-left, IOSurface uses top-left
+                    let y_norm = 1.0 - ((ctx.crop_y as f64 + ctx.crop_h as f64) / (surface_height as f64));
+                    
+                    use core_graphics::geometry::CGRect;
+                    let contents_rect = CGRect::new(
+                        &core_graphics::geometry::CGPoint::new(x_norm, y_norm),
+                        &core_graphics::geometry::CGSize::new(w_norm, h_norm)
+                    );
+                    let _: () = msg_send![layer, setContentsRect: contents_rect];
+                    
+                    tracing::debug!("🚀 GPU crop: IOSurface {}x{}, crop pixels ({}, {}, {}, {}), normalized ({:.4}, {:.4}, {:.4}, {:.4}) [Y-flipped for CALayer]",
+                        surface_width, surface_height, ctx.crop_x, ctx.crop_y, ctx.crop_w, ctx.crop_h, 
+                        x_norm, y_norm, w_norm, h_norm);
+                } else {
+                    // No crop - use full surface
+                    use core_graphics::geometry::CGRect;
+                    let full_rect = CGRect::new(
+                        &core_graphics::geometry::CGPoint::new(0.0, 0.0),
+                        &core_graphics::geometry::CGSize::new(1.0, 1.0)
+                    );
+                    let _: () = msg_send![layer, setContentsRect: full_rect];
+                    tracing::debug!("🚀 GPU full: IOSurface {}x{}, no crop", surface_width, surface_height);
+                }
+                
+                let _: () = msg_send![transaction_class, commit];
+                
+                // Set contentsGravity to resize (not resizeAspect) for pixel-perfect display
+                let resize_gravity = cocoa::foundation::NSString::alloc(nil);
+                let resize_gravity = cocoa::foundation::NSString::init_str(resize_gravity, "resize");
+                let _: () = msg_send![layer, setContentsGravity: resize_gravity];
+                
+                // Disable magnification filter for sharp pixels
+                let nearest = cocoa::foundation::NSString::alloc(nil);
+                let nearest = cocoa::foundation::NSString::init_str(nearest, "nearest");
+                let _: () = msg_send![layer, setMagnificationFilter: nearest];
+                let _: () = msg_send![layer, setMinificationFilter: nearest];
+                
+                // CRITICAL: Wrap CALayer property changes in CATransaction with disabled animations
+                // This is a backup to layer.actions - ensures no implicit animations
+                let transaction_class = class!(CATransaction);
+                let _: () = msg_send![transaction_class, begin];
+                let _: () = msg_send![transaction_class, setDisableActions: YES];
+                
+                // 🚀 GPU ACCELERATION: Set IOSurface directly as layer contents!
+                // Zero-copy, all rendering happens on GPU. No CPU involved!
+                let _: () = msg_send![layer, setContents: iosurface];
+                
+                let _: () = msg_send![transaction_class, commit];
+                
+                // Release our retain from get_iosurface() - CALayer now owns a reference
+                CFRelease(iosurface);
+            }
+        }
+        
+        unsafe {
+            let is_main = pthread_main_np() != 0;
+            
+            #[repr(C)]
+            struct UpdateContext {
+                view: id,
+                iosurface_ptr: *mut std::ffi::c_void,
+                crop_x: i64,
+                crop_y: i64,
+                crop_w: i64,
+                crop_h: i64,
+            }
+            
+            let context = UpdateContext {
+                view: self.view,
+                iosurface_ptr,
+                crop_x,
+                crop_y,
+                crop_w,
+                crop_h,
+            };
+            
+            if !is_main {
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    &context as *const _ as *mut std::ffi::c_void,
+                    update_from_iosurface_on_main_thread,
+                );
+            } else {
+                update_from_iosurface_on_main_thread(&context as *const _ as *mut std::ffi::c_void);
+            }
+        }
+    }
+    
     /// Resize the destination window (called when border is resized)
     /// This is more efficient than checking every frame
+    /// NOTE: width/height are already in POINTS (from frontend/border)
     pub fn resize(&mut self, width: u32, height: u32) {
         extern "C" fn resize_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             #[repr(C)]
             struct ResizeContext {
                 window: id,
-                width: u32,
-                height: u32,
+                width_points: u32,
+                height_points: u32,
             }
             
             let ctx = unsafe { &*(ctx_ptr as *const ResizeContext) };
             
             unsafe {
+                // Get backing scale factor for logging purposes
+                let backing_scale: f64 = msg_send![ctx.window, backingScaleFactor];
+                let width_points = ctx.width_points as f64;
+                let height_points = ctx.height_points as f64;
+                
+                log::info!("[DestWindow] Resize: {}x{} points @ {}x scale ({}x{} pixels)",
+                           width_points, height_points, backing_scale,
+                           (width_points * backing_scale) as u32, (height_points * backing_scale) as u32);
+                
                 let current_frame: NSRect = msg_send![ctx.window, frame];
+                log::info!("[DestWindow] Current frame BEFORE resize: origin=({}, {}), size={}x{}",
+                           current_frame.origin.x, current_frame.origin.y,
+                           current_frame.size.width, current_frame.size.height);
+                
                 let new_frame = NSRect::new(
                     current_frame.origin,
-                    NSSize::new(ctx.width as f64, ctx.height as f64),
+                    NSSize::new(width_points, height_points),
                 );
-                let _: () = msg_send![ctx.window, setFrame:new_frame display:YES];
+                // CRITICAL: Use animate:NO to disable resize animation for instant update
+                let _: () = msg_send![ctx.window, setFrame:new_frame display:YES animate:NO];
+                
+                // Verify the resize actually happened
+                let final_frame: NSRect = msg_send![ctx.window, frame];
+                let is_visible: BOOL = msg_send![ctx.window, isVisible];
+                log::info!("[DestWindow] Final frame AFTER resize: origin=({}, {}), size={}x{}",
+                           final_frame.origin.x, final_frame.origin.y,
+                           final_frame.size.width, final_frame.size.height);
+                log::info!("[DestWindow] Window visibility: {}", is_visible == YES);
+                
+                // Check content view bounds
+                let content_view: id = msg_send![ctx.window, contentView];
+                if !content_view.is_null() {
+                    let view_bounds: NSRect = msg_send![content_view, bounds];
+                    log::info!("[DestWindow] Content view bounds: origin=({}, {}), size={}x{}",
+                               view_bounds.origin.x, view_bounds.origin.y,
+                               view_bounds.size.width, view_bounds.size.height);
+                }
             }
         }
         
@@ -435,22 +707,17 @@ impl DestinationWindow {
             
             struct ResizeContext {
                 window: id,
-                width: u32,
-                height: u32,
+                width_points: u32,
+                height_points: u32,
             }
             
             let context = ResizeContext {
                 window: self.window,
-                width,
-                height,
+                width_points: width,
+                height_points: height,
             };
             
             if !is_main {
-                dispatch_sync_f(
-                    &_dispatch_main_q,
-                    &context as *const _ as *mut std::ffi::c_void,
-                    resize_on_main_thread,
-                );
             } else {
                 resize_on_main_thread(&context as *const _ as *mut std::ffi::c_void);
             }

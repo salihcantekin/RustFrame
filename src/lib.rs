@@ -4,6 +4,7 @@
 
 // Only include modules that don't depend on egui
 pub mod capture;
+pub mod display_info;
 
 // Re-export commonly used types
 pub use capture::{CaptureEngine, CaptureFrame, CaptureRect, CaptureSettings};

@@ -156,7 +156,7 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
             .with_line_number(true)
             .with_span_events(FmtSpan::CLOSE);
 
-        // Console layer with colors - always enabled for debugging
+        // Console layer - enabled in all modes for debugging
         let console_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
             .with_ansi(true) // Colors in console
@@ -166,12 +166,13 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
             .with_line_number(false)
             .with_span_events(FmtSpan::NONE);
 
-        // Combine layers - both file and console
-        registry.with(file_layer).with(console_layer).init();
+        // Combine layers (both file and console)
+        let registry = registry.with(file_layer).with(console_layer);
+        
+        registry.init();
 
         // Store the guard to prevent file handle from being dropped
-        // In a real application, you'd want to keep this guard alive
-        // For now, we'll just leak it (it's a singleton anyway)
+        // We leak it because logging is a singleton that lives for the app lifetime
         std::mem::forget(_guard);
     } else {
         // Console-only logging (development mode)

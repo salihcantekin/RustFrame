@@ -1,6 +1,7 @@
 {
   "capture_method": "auto",
   "target_fps": 60,
+  "gpu_acceleration": true,
   "show_cursor": false,
   "capture_clicks": true,
   "click_highlight_color": [255, 255, 0, 180],

@@ -137,6 +137,33 @@ impl DisplayInfo {
         
         (x_points, y_flipped_points)
     }
+    
+    /// Convert AppKit/NSWindow coordinates (bottom-left origin, points) to CGDisplay/SCK coordinates (top-left origin, pixels)
+    /// 
+    /// Used for:
+    /// - Converting border window position to ScreenCaptureKit sourceRect
+    /// - Any conversion from NSWindow/NSView coordinates to screen capture coordinates
+    /// 
+    /// AppKit coordinate system:
+    /// - Origin: BOTTOM-LEFT of screen
+    /// - Units: POINTS
+    /// 
+    /// CGDisplay/ScreenCaptureKit coordinate system:
+    /// - Origin: TOP-LEFT of screen  
+    /// - Units: PIXELS
+    #[cfg(target_os = "macos")]
+    pub fn appkit_to_cgdisplay(&self, x_points: f64, y_points: f64, width_points: f64, height_points: f64) -> (f64, f64, f64, f64) {
+        // Scale to pixels
+        let x_px = x_points * self.scale_factor;
+        let y_px = y_points * self.scale_factor;
+        let w_px = width_points * self.scale_factor;
+        let h_px = height_points * self.scale_factor;
+        
+        // Flip Y coordinate: bottom-left → top-left
+        let y_flipped_px = (self.height_pixels as f64) - y_px - h_px;
+        
+        (x_px, y_flipped_px, w_px, h_px)
+    }
 }
 
 /// Initialize display information from the operating system

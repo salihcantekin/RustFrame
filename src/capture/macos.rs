@@ -741,6 +741,20 @@ impl CaptureEngine for MacOSCaptureEngine {
                         if seq != self.sck_last_seq {
                             self.sck_last_seq = seq;
                         }
+                        
+// Get IOSurface data for GPU acceleration (includes retained pointer)
+						let gpu_texture = sck.latest_iosurface().map(|(iosurface_ptr, iosurface_id, pixel_format, crop_x, crop_y, crop_w, crop_h)| {
+							super::GpuTextureHandle::Metal {
+								iosurface_ptr,
+                                iosurface_id,
+                                pixel_format,
+                                crop_x,
+                                crop_y,
+                                crop_w,
+                                crop_h,
+                            }
+                        });
+                        
                         return Some(CaptureFrame {
                             data,
                             width: w,
@@ -748,6 +762,7 @@ impl CaptureEngine for MacOSCaptureEngine {
                             stride: w * 4,
                             offset_x: region.x,
                             offset_y: region.y,
+                            gpu_texture,
                         });
                     }
                 }
@@ -765,6 +780,7 @@ impl CaptureEngine for MacOSCaptureEngine {
                         stride: self.frame_width * 4,
                         offset_x: region.x,
                         offset_y: region.y,
+                        gpu_texture: None, // CoreGraphics fallback doesn't support GPU
                     });
                 }
             }

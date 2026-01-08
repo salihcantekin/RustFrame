@@ -53,7 +53,7 @@ impl Default for CaptureSettings {
 /// A captured frame containing pixel data
 #[derive(Debug)]
 pub struct CaptureFrame {
-    /// BGRA pixel data
+    /// BGRA pixel data (CPU fallback)
     pub data: Vec<u8>,
     /// Frame width in pixels
     pub width: u32,
@@ -66,6 +66,39 @@ pub struct CaptureFrame {
     pub offset_x: i32,
     /// Y offset in screen coordinates where this frame starts
     pub offset_y: i32,
+    /// GPU texture handle (platform-specific, optional)
+    /// - macOS: Metal IOSurface ID
+    /// - Windows: D3D11 texture handle
+    /// - Linux: DMA-BUF file descriptor
+    pub gpu_texture: Option<GpuTextureHandle>,
+}
+
+/// Platform-specific GPU texture handle
+#[derive(Debug, Clone)]
+pub enum GpuTextureHandle {
+    #[cfg(target_os = "macos")]
+    Metal {
+        iosurface_ptr: *mut std::ffi::c_void, // Retained IOSurface pointer (no lookup needed)
+        iosurface_id: u32,
+        pixel_format: u32, // MTLPixelFormat
+        crop_x: i64,       // Crop region X in pixels
+        crop_y: i64,       // Crop region Y in pixels
+        crop_w: i64,       // Crop width in pixels
+        crop_h: i64,       // Crop height in pixels
+    },
+    #[cfg(target_os = "windows")]
+    D3D11 {
+        texture_ptr: usize, // ID3D11Texture2D*
+        shared_handle: usize, // HANDLE
+    },
+    #[cfg(target_os = "linux")]
+    DmaBuf {
+        fd: i32,
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: u32, // DRM fourcc
+    },
 }
 
 /// Trait for platform-specific capture engines

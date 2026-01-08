@@ -53,6 +53,11 @@ lazy_static = "1.5"
 log = "0.4"
 anyhow = "1.0"
 
+# GPU rendering
+wgpu = "22.0"
+bytemuck = { version = "1.18", features = ["derive"] }
+pollster = "0.3"
+
 # Logging infrastructure
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "local-time", "ansi"] }
@@ -106,6 +111,8 @@ objc = "0.2"
 block = "0.1"
 libc = "0.2"
 foreign-types-shared = "0.3"
+metal = "0.29"
+core-video-sys = "0.1"
 
 # Linux-specific dependencies (placeholder for future)
 [target.'cfg(target_os = "linux")'.dependencies]

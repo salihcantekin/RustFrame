@@ -14,6 +14,7 @@ use anyhow::{anyhow, Result};
 use block::ConcreteBlock;
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSPoint, NSRect, NSSize, NSUInteger};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use objc::declare::ClassDecl;
 use objc::rc::{autoreleasepool, StrongPtr};
 use objc::runtime::{Class, Object, Sel};
@@ -41,6 +42,18 @@ extern "C" {
 	fn CVPixelBufferGetWidth(pixel_buffer: *mut c_void) -> usize;
 	fn CVPixelBufferGetHeight(pixel_buffer: *mut c_void) -> usize;
 	fn CVPixelBufferGetPixelFormatType(pixel_buffer: *mut c_void) -> u32;
+	fn CVPixelBufferGetIOSurface(pixel_buffer: *mut c_void) -> *mut c_void;
+}
+
+#[link(name = "IOSurface", kind = "framework")]
+extern "C" {
+	fn IOSurfaceGetID(iosurface: *mut c_void) -> u32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+	fn CFRetain(cf: *mut c_void) -> *mut c_void;
+	fn CFRelease(cf: *mut c_void);
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -78,6 +91,10 @@ const SC_STREAM_OUTPUT_TYPE_SCREEN: NSUInteger = 0;
 
 struct OutputState {
 	latest: Mutex<Option<(Vec<u8>, u32, u32)>>,
+	// (iosurface_id, pixel_format, crop_x_px, crop_y_px, crop_w_px, crop_h_px)
+	latest_iosurface: Mutex<Option<(u32, u32, i64, i64, i64, i64)>>,
+	// Retained IOSurface pointer (kept alive with CFRetain)
+	retained_iosurface: Mutex<Option<*mut std::ffi::c_void>>,
 	seq: AtomicU64,
 	region_x: AtomicI32,
 	region_y: AtomicI32,
@@ -90,6 +107,8 @@ impl OutputState {
 	fn new() -> Self {
 		Self {
 			latest: Mutex::new(None),
+			latest_iosurface: Mutex::new(None),
+			retained_iosurface: Mutex::new(None),
 			seq: AtomicU64::new(0),
 			region_x: AtomicI32::new(0),
 			region_y: AtomicI32::new(0),
@@ -118,6 +137,40 @@ impl OutputState {
 		self.seq.fetch_add(1, Ordering::Relaxed);
 	}
 
+	fn set_iosurface(&self, iosurface_id: u32, pixel_format: u32, crop_x: i64, crop_y: i64, crop_w: i64, crop_h: i64) {
+		if let Ok(mut g) = self.latest_iosurface.lock() {
+			*g = Some((iosurface_id, pixel_format, crop_x, crop_y, crop_w, crop_h));
+		}
+	}
+
+	fn set_iosurface_retained(&self, iosurface_ptr: *mut std::ffi::c_void, iosurface_id: u32, pixel_format: u32, crop_x: i64, crop_y: i64, crop_w: i64, crop_h: i64) {
+		unsafe {
+			// Release old IOSurface if exists
+			if let Ok(mut retained) = self.retained_iosurface.lock() {
+				if let Some(old_ptr) = *retained {
+					if !old_ptr.is_null() {
+						CFRelease(old_ptr);
+						log::debug!("Released old IOSurface pointer");
+					}
+				}
+				
+				// Retain new IOSurface
+				if !iosurface_ptr.is_null() {
+					CFRetain(iosurface_ptr);
+					*retained = Some(iosurface_ptr);
+					log::debug!("Retained IOSurface pointer: {:?}", iosurface_ptr);
+				} else {
+					*retained = None;
+				}
+			}
+		}
+		
+		// Store ID and crop info
+		if let Ok(mut g) = self.latest_iosurface.lock() {
+			*g = Some((iosurface_id, pixel_format, crop_x, crop_y, crop_w, crop_h));
+		}
+	}
+
 	fn get(&self) -> Option<(Vec<u8>, u32, u32, u64)> {
 		let seq = self.seq.load(Ordering::Relaxed);
 		self.latest
@@ -125,6 +178,31 @@ impl OutputState {
 			.ok()
 			.and_then(|g| g.clone())
 			.map(|(d, w, h)| (d, w, h, seq))
+	}
+
+	fn get_iosurface(&self) -> Option<(*mut std::ffi::c_void, u32, u32, i64, i64, i64, i64)> {
+		// Get IOSurface info
+		let iosurface_info = self.latest_iosurface
+			.lock()
+			.ok()
+			.and_then(|g| *g)?;
+		
+		// Get retained pointer
+		let ptr = self.retained_iosurface
+			.lock()
+			.ok()
+			.and_then(|g| *g)?;
+		
+		// CRITICAL: CFRetain here so caller gets a guaranteed valid reference
+		// This prevents race condition where SCK releases pointer before caller can retain it
+		unsafe {
+			CFRetain(ptr);
+		}
+		tracing::debug!("get_iosurface: Retained pointer {:?} for render thread", ptr);
+		
+		// Return (pointer, id, format, crop_x, crop_y, crop_w, crop_h)
+		// Caller MUST CFRelease when done!
+		Some((ptr, iosurface_info.0, iosurface_info.1, iosurface_info.2, iosurface_info.3, iosurface_info.4, iosurface_info.5))
 	}
 
 	fn seq_value(&self) -> u64 {
@@ -181,9 +259,11 @@ fn ensure_output_class() -> *const Class {
 			sample_buffer: *mut c_void,
 			_type: NSUInteger,
 		) {
+			log::trace!("[SCK] did_output_sample_buffer called");
 			unsafe {
 				let state_ptr: *mut c_void = *this.get_ivar("rustState");
 				if state_ptr.is_null() {
+					log::warn!("[SCK] rustState is null in delegate");
 					return;
 				}
 				let state: &OutputState = &*(state_ptr as *const OutputState);
@@ -193,12 +273,22 @@ fn ensure_output_class() -> *const Class {
 					return;
 				}
 
-						// ScreenCaptureKit can deliver different pixel formats depending on configuration.
-						// We only handle 32BGRA here; anything else is ignored (but must not crash).
-						let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
-						if pixel_format != KCVPIXELFORMATTYPE_32BGRA {
-							return;
-						}
+				// ScreenCaptureKit can deliver different pixel formats depending on configuration.
+				// We only handle 32BGRA here; anything else is ignored (but must not crash).
+				let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
+				if pixel_format != KCVPIXELFORMATTYPE_32BGRA {
+					return;
+				}
+
+				// Extract IOSurface for GPU acceleration (before locking pixel buffer)
+				let iosurface = CVPixelBufferGetIOSurface(pixel_buffer);
+				
+				// Get crop region (will be calculated below)
+				let iosurface_id = if !iosurface.is_null() {
+					Some(IOSurfaceGetID(iosurface))
+				} else {
+					None
+				};
 
 				if CVPixelBufferLockBaseAddress(pixel_buffer, KCVPIXELBUFFERLOCK_READONLY) != 0 {
 					return;
@@ -270,25 +360,45 @@ fn ensure_output_class() -> *const Class {
 
 						let mut rgba = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
 						let out_stride = (out_w as usize) * 4;
+				
+				// OPTIMIZED: Bulk copy rows then swap channels in-place
+				// Much faster than pixel-by-pixel copy+swap
 				for y in 0..(out_h as usize) {
 					let src_y = (ry_px as usize) + y;
 					let src_row = base.add(src_y * bytes_per_row).add(rx_bytes);
-					let dst_row = &mut rgba[y * out_stride..(y + 1) * out_stride];
-					for x in 0..(out_w as usize) {
-						let si = x * 4;
-						let di = x * 4;
-						let b = *src_row.add(si);
-						let g = *src_row.add(si + 1);
-						let r = *src_row.add(si + 2);
-						let a = *src_row.add(si + 3);
-						dst_row[di] = r;
-						dst_row[di + 1] = g;
-						dst_row[di + 2] = b;
-						dst_row[di + 3] = a;
+					let dst_row_start = y * out_stride;
+					
+					// Copy entire row at once (BGRA → buffer)
+					std::ptr::copy_nonoverlapping(
+						src_row,
+						rgba.as_mut_ptr().add(dst_row_start),
+						out_stride
+					);
+					
+					// Swap B and R channels in-place (BGRA → RGBA)
+					let dst_row = &mut rgba[dst_row_start..dst_row_start + out_stride];
+					for chunk in dst_row.chunks_exact_mut(4) {
+						chunk.swap(0, 2); // Swap B <-> R
 					}
 				}
 
 				let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, KCVPIXELBUFFERLOCK_READONLY);
+				
+				// Store IOSurface with crop region for GPU rendering (RETAIN it to keep alive)
+				if let Some(id) = iosurface_id {
+					if !iosurface.is_null() {
+						state.set_iosurface_retained(iosurface, id, pixel_format, rx_px, ry_px, rw_px, rh_px);
+					} else {
+						state.set_iosurface(id, pixel_format, rx_px, ry_px, rw_px, rh_px);
+					}
+				}
+				
+				// Debug: log first few pixels to verify data
+				if rgba.len() >= 12 {
+					log::debug!("SCK frame: {}x{}, first pixel RGBA: [{}, {}, {}, {}]", 
+						out_w, out_h, rgba[0], rgba[1], rgba[2], rgba[3]);
+				}
+				
 				state.set(rgba, out_w, out_h);
 			}
 		}
@@ -317,6 +427,19 @@ unsafe impl Send for ScreenCaptureKitCapture {}
 impl Drop for ScreenCaptureKitCapture {
 	fn drop(&mut self) {
 		self.stop();
+		
+		// Release retained IOSurface on drop
+		unsafe {
+			if let Ok(mut retained) = self.state.retained_iosurface.lock() {
+				if let Some(ptr) = *retained {
+					if !ptr.is_null() {
+						CFRelease(ptr);
+						log::debug!("Released retained IOSurface on drop");
+					}
+				}
+				*retained = None;
+			}
+		}
 	}
 }
 
@@ -505,18 +628,54 @@ impl ScreenCaptureKitCapture {
 					return;
 				}
 
-				// Capture full display; crop in Rust using the current border region.
-				// Set width/height to avoid SCKit downscaling.
-				if screen != nil {
-					let frame: NSRect = msg_send![screen, frame];
-					let display_w_px = (frame.size.width * scale).round().max(1.0) as u32;
-					let display_h_px = (frame.size.height * scale).round().max(1.0) as u32;
-					if responds(cfg, sel!(setWidth:)) {
-						let _: () = msg_send![cfg, setWidth: display_w_px as NSUInteger];
-					}
-					if responds(cfg, sel!(setHeight:)) {
-						let _: () = msg_send![cfg, setHeight: display_h_px as NSUInteger];
-					}
+				// Get capture region in pixels
+				let state_ref = &*(state_ptr);
+				let rx_pt = state_ref.region_x.load(Ordering::Relaxed) as f64;
+				let ry_pt = state_ref.region_y.load(Ordering::Relaxed) as f64;
+				let rw_pt = state_ref.region_w.load(Ordering::Relaxed) as f64;
+				let rh_pt = state_ref.region_h.load(Ordering::Relaxed) as f64;
+				
+				// Get display dimensions from centralized DisplayInfo
+				let display_info = crate::display_info::get();
+				let display_w_px = display_info.width_pixels as f64;
+				let display_h_px = display_info.height_pixels as f64;
+				
+				// Convert AppKit coordinates (bottom-left origin, points) to CGDisplay (top-left origin, pixels)
+				// This is the CORRECT way - using centralized coordinate conversion
+				let (rx_px, ry_px, rw_px, rh_px) = display_info.appkit_to_cgdisplay(rx_pt, ry_pt, rw_pt, rh_pt);
+				let mut rx_px = rx_px;
+				let mut ry_px = ry_px;
+				let mut rw_px = rw_px;
+				let mut rh_px = rh_px;
+				
+				// Clamp to display bounds to prevent crash
+				rx_px = rx_px.max(0.0).min(display_w_px - 1.0);
+				ry_px = ry_px.max(0.0).min(display_h_px - 1.0);
+				rw_px = rw_px.min(display_w_px - rx_px).max(1.0);
+				rh_px = rh_px.min(display_h_px - ry_px).max(1.0);
+				
+				log::info!("[SCK] Display: {}x{} pixels @ {:.1}x scale", display_w_px, display_h_px, display_info.scale_factor);
+				log::info!("[SCK] Region (AppKit): {}x{} at ({}, {}) points", rw_pt, rh_pt, rx_pt, ry_pt);
+				log::info!("[SCK] Region (CGDisplay): {}x{} at ({}, {}) pixels (Y-flipped)", rw_px, rh_px, rx_px, ry_px);
+				
+				// NOTE: sourceRect is not used currently due to "invalid parameter" error
+				// Instead, we capture full display and crop in CPU/GPU
+				// TODO: Debug sourceRect parameter requirements for GPU-level crop
+				// if responds(cfg, sel!(setSourceRect:)) {
+				// 	let source_rect = CGRect {
+				// 		origin: CGPoint { x: rx_px, y: ry_px },
+				// 		size: CGSize { width: rw_px, height: rh_px },
+				// 	};
+				// 	let _: () = msg_send![cfg, setSourceRect: source_rect];
+				// 	log::info!("[SCK] Set sourceRect: origin=({:.0}, {:.0}), size=({:.0}, {:.0})", rx_px, ry_px, rw_px, rh_px);
+				// }
+				
+				// Set output width/height to full display (we'll crop in delegate)
+				if responds(cfg, sel!(setWidth:)) {
+					let _: () = msg_send![cfg, setWidth: display_w_px as NSUInteger];
+				}
+				if responds(cfg, sel!(setHeight:)) {
+					let _: () = msg_send![cfg, setHeight: display_h_px as NSUInteger];
 				}
 				if responds(cfg, sel!(setShowsCursor:)) {
 					let _: () = msg_send![cfg, setShowsCursor: if show_cursor_local { 1 } else { 0 }];
@@ -580,8 +739,16 @@ impl ScreenCaptureKitCapture {
 				let start_error_cb = start_error.clone();
 				let sema2_cb = sema2;
 				let block2 = ConcreteBlock::new(move |error: id| {
+					log::info!("[SCK] startCapture completion handler called, error={:?}", error);
+					// Retain error if not nil to prevent it from being deallocated
+					let retained_error = if error != nil {
+						let _: id = msg_send![error, retain];
+						error
+					} else {
+						nil
+					};
 					if let Ok(mut g) = start_error_cb.lock() {
-						*g = error;
+						*g = retained_error;
 					}
 					unsafe {
 						dispatch_semaphore_signal(sema2_cb);
@@ -601,6 +768,11 @@ impl ScreenCaptureKitCapture {
 					} else {
 						"Unknown error".to_string()
 					};
+					log::error!("[SCK] ❌ startCapture FAILED: {}", s);
+					
+					// Release the retained error
+					let _: () = msg_send![start_error_obj, release];
+					
 					start_err = Some(format!("SCStream startCapture failed: {s}"));
 					return;
 				}
@@ -660,6 +832,10 @@ impl ScreenCaptureKitCapture {
 
 	pub fn latest_frame_rgba(&self) -> Option<(Vec<u8>, u32, u32, u64)> {
 		self.state.get()
+	}
+
+	pub fn latest_iosurface(&self) -> Option<(*mut std::ffi::c_void, u32, u32, i64, i64, i64, i64)> {
+		self.state.get_iosurface()
 	}
 
 	pub fn latest_seq(&self) -> u64 {

@@ -10,10 +10,10 @@ use tauri::State;
 
 // Import capture engine from library
 use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRect};
+use rustframe_capture::display_info;
 
 // Import modules
 mod destination_window;
-mod display_info;
 mod hollow_border;
 mod logging;
 mod platform;
@@ -250,6 +250,8 @@ pub struct Settings {
 
     // Performance
     pub target_fps: u32,
+    #[serde(default = "default_gpu_acceleration")]
+    pub gpu_acceleration: bool,
 
     // Capture Method
     #[serde(default)]
@@ -328,18 +330,23 @@ fn default_log_retention_days() -> u32 {
     30 // Keep logs for 30 days
 }
 
+fn default_gpu_acceleration() -> bool {
+    true // GPU acceleration enabled with retained IOSurface
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             show_cursor: true,
             capture_clicks: true, // Default to enabled for testing
             click_highlight_color: [255, 255, 0, 180],
-            click_dissolve_ms: 5000,
+            click_dissolve_ms: 300, // Reduced from 5000ms - 300ms is plenty for click feedback
             click_highlight_radius: 20,
             show_border: true,
             border_color: [255, 0, 0, 255],
             border_width: 3,
             target_fps: 60,
+            gpu_acceleration: true,
             capture_method: CaptureMethod::default(),
             preview_mode: PreviewMode::default(),
             winapi_destination_alpha: None,
@@ -1419,37 +1426,43 @@ async fn start_capture(
         let border_w = settings.border_width;
         
         set_border_interaction_complete_callback(move |x, y, width, height| {
-            log::info!("Border interaction COMPLETE - updating capture region and windows: x={}, y={}, w={}, h={}", x, y, width, height);
+            log::info!("🔄 Border interaction COMPLETE - Border window: x={}, y={}, w={}, h={}", x, y, width, height);
+            
+            // Calculate inner region (excluding border)
+            let border_offset = border_w as i32;
+            let inner_width = (width - border_offset * 2).max(1);
+            let inner_height = (height - border_offset * 2).max(1);
+            log::info!("🔄 Border offset: {}, Inner region: {}x{} pixels", border_offset, inner_width, inner_height);
             
             // Update capture engine region
             let mut engine = engine_for_cb.lock().unwrap();
             if let Some(ref mut eng) = *engine {
-                let border_offset = border_w as i32;
                 let new_region = crate::CaptureRect {
                     x: x + border_offset,
                     y: y + border_offset,
-                    width: (width - border_offset * 2).max(1) as u32,
-                    height: (height - border_offset * 2).max(1) as u32,
+                    width: inner_width as u32,
+                    height: inner_height as u32,
                 };
                 if let Err(e) = eng.update_region(new_region) {
                     log::error!("Failed to update capture region: {}", e);
                 } else {
-                    log::info!("Capture region updated: x={}, y={}, w={}, h={}", 
+                    log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
                         new_region.x, new_region.y, new_region.width, new_region.height);
                 }
             }
             drop(engine);
             
             // Resize destination window
-            let border_offset = border_w as i32;
-            let inner_width = (width - border_offset * 2).max(1);
-            let inner_height = (height - border_offset * 2).max(1);
-            
+            log::info!("🔄 Attempting to resize destination window to {}x{} pixels...", inner_width, inner_height);
             if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref mut dest) = *dest_lock {
                     dest.resize(inner_width as u32, inner_height as u32);
-                    log::info!("Destination window resized: {}x{}", inner_width, inner_height);
+                    log::info!("✅ Destination window resize() called");
+                } else {
+                    log::warn!("⚠️ Destination window is None!");
                 }
+            } else {
+                log::warn!("⚠️ Could not lock DESTINATION_WINDOW!");
             }
             
             // Update REC indicator position
@@ -1463,6 +1476,7 @@ async fn start_capture(
 
     // Start frame rendering thread
     let engine_clone = state.capture_engine.clone();
+    let settings_clone = state.settings.clone(); // Clone settings for GPU check
     let stop_flag = state.render_thread_stop.clone();
     let target_fps = settings.target_fps;
     let capture_clicks = settings.capture_clicks;
@@ -1508,8 +1522,15 @@ async fn start_capture(
 
             // Render frame to destination window (use try_lock to avoid blocking)
             if let Some(mut frame) = frame {
+                log::debug!("Got frame: {}x{}, data len: {}, gpu: {}", 
+                    frame.width, frame.height, frame.data.len(), frame.gpu_texture.is_some());
+                    
+                // Check if GPU acceleration is available and enabled
+                let gpu_enabled = settings_clone.lock().unwrap().gpu_acceleration;
+                let use_gpu = gpu_enabled && frame.gpu_texture.is_some();
+                
                 // Overlay click highlights if enabled
-                if capture_clicks {
+                let has_clicks = if capture_clicks {
                     // Get display info for coordinate conversion
                     let display_info = display_info::get();
                     
@@ -1531,35 +1552,63 @@ async fn start_capture(
                         click_dissolve_ms,
                     );
 
-                    for click in clicks {
-                        // Convert screen coordinates (pixels) to frame coordinates (pixels)
-                        // Frame buffer is already in pixels, so direct subtraction
-                        let frame_x = click.x - offset_x_pixels;
-                        let frame_y = click.y - offset_y_pixels;
+                    if !clicks.is_empty() {
+                        for click in clicks {
+                            // Convert screen coordinates (pixels) to frame coordinates (pixels)
+                            // Frame buffer is already in pixels, so direct subtraction
+                            let frame_x = click.x - offset_x_pixels;
+                            let frame_y = click.y - offset_y_pixels;
 
-                        // Draw click highlight circle (fading based on age)
-                        let age_ms = click.timestamp.elapsed().as_millis() as f32;
-                        let alpha_factor = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
+                            // Draw click highlight circle (fading based on age)
+                            let age_ms = click.timestamp.elapsed().as_millis() as f32;
+                            let alpha_factor = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
 
-                        // Scale radius for display (frame buffer is in pixels)
-                        let scaled_radius = display_info.points_to_pixels(click_radius as f64);
+                            // Scale radius for display (frame buffer is in pixels)
+                            let scaled_radius = display_info.points_to_pixels(click_radius as f64);
 
-                        draw_click_highlight(
-                            &mut frame.data,
-                            frame.width as i32,
-                            frame.height as i32,
-                            frame_x,
-                            frame_y,
-                            click_color,
-                            alpha_factor,
-                            scaled_radius,
-                        );
+                            draw_click_highlight(
+                                &mut frame.data,
+                                frame.width as i32,
+                                frame.height as i32,
+                                frame_x,
+                                frame_y,
+                                click_color,
+                                alpha_factor,
+                                scaled_radius,
+                            );
+                        }
+                        true
+                    } else {
+                        false
                     }
-                }
+                } else {
+                    false
+                };
 
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(window) = dest_lock.as_ref() {
-                        window.update_frame(frame.data, frame.width, frame.height);
+                        // GPU path: Use IOSurface for cropped rendering (if no clicks to draw)
+                        // CPU path: Use regular frame data (required for click highlights)
+                        #[cfg(target_os = "macos")]
+                        {
+                            if use_gpu && !has_clicks {
+                                if let Some(rustframe_capture::capture::GpuTextureHandle::Metal { 
+                                    iosurface_ptr, crop_x, crop_y, crop_w, crop_h, .. 
+                                }) = frame.gpu_texture {
+                                    window.update_frame_from_iosurface_ptr(iosurface_ptr, crop_x, crop_y, crop_w, crop_h);
+                                } else {
+                                    window.update_frame(frame.data, frame.width, frame.height);
+                                }
+                            } else {
+                                // Fall back to CPU rendering when clicks need to be drawn
+                                window.update_frame(frame.data, frame.width, frame.height);
+                            }
+                        }
+                        
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            window.update_frame(frame.data, frame.width, frame.height);
+                        }
                     }
                 }
             } // DESTINATION_WINDOW lock released here
