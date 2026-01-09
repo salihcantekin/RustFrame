@@ -3,29 +3,34 @@
 //! Runs in its own thread with dedicated message loop.
 //! This is necessary because Tauri's WebView2 message loop doesn't pump
 //! messages for other WinAPI windows created in the main thread.
+//!
+//! GPU Rendering Support:
+//! - Uses DirectX 11 SwapChain for zero-copy GPU rendering
+//! - Falls back to GDI BitBlt for CPU rendering (compatibility)
+//! - Selectable via gpu_acceleration setting
 
 use crate::traits::PreviewWindow;
-use rustframe_capture::config::capture::DESTINATION_WINDOW_TIMER_MS;
 use rustframe_capture::display_info;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use super::d3d11_renderer::D3D11Renderer;
+
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC,
-    PAINTSTRUCT, SRCCOPY,
+    GetDC, InvalidateRect, ReleaseDC, SelectObject, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, 
+    DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-    GetMessageW, GetSystemMetrics, GetWindowRect, KillTimer, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetTimer, SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, SM_CXSCREEN,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER,
-    WM_TIMER, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
+    GetMessageW, GetSystemMetrics, GetWindowRect, PostMessageW, 
+    PostQuitMessage, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, 
+    SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_VISIBLE,
 };
 
@@ -44,13 +49,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use lazy_static::lazy_static;
-use log::{error, info};
+use log::{debug, error, info};
 
 lazy_static! {
-    /// Global frame buffer - render thread writes, window thread reads
+    /// Global frame buffer - render thread writes, window thread reads (CPU path)
     static ref FRAME_BUFFER: Arc<Mutex<Option<FrameData>>> = Arc::new(Mutex::new(None));
+    /// Global GPU texture data - render thread writes, window thread reads (GPU path)
+    static ref GPU_TEXTURE_DATA: Arc<Mutex<Option<GpuTextureData>>> = Arc::new(Mutex::new(None));
     /// Global HWND for the destination window (stored as isize for thread safety)
     static ref DEST_HWND: Mutex<isize> = Mutex::new(0);
+    /// Global D3D11 renderer (created in window thread)
+    static ref D3D11_RENDERER: Mutex<Option<D3D11Renderer>> = Mutex::new(None);
 }
 
 struct FrameData {
@@ -59,9 +68,31 @@ struct FrameData {
     height: u32,
 }
 
+struct GpuTextureData {
+    texture_ptr: usize,
+    crop_x: i32,
+    crop_y: i32,
+    crop_width: u32,
+    crop_height: u32,
+}
+
+impl Drop for GpuTextureData {
+    fn drop(&mut self) {
+        // Release the COM reference when texture data is dropped
+        if self.texture_ptr != 0 {
+            use windows::core::Interface;
+            use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+            unsafe {
+                // Reconstruct the texture to call Release
+                let texture = ID3D11Texture2D::from_raw(self.texture_ptr as *mut _);
+                // from_raw takes ownership, drop will call Release
+                drop(texture);
+            }
+        }
+    }
+}
+
 const CLASS_NAME: PCWSTR = w!("RustFrameDestination");
-const TIMER_ID: usize = 1;
-const TIMER_INTERVAL_MS: u32 = DESTINATION_WINDOW_TIMER_MS; // ~60 FPS for repaint
 const WM_FRAME_UPDATE: u32 = WM_USER + 1;
 
 static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -156,6 +187,8 @@ impl DestinationWindow {
     /// Update the frame buffer (called from render thread)
     /// This just updates the buffer - window thread will paint on next timer tick
     pub fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
+        info!("update_frame: {}x{}, {} bytes", width, height, data.len());
+        
         // Update the global buffer
         if let Ok(mut buffer) = FRAME_BUFFER.lock() {
             *buffer = Some(FrameData {
@@ -167,6 +200,42 @@ impl DestinationWindow {
 
         // Optionally signal window thread to repaint immediately
         // (timer will also trigger repaint, so this is just for lower latency)
+        if let Ok(hwnd_lock) = DEST_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = PostMessageW(Some(hwnd), WM_FRAME_UPDATE, WPARAM(0), LPARAM(0));
+                }
+            }
+        }
+    }
+
+    /// Update the frame from GPU texture (called from render thread)
+    /// Zero-copy GPU path - stores texture handle and triggers window repaint
+    pub fn update_frame_from_texture(
+        &self,
+        texture_ptr: usize,
+        crop_x: i32,
+        crop_y: i32,
+        crop_width: u32,
+        crop_height: u32,
+    ) {
+        debug!("update_frame_from_texture: {}x{} at ({}, {}), ptr=0x{:X}", 
+            crop_width, crop_height, crop_x, crop_y, texture_ptr);
+        
+        // Store GPU texture data
+        if let Ok(mut data) = GPU_TEXTURE_DATA.lock() {
+            *data = Some(GpuTextureData {
+                texture_ptr,
+                crop_x,
+                crop_y,
+                crop_width,
+                crop_height,
+            });
+        }
+
+        // Trigger window repaint
         if let Ok(hwnd_lock) = DEST_HWND.lock() {
             let hwnd_val = *hwnd_lock;
             if hwnd_val != 0 {
@@ -190,6 +259,11 @@ impl Drop for DestinationWindow {
 
         // Signal thread to stop
         self.stop_flag.store(true, Ordering::SeqCst);
+
+        // Clear GPU texture data (will Release COM reference)
+        if let Ok(mut data) = GPU_TEXTURE_DATA.lock() {
+            *data = None;
+        }
 
         // Post quit message to window thread
         if let Ok(hwnd_lock) = DEST_HWND.lock() {
@@ -391,8 +465,23 @@ fn run_window_thread(
         WINDOW_THREAD_RUNNING.store(true, Ordering::SeqCst);
         tracing::info!(hwnd = ?hwnd, "Destination window created");
 
-        // Set timer for periodic repaint as backup
-        let _ = SetTimer(Some(hwnd), TIMER_ID, TIMER_INTERVAL_MS, None);
+        // Initialize DirectX 11 renderer for GPU-accelerated presentation
+        // Attempt to create renderer, but continue if it fails (fallback to GDI)
+        match D3D11Renderer::new(hwnd, width, height) {
+            Ok(renderer) => {
+                if let Ok(mut r) = D3D11_RENDERER.lock() {
+                    *r = Some(renderer);
+                    tracing::info!("DirectX 11 renderer initialized for GPU acceleration");
+                } else {
+                    tracing::warn!("Failed to store D3D11 renderer (mutex lock failed)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "Failed to initialize D3D11 renderer, using GDI fallback");
+            }
+        }
+
+        // Event-driven rendering: frames trigger WM_FRAME_UPDATE, no periodic timer needed
 
         // Message loop - THIS IS THE KEY!
         // This loop processes ALL messages for this window including mouse clicks
@@ -413,7 +502,6 @@ fn run_window_thread(
         }
 
         // Cleanup
-        let _ = KillTimer(Some(hwnd), TIMER_ID);
         WINDOW_THREAD_RUNNING.store(false, Ordering::SeqCst);
         tracing::debug!("Destination window thread exiting");
     }
@@ -432,50 +520,12 @@ unsafe extern "system" fn window_proc(
     };
 
     match msg {
-        WM_TIMER | WM_FRAME_UPDATE => {
-            // Timer tick or frame update signal - trigger repaint
-            if let Ok(buffer_lock) = FRAME_BUFFER.try_lock() {
-                if let Some(ref frame) = *buffer_lock {
-                    // Resize window if needed
-                    let mut client_rect = RECT::default();
-                    let _ = GetClientRect(hwnd, &mut client_rect);
-                    let client_width = client_rect.right - client_rect.left;
-                    let client_height = client_rect.bottom - client_rect.top;
-
-                    if client_width != frame.width as i32 || client_height != frame.height as i32 {
-                        // For WS_POPUP windows, window size = client size
-                        let new_width = frame.width as i32;
-                        let new_height = frame.height as i32;
-
-                        // Get current window position - keep it stable
-                        let mut window_rect = RECT::default();
-                        let _ = GetWindowRect(hwnd, &mut window_rect);
-                        let x = window_rect.left;
-                        let y = window_rect.top;
-
-                        // Don't adjust position - keep window where it was created
-                        // (off-screen in release mode)
-
-                        let _ = SetWindowPos(
-                            hwnd,
-                            None,
-                            x,
-                            y,
-                            new_width,
-                            new_height,
-                            SWP_NOACTIVATE | SWP_NOZORDER,
-                        );
-                    }
-
-                    // Paint directly to DC - don't rely on WM_PAINT for off-screen windows
-                    let hdc = GetDC(Some(hwnd));
-                    if !hdc.is_invalid() {
-                        paint_frame_gdi(hdc, &frame.data, frame.width, frame.height);
-                        let _ = ReleaseDC(Some(hwnd), hdc);
-                    }
-                }
+        WM_FRAME_UPDATE => {
+            // Frame update signal - just trigger repaint (event-driven)
+            // Resize and actual painting will happen in WM_PAINT
+            unsafe {
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
-
             LRESULT(0)
         }
         WM_MOUSEACTIVATE => {
@@ -483,17 +533,69 @@ unsafe extern "system" fn window_proc(
             LRESULT(MA_NOACTIVATE as isize)
         }
         WM_PAINT => {
-            // Paint the frame content using GDI
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = BeginPaint(hwnd, &mut ps);
+            // Try GPU path first, fallback to GDI if not available
+            let mut gpu_rendered = false;
 
-            if let Ok(buffer_lock) = FRAME_BUFFER.try_lock() {
-                if let Some(ref frame) = *buffer_lock {
-                    paint_frame_gdi(hdc, &frame.data, frame.width, frame.height);
+            // Check if we have GPU texture data
+            if let Ok(gpu_data) = GPU_TEXTURE_DATA.try_lock() {
+                if let Some(ref data) = *gpu_data {
+                    debug!("WM_PAINT: GPU path - texture ptr=0x{:X}", data.texture_ptr);
+                    // Try to render with DirectX 11
+                    if let Ok(renderer) = D3D11_RENDERER.try_lock() {
+                        debug!("WM_PAINT: D3D11 renderer lock acquired");
+                        if let Some(ref r) = *renderer {
+                            debug!("WM_PAINT: Calling render_texture with crop {}x{} at ({}, {})",
+                                data.crop_width, data.crop_height, data.crop_x, data.crop_y);
+                            match r.render_texture(
+                                data.texture_ptr,
+                                data.crop_x,
+                                data.crop_y,
+                                data.crop_width,
+                                data.crop_height,
+                            ) {
+                                Ok(_) => {
+                                    gpu_rendered = true;
+                                    debug!("WM_PAINT: GPU render successful");
+                                    // Validate rect to tell Windows the paint is complete
+                                    ValidateRect(Some(hwnd), None);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = ?e, "GPU render failed, falling back to GDI");
+                                }
+                            }
+                        } else {
+                            debug!("WM_PAINT: No D3D11 renderer available (None)");
+                        }
+                    } else {
+                        debug!("WM_PAINT: Could not lock D3D11 renderer (lock failed)");
+                    }
+                } else {
+                    debug!("WM_PAINT: No GPU texture data");
                 }
+            } else {
+                debug!("WM_PAINT: Could not lock GPU_TEXTURE_DATA");
             }
 
-            let _ = EndPaint(hwnd, &ps);
+            // If GPU rendering didn't happen, use GDI fallback
+            if !gpu_rendered {
+                debug!("WM_PAINT: Using GDI fallback");
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = BeginPaint(hwnd, &mut ps);
+
+                if let Ok(buffer_lock) = FRAME_BUFFER.try_lock() {
+                    if let Some(ref frame) = *buffer_lock {
+                        debug!("WM_PAINT: GDI rendering {}x{}", frame.width, frame.height);
+                        paint_frame_gdi(hdc, &frame.data, frame.width, frame.height);
+                    } else {
+                        debug!("WM_PAINT: No frame data available");
+                    }
+                } else {
+                    debug!("WM_PAINT: Could not lock FRAME_BUFFER");
+                }
+
+                let _ = EndPaint(hwnd, &ps);
+            }
+
             LRESULT(0)
         }
         WM_ERASEBKGND => {

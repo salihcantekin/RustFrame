@@ -49,9 +49,6 @@ pub trait BorderWindow: Send + Sync {
     /// Set preview mode: interior is draggable (not click-through)
     fn set_preview_mode(&mut self);
 
-    /// Check if ESC key was pressed (to cancel selection)
-    fn was_esc_pressed() -> bool;
-
     /// Stop the border window (cleanup before drop)
     fn stop(&mut self);
 }

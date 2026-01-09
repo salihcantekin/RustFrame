@@ -54,9 +54,20 @@ jobs:
           version="${{ github.event.inputs.version }}"
           echo "Updating version to: $version"
           
-          # Update Cargo.toml
-          sed -i.bak "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$version\"/" Cargo.toml
+          # Update Cargo.toml - only the [package] section version
+          # Use sed with more precise pattern matching
+          sed -i.bak '0,/^version = ".*"/s//version = "'"$version"'"/' Cargo.toml
           echo "[OK] Updated Cargo.toml"
+          
+          # Verify the change
+          echo "Verifying Cargo.toml version..."
+          if grep -q "^version = \"$version\"" Cargo.toml; then
+              echo "✓ Version verified in Cargo.toml: $version"
+          else
+              echo "✗ ERROR: Version not found in Cargo.toml!"
+              grep "^version =" Cargo.toml
+              exit 1
+          fi
           
           # Update package.json
           sed -i.bak "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$version\"/" ui/package.json
@@ -93,10 +104,21 @@ jobs:
           toolchain: stable
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       
+      - name: Clear build cache to force version update
+        run: |
+          echo "Clearing build cache to ensure version is updated..."
+          if [ -d "target" ]; then
+            rm -rf target
+            echo "Removed target/ directory"
+          fi
+          echo "Cache cleared"
+      
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          # Include version in cache key to avoid stale version issues
+          key: v${{ github.event.inputs.version }}
       
       - name: Install UI dependencies
         working-directory: ./ui
@@ -166,7 +188,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleShortVersionString</key>
-              <string>1.1.0</string>
+              <string>${{ github.event.inputs.version }}</string>
               <key>CFBundleVersion</key>
               <string>1</string>
               <key>LSMinimumSystemVersion</key>

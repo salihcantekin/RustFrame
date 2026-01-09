@@ -6,7 +6,7 @@
 use std::mem::size_of;
 
 use anyhow::{anyhow, Context, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use windows::core::Interface;
 use windows::Graphics::Capture::{
     Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
@@ -258,6 +258,10 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
         self.capture_region = Some(region);
         Ok(())
     }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Windows-specific capture engine using Windows.Graphics.Capture API
@@ -277,6 +281,7 @@ pub struct WindowsCaptureEngine {
     monitor_size: (u32, u32), // Monitor width and height
     is_active: bool,
     show_cursor: bool,
+    gpu_acceleration: bool, // Enable GPU texture passthrough (zero-copy)
 }
 
 impl WindowsCaptureEngine {
@@ -297,6 +302,7 @@ impl WindowsCaptureEngine {
             monitor_size: (0, 0),
             is_active: false,
             show_cursor: true,
+            gpu_acceleration: false, // TEMPORARILY DISABLED - Different D3D devices cause crash
         })
     }
 
@@ -411,8 +417,77 @@ impl WindowsCaptureEngine {
         Ok((item, origin, size))
     }
 
+    /// Get frame as GPU texture (zero-copy) - preferred for performance
+    /// Returns texture handle for GPU-accelerated rendering
+    /// Falls back to CPU copy if clicks need to be drawn
+    fn get_frame_gpu(
+        &self,
+        source_texture: &ID3D11Texture2D,
+        region: &CaptureRect,
+    ) -> Option<CaptureFrame> {
+        // Get texture description for dimensions
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { source_texture.GetDesc(&mut desc) };
+        
+        // Calculate monitor bounds in screen coordinates
+        let monitor_left = self.monitor_origin.0;
+        let monitor_top = self.monitor_origin.1;
+        let monitor_right = monitor_left + self.monitor_size.0 as i32;
+        let monitor_bottom = monitor_top + self.monitor_size.1 as i32;
+
+        // Clip region to monitor bounds
+        let clipped_left = region.x.max(monitor_left);
+        let clipped_top = region.y.max(monitor_top);
+        let clipped_right = (region.x + region.width as i32).min(monitor_right);
+        let clipped_bottom = (region.y + region.height as i32).min(monitor_bottom);
+
+        // Check if there's any visible region
+        if clipped_left >= clipped_right || clipped_top >= clipped_bottom {
+            warn!("Capture region entirely outside monitor bounds");
+            return None;
+        }
+
+        // Calculate clipped dimensions
+        let clipped_width = (clipped_right - clipped_left) as u32;
+        let clipped_height = (clipped_bottom - clipped_top) as u32;
+        
+        // Calculate source position in texture coordinates (relative to monitor origin)
+        let src_x = (clipped_left - monitor_left) as i32;
+        let src_y = (clipped_top - monitor_top) as i32;
+        
+        // Clone texture COM pointer for safe cross-thread usage
+        // SAFETY: Clone increments reference count (AddRef)
+        // We use ManuallyDrop to prevent automatic Release - destination window will Release it
+        let texture_ptr = {
+            use std::mem::ManuallyDrop;
+            let cloned_texture = ManuallyDrop::new(source_texture.clone()); // AddRef
+            cloned_texture.as_raw() as usize
+        };
+        
+        debug!("GPU frame: {}x{} at screen({}, {}), texture crop({}, {}), ptr: 0x{:X}",
+            clipped_width, clipped_height, clipped_left, clipped_top, src_x, src_y, texture_ptr);
+        
+        Some(CaptureFrame {
+            data: Vec::new(), // No CPU data for GPU path
+            width: clipped_width,
+            height: clipped_height,
+            stride: clipped_width * 4, // BGRA format
+            offset_x: clipped_left,
+            offset_y: clipped_top,
+            gpu_texture: Some(super::GpuTextureHandle::D3D11 {
+                texture_ptr,
+                shared_handle: 0, // Not needed for same-process usage
+                crop_x: src_x,
+                crop_y: src_y,
+                crop_width: clipped_width,
+                crop_height: clipped_height,
+            }),
+        })
+    }
+    
     /// Copy texture to CPU-accessible staging texture and read pixels
     /// Clips region to monitor bounds and returns only the visible portion
+    /// Used as fallback when GPU rendering is not available or clicks need to be drawn
     fn copy_frame_to_cpu(
         &self,
         source_texture: &ID3D11Texture2D,
@@ -664,7 +739,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         // Try to get frame from pool (non-blocking)
         let frame = match frame_pool.TryGetNextFrame() {
             Ok(f) => {
-                info!("Got frame from pool!");
+                debug!("Got frame from pool!");
                 f
             }
             Err(e) => {
@@ -706,7 +781,20 @@ impl CaptureEngine for WindowsCaptureEngine {
             }
         };
 
-        // Copy to CPU and return
+        // Choose GPU or CPU path based on gpu_acceleration setting
+        // GPU path: Return texture handle for zero-copy rendering (fast)
+        // CPU path: Copy to system memory for compatibility (slower)
+        if self.gpu_acceleration {
+            // Try GPU path first
+            let result = self.get_frame_gpu(&texture, region);
+            if result.is_some() {
+                return result;
+            }
+            // Fallback to CPU if GPU path fails
+            warn!("GPU path failed, falling back to CPU");
+        }
+        
+        // CPU fallback path
         self.copy_frame_to_cpu(&texture, region)
     }
 
@@ -728,6 +816,17 @@ impl CaptureEngine for WindowsCaptureEngine {
         info!("Updating capture region to: {:?}", region);
         self.capture_region = Some(region);
         Ok(())
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl WindowsCaptureEngine {
+    /// Get the current monitor origin (for monitor change detection)
+    pub fn get_monitor_origin(&self) -> (i32, i32) {
+        self.monitor_origin
     }
 }
 

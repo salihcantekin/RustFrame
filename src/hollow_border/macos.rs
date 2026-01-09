@@ -266,7 +266,6 @@ extern "C" {
     fn pthread_main_np() -> i32;
 }
 
-static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
 static REGISTER_CLASS: Once = Once::new();
 static PREVIEW_MODE: AtomicBool = AtomicBool::new(true);
 
@@ -1483,10 +1482,6 @@ impl HollowBorder {
         self.window as isize
     }
 
-    pub fn was_esc_pressed() -> bool {
-        ESC_PRESSED.load(Ordering::Relaxed)
-    }
-
     pub fn stop(&mut self) {
         log::info!("Stopping macOS hollow border");
         stop_mouse_poll();
@@ -1632,10 +1627,6 @@ impl BorderWindow for HollowBorder {
 
     fn set_preview_mode(&mut self) {
         self.set_preview_mode()
-    }
-
-    fn was_esc_pressed() -> bool {
-        Self::was_esc_pressed()
     }
 
     fn stop(&mut self) {

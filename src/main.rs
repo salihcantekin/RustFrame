@@ -1529,23 +1529,224 @@ async fn start_capture(
             let inner_height = (height - border_offset * 2).max(1);
             log::info!("🔄 Border offset: {}, Inner region: {}x{} pixels", border_offset, inner_width, inner_height);
             
-            // Update capture engine region
-            let mut engine = engine_for_cb.lock().unwrap();
-            if let Some(ref mut eng) = *engine {
-                let new_region = crate::CaptureRect {
-                    x: x + border_offset,
-                    y: y + border_offset,
-                    width: inner_width as u32,
-                    height: inner_height as u32,
+            // Check if border moved to a different monitor
+            let center_x = x + width / 2;
+            let center_y = y + height / 2;
+            
+            #[cfg(target_os = "windows")]
+            {
+                use windows::Win32::Foundation::POINT;
+                use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+                use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+                
+                let current_monitor = unsafe {
+                    MonitorFromPoint(
+                        POINT { x: center_x, y: center_y },
+                        MONITOR_DEFAULTTONEAREST
+                    )
                 };
-                if let Err(e) = eng.update_region(new_region) {
-                    log::error!("Failed to update capture region: {}", e);
-                } else {
-                    log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
-                        new_region.x, new_region.y, new_region.width, new_region.height);
+                
+                if !current_monitor.is_invalid() {
+                    let mut monitor_info = MONITORINFO {
+                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                        ..Default::default()
+                    };
+                    
+                    if unsafe { GetMonitorInfoW(current_monitor, &mut monitor_info) }.as_bool() {
+                        let monitor_left = monitor_info.rcMonitor.left;
+                        let monitor_top = monitor_info.rcMonitor.top;
+                        
+                        // Get monitor DPI for scaling calculations
+                        let mut dpi_x: u32 = 96; // Default DPI
+                        let mut dpi_y: u32 = 96;
+                        if unsafe { GetDpiForMonitor(current_monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.is_ok() {
+                            let scale_factor = dpi_x as f32 / 96.0;
+                            log::info!("🖥️  Monitor DPI: {}x{}, Scale factor: {:.2}x", dpi_x, dpi_y, scale_factor);
+                        }
+                        
+                        // Get current capture monitor origin
+                        let mut engine = engine_for_cb.lock().unwrap();
+                        let needs_restart = if let Some(ref eng) = *engine {
+                            // Check if we have a WindowsCaptureEngine with monitor_origin
+                            if let Some(wce) = eng.as_any().downcast_ref::<rustframe_capture::capture::WindowsCaptureEngine>() {
+                                let current_origin = wce.get_monitor_origin();
+                                let changed = current_origin.0 != monitor_left || current_origin.1 != monitor_top;
+                                if changed {
+                                    log::info!("🖥️  Monitor changed! Old origin: {:?}, New origin: ({}, {})", 
+                                        current_origin, monitor_left, monitor_top);
+                                }
+                                changed
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        
+                        if needs_restart {
+                            // Stop current capture
+                            if let Some(ref mut eng) = *engine {
+                                log::info!("Stopping capture to switch monitors...");
+                                eng.stop();
+                            }
+                            
+                            // Restart capture on new monitor
+                            if let Some(ref mut eng) = *engine {
+                                let new_region = crate::CaptureRect {
+                                    x: x + border_offset,
+                                    y: y + border_offset,
+                                    width: inner_width as u32,
+                                    height: inner_height as u32,
+                                };
+                                
+                                log::info!("Restarting capture on new monitor with region: {:?}", new_region);
+                                if let Err(e) = eng.start(new_region, true) {
+                                    log::error!("Failed to restart capture: {}", e);
+                                } else {
+                                    log::info!("✅ Capture restarted on new monitor");
+                                }
+                            }
+                            drop(engine);
+                        } else {
+                            drop(engine);
+                            
+                            // Same monitor - just update region
+                            let mut engine = engine_for_cb.lock().unwrap();
+                            if let Some(ref mut eng) = *engine {
+                                let new_region = crate::CaptureRect {
+                                    x: x + border_offset,
+                                    y: y + border_offset,
+                                    width: inner_width as u32,
+                                    height: inner_height as u32,
+                                };
+                                if let Err(e) = eng.update_region(new_region) {
+                                    log::error!("Failed to update capture region: {}", e);
+                                } else {
+                                    log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
+                                        new_region.x, new_region.y, new_region.width, new_region.height);
+                                }
+                            }
+                            drop(engine);
+                        }
+                    }
                 }
             }
-            drop(engine);
+            
+            #[cfg(not(target_os = "windows"))]
+            {
+                #[cfg(target_os = "macos")]
+                {
+                    // macOS: Check if border moved to different display
+                    let mut engine = engine_for_cb.lock().unwrap();
+                    let needs_restart = if let Some(ref eng) = *engine {
+                        if let Some(macos_eng) = eng.as_any().downcast_ref::<rustframe_capture::capture::MacOSCaptureEngine>() {
+                            let current_origin = macos_eng.get_monitor_origin();
+                            
+                            // Use CGGetDisplaysWithPoint to find current display
+                            use core_graphics::display::{CGDisplay, CGPoint};
+                            let point = CGPoint::new(center_x as f64, center_y as f64);
+                            let display_count = 1;
+                            let mut display_id: u32 = 0;
+                            
+                            let changed = unsafe {
+                                if core_graphics::display::CGGetDisplaysWithPoint(
+                                    point,
+                                    display_count,
+                                    &mut display_id,
+                                    std::ptr::null_mut()
+                                ) == 0 {
+                                    let display = CGDisplay::new(display_id);
+                                    let bounds = display.bounds();
+                                    let new_origin = (bounds.origin.x as i32, bounds.origin.y as i32);
+                                    
+                                    if current_origin.0 != new_origin.0 || current_origin.1 != new_origin.1 {
+                                        log::info!("🖥️  Monitor changed! Old origin: {:?}, New origin: {:?}", 
+                                            current_origin, new_origin);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            };
+                            
+                            changed
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    
+                    if needs_restart {
+                        // Stop current capture
+                        if let Some(ref mut eng) = *engine {
+                            log::info!("Stopping capture to switch monitors...");
+                            eng.stop();
+                        }
+                        
+                        // Restart capture on new monitor
+                        if let Some(ref mut eng) = *engine {
+                            let new_region = crate::CaptureRect {
+                                x: x + border_offset,
+                                y: y + border_offset,
+                                width: inner_width as u32,
+                                height: inner_height as u32,
+                            };
+                            
+                            log::info!("Restarting capture on new monitor with region: {:?}", new_region);
+                            if let Err(e) = eng.start(new_region, true) {
+                                log::error!("Failed to restart capture: {}", e);
+                            } else {
+                                log::info!("✅ Capture restarted on new monitor");
+                            }
+                        }
+                        drop(engine);
+                    } else {
+                        drop(engine);
+                        
+                        // Same monitor - just update region
+                        let mut engine = engine_for_cb.lock().unwrap();
+                        if let Some(ref mut eng) = *engine {
+                            let new_region = crate::CaptureRect {
+                                x: x + border_offset,
+                                y: y + border_offset,
+                                width: inner_width as u32,
+                                height: inner_height as u32,
+                            };
+                            if let Err(e) = eng.update_region(new_region) {
+                                log::error!("Failed to update capture region: {}", e);
+                            } else {
+                                log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
+                                    new_region.x, new_region.y, new_region.width, new_region.height);
+                            }
+                        }
+                        drop(engine);
+                    }
+                }
+                
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Linux and other platforms: just update region
+                    let mut engine = engine_for_cb.lock().unwrap();
+                    if let Some(ref mut eng) = *engine {
+                        let new_region = crate::CaptureRect {
+                            x: x + border_offset,
+                            y: y + border_offset,
+                            width: inner_width as u32,
+                            height: inner_height as u32,
+                        };
+                        if let Err(e) = eng.update_region(new_region) {
+                            log::error!("Failed to update capture region: {}", e);
+                        } else {
+                            log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
+                                new_region.x, new_region.y, new_region.width, new_region.height);
+                        }
+                    }
+                    drop(engine);
+                }
+            }
             
             // Resize destination window
             log::info!("🔄 Attempting to resize destination window to {}x{} pixels...", inner_width, inner_height);
@@ -1713,7 +1914,23 @@ async fn start_capture(
                             }
                         }
                         
-                        #[cfg(not(target_os = "macos"))]
+                        #[cfg(target_os = "windows")]
+                        {
+                            if use_gpu && !has_clicks {
+                                if let Some(rustframe_capture::capture::GpuTextureHandle::D3D11 { 
+                                    texture_ptr, crop_x, crop_y, crop_width, crop_height, .. 
+                                }) = frame.gpu_texture {
+                                    window.update_frame_from_texture(texture_ptr, crop_x, crop_y, crop_width, crop_height);
+                                } else {
+                                    window.update_frame(frame.data, frame.width, frame.height);
+                                }
+                            } else {
+                                // Fall back to CPU rendering when clicks need to be drawn
+                                window.update_frame(frame.data, frame.width, frame.height);
+                            }
+                        }
+                        
+                        #[cfg(target_os = "linux")]
                         {
                             window.update_frame(frame.data, frame.width, frame.height);
                         }

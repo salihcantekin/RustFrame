@@ -357,6 +357,9 @@ pub struct MacOSCaptureEngine {
     last_frame: Option<Arc<Vec<u8>>>,
     frame_width: u32,
     frame_height: u32,
+    
+    // Monitor tracking for multi-monitor support
+    monitor_origin: (i32, i32),
 
     // ScreenCaptureKit backend (macOS 12.3+). When active, this captures frames
     // with the system cursor composited by the OS.
@@ -581,6 +584,7 @@ impl MacOSCaptureEngine {
             last_frame: None,
             frame_width: 0,
             frame_height: 0,
+            monitor_origin: (0, 0),
 
             sck,
             sck_last_seq: 0,
@@ -665,6 +669,19 @@ impl CaptureEngine for MacOSCaptureEngine {
         self.region = Some(region);
         self.show_cursor = show_cursor;
         self.is_active = true;
+
+        // Detect which monitor contains this region
+        let center_x = region.x + (region.width as i32 / 2);
+        let center_y = region.y + (region.height as i32 / 2);
+        
+        if let Some((origin_x, origin_y, display_width, display_height)) = Self::get_display_for_point(center_x, center_y) {
+            self.monitor_origin = (origin_x, origin_y);
+            log::info!("[MACOS_ENGINE] Capture region on monitor at origin ({}, {}), size: {}x{}", 
+                      origin_x, origin_y, display_width, display_height);
+        } else {
+            log::warn!("[MACOS_ENGINE] Could not determine display for point ({}, {})", center_x, center_y);
+            self.monitor_origin = (0, 0);
+        }
 
         // Prefer ScreenCaptureKit when available; it includes the real system cursor.
         log::info!("[MACOS_ENGINE] Checking if SCK is available... self.sck.is_some()={}", self.sck.is_some());
@@ -809,5 +826,46 @@ impl CaptureEngine for MacOSCaptureEngine {
 
     fn get_region(&self) -> Option<CaptureRect> {
         self.region
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl MacOSCaptureEngine {
+    /// Get the current monitor origin (for monitor change detection)
+    pub fn get_monitor_origin(&self) -> (i32, i32) {
+        self.monitor_origin
+    }
+    
+    /// Detect which display contains the given point and return its bounds
+    #[cfg(target_os = "macos")]
+    fn get_display_for_point(x: i32, y: i32) -> Option<(i32, i32, u32, u32)> {
+        use core_graphics::display::{CGDisplay, CGPoint};
+        
+        let point = CGPoint::new(x as f64, y as f64);
+        let display_count = 1;
+        let mut display_id: u32 = 0;
+        
+        unsafe {
+            // Get display at point
+            if core_graphics::display::CGGetDisplaysWithPoint(
+                point,
+                display_count,
+                &mut display_id,
+                std::ptr::null_mut()
+            ) == 0 {
+                let display = CGDisplay::new(display_id);
+                let bounds = display.bounds();
+                return Some((
+                    bounds.origin.x as i32,
+                    bounds.origin.y as i32,
+                    bounds.size.width as u32,
+                    bounds.size.height as u32,
+                ));
+            }
+        }
+        None
     }
 }

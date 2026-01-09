@@ -27,8 +27,6 @@ use windows::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-const VK_ESCAPE: u32 = 0x1B;
-
 lazy_static! {
     /// Global HWND for the hollow border (stored as isize for thread safety)
     static ref HOLLOW_HWND: Mutex<isize> = Mutex::new(0);
@@ -51,20 +49,12 @@ lazy_static! {
     static ref BORDER_LIVE_MOVE_CALLBACK: Mutex<Option<Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>>> = Mutex::new(None);
 }
 
-// Global flag for ESC key pressed
-static ESC_PRESSED: AtomicBool = AtomicBool::new(false);
 static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
 /// Preview mode: interior is draggable, not click-through
 /// Capture mode: interior is click-through, only top edge drags
 static PREVIEW_MODE: AtomicBool = AtomicBool::new(true);
 /// Flag indicating border is being dragged/resized
 static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
-
-/// Check if ESC was pressed and reset the flag
-#[allow(dead_code)]
-pub fn was_esc_pressed() -> bool {
-    ESC_PRESSED.swap(false, Ordering::SeqCst)
-}
 
 /// Check if border is currently being dragged or resized
 pub fn is_border_interacting() -> bool {
@@ -468,9 +458,6 @@ impl BorderWindow for HollowBorder {
         }
     }
 
-    fn was_esc_pressed() -> bool {
-        was_esc_pressed()
-    }
 
     fn stop(&mut self) {
         // Stop flag already set in Drop, nothing extra needed
@@ -948,16 +935,6 @@ unsafe extern "system" fn subclass_proc(
         }
         
         return DefSubclassProc(hwnd, msg, wparam, lparam);
-    }
-
-    // Handle ESC key
-    if msg == WM_KEYDOWN {
-        let vk = wparam.0 as u32;
-        if vk == VK_ESCAPE {
-            info!("ESC pressed in hollow border - signaling stop");
-            ESC_PRESSED.store(true, Ordering::SeqCst);
-            return LRESULT(0);
-        }
     }
 
     DefSubclassProc(hwnd, msg, wparam, lparam)

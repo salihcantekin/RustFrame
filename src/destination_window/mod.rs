@@ -4,6 +4,9 @@
 //! The implementation is platform-specific.
 
 #[cfg(target_os = "windows")]
+mod d3d11_renderer; // DirectX 11 GPU renderer
+
+#[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;

@@ -35,21 +35,38 @@ jobs:
           $version = "${{ github.event.inputs.version }}"
           Write-Host "Updating version to: $version"
           
-          # Update Cargo.toml
+          # Update Cargo.toml - find the FIRST version line (package version)
           $cargoContent = Get-Content Cargo.toml -Raw
-          $cargoContent = $cargoContent -replace 'version = "\d+\.\d+\.\d+"', "version = `"$version`""
+          # Only update the first occurrence (package version)
+          $cargoContent = $cargoContent -replace '(?m)^version\s*=\s*"[^"]*"', "version = `"$version`"" -replace '(?m)^(version\s*=\s*"[^"]*"\r?\n.*?)^version\s*=\s*"[^"]*"', "`$1version = `"$version`""
+          # Actually, let's be more precise - only update within [package] section
+          if ($cargoContent -match '(?s)(\[package\][^\[]*version\s*=\s*")[^"]*(")') {
+              $cargoContent = $cargoContent -replace '(?s)(\[package\][^\[]*version\s*=\s*")[^"]*(")', "`${1}$version`$2"
+          }
           $cargoContent | Set-Content Cargo.toml -NoNewline
           Write-Host "[OK] Updated Cargo.toml"
           
+          # Verify the change
+          Write-Host "Verifying Cargo.toml version..."
+          $verifyContent = Get-Content Cargo.toml -Raw
+          if ($verifyContent -match '\[package\][^\[]*version\s*=\s*"([^"]*)"') {
+              $foundVersion = $matches[1]
+              Write-Host "Found version in Cargo.toml: $foundVersion"
+              if ($foundVersion -ne $version) {
+                  Write-Error "Version mismatch! Expected $version but found $foundVersion"
+                  exit 1
+              }
+          }
+          
           # Update package.json
           $packageContent = Get-Content ui/package.json -Raw
-          $packageContent = $packageContent -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$version`""
+          $packageContent = $packageContent -replace '"version":\s*"[^"]*"', "`"version`": `"$version`""
           $packageContent | Set-Content ui/package.json -NoNewline
           Write-Host "[OK] Updated package.json"
           
           # Update tauri.conf.json
           $tauriContent = Get-Content tauri.conf.json -Raw
-          $tauriContent = $tauriContent -replace '"version": "\d+\.\d+\.\d+"', "`"version`": `"$version`""
+          $tauriContent = $tauriContent -replace '"version":\s*"[^"]*"', "`"version`": `"$version`""
           $tauriContent | Set-Content tauri.conf.json -NoNewline
           Write-Host "[OK] Updated tauri.conf.json"
           
@@ -78,10 +95,22 @@ jobs:
         with:
           toolchain: stable
       
+      - name: Clear Cargo cache to force version update
+        run: |
+          Write-Host "Clearing build cache to ensure version is updated..."
+          if (Test-Path target) {
+            Remove-Item -Recurse -Force target
+            Write-Host "Removed target/ directory"
+          }
+          Write-Host "Cache cleared"
+        shell: powershell
+      
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          # Include version in cache key to avoid stale version issues
+          key: v${{ github.event.inputs.version }}
       
       - name: Install UI dependencies
         working-directory: ./ui

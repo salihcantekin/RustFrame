@@ -2,6 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // Read version from Cargo.toml for Windows EXE metadata
+    // This ensures the version input from GitHub Actions is used
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
+    println!("cargo:rustc-env=RUSTFRAME_VERSION={}", version);
+    
     tauri_build::build();
 
     // Build scripts should not write into a user's runtime config directory.

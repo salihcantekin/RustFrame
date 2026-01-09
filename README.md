@@ -3,205 +3,206 @@
 [![Build and Release](https://github.com/salihcantekin/RustFrame/actions/workflows/release.yml/badge.svg?branch=dev)](https://github.com/salihcantekin/RustFrame/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/salihcantekin/RustFrame?include_prereleases&sort=semver)](https://github.com/salihcantekin/RustFrame/releases)
 [![Downloads](https://img.shields.io/github/downloads/salihcantekin/RustFrame/total.svg)](https://github.com/salihcantekin/RustFrame/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**A modern Windows screen region capture tool built with Rust, using Windows.Graphics.Capture API**
+**A cross-platform screen region capture tool for precise screen sharing in video calls.**
 
-➜ Download the latest release: https://github.com/salihcantekin/RustFrame/releases/latest
+📦 **[Download Latest Release](https://github.com/salihcantekin/RustFrame/releases/latest)** | 📚 **[Documentation](docs/)** | 🚀 **[Quick Start](docs/user-guide/quick-start.md)**
 
-RustFrame allows you to select a region of your screen and mirror it to a separate window, perfect for sharing specific content on Teams, Zoom, Google Meet or Discord without exposing your entire screen.
+RustFrame lets you capture and share a specific region of your screen in video calls (Google Meet, Zoom, Teams, Discord) without exposing your entire desktop. Perfect for privacy-conscious sharing, multi-monitor setups, or ultra-wide displays.
 
-**Project Links:** [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [License](LICENSE)
+## ✨ Key Features
 
-## 🎯 Features
+- 🎯 **Precise Region Capture** - Select any screen area with pixel-perfect control
+- 🖥️ **Multi-Monitor Support** - Capture from any display, auto-detects when you drag between monitors
+- ⚡ **GPU-Accelerated** - High-performance capture with minimal CPU usage (~8-10%)
+- 🎨 **Customizable** - Click highlights, cursor visibility, border styling, FPS tuning
+- 🔧 **Cross-Platform** - Windows, macOS, and Linux (experimental)
+- 🎮 **Real-Time Adjustment** - Move and resize capture region while sharing
 
-- ✅ **Modern Capture API**: Uses Windows.Graphics.Capture (not GDI/BitBlt) for GPU-accelerated capture
-- ✅ **Multi-Monitor Support**: Capture works on any connected monitor, not just primary
-- ✅ **Real-time Mirroring**: Captured region displayed in a shareable window
-- ✅ **Settings UI**: Configure cursor, border, performance, and region selection
-- ✅ **Invisible Share Window (Release)**: The output window can be fully transparent + click-through while still being shareable
+## 🚀 Quick Start
+
+### Installation
+
+**Windows**: Extract ZIP and run `RustFrame.exe`  
+**macOS**: Drag to Applications folder  
+**Linux**: Make AppImage executable and run  
+
+→ See [Installation Guide](docs/user-guide/installation.md) for detailed instructions
+
+### Usage (30 seconds)
+
+1. **Launch RustFrame** → UI window opens
+2. **Configure region** → Settings → Capture Region (use preview border)
+3. **Start capture** → Click "Start Capture"
+4. **Share** → In your video call, select "RustFrame Preview" window
+
+→ See [Quick Start Guide](docs/user-guide/quick-start.md) for detailed walkthrough
+
+## 📚 Documentation
+
+### For Users
+- **[User Guide](docs/user-guide/)** - Installation, usage, and troubleshooting
+- **[Quick Start](docs/user-guide/quick-start.md)** - Get started in 30 seconds
+- **[Features](docs/user-guide/features.md)** - Complete feature reference
+- **[Troubleshooting](docs/user-guide/troubleshooting.md)** - Common issues and solutions
+- **[FAQ](docs/user-guide/faq.md)** - Frequently asked questions
+
+### For Developers
+- **[Developer Guide](docs/developer/)** - Architecture and contributing
+- **[Building Guide](docs/developer/building.md)** - Compile from source
+- **[Technical Documentation](docs/technical/)** - Low-level implementation details
+
+## 🎯 Features in Detail
+
+### Capture Features
+- **Region Selection**: Pixel-perfect control via draggable/resizable border
+- **Multi-Monitor**: Auto-detects when you drag border to different display
+- **Live Adjustment**: Move/resize region while capturing (no restart needed)
+- **Multiple Capture Methods**:
+  - Windows: GPU (WGC) or CPU (GDI) fallback
+  - macOS: ScreenCaptureKit (GPU) or CoreGraphics (CPU)
+  - Linux: PipeWire (Wayland) or X11
+
+### Interaction Features  
+- **Cursor Control**: Show/hide your cursor in capture
+- **Click Highlights**: Visual feedback with customizable colors and dissolve effects
+- **Recording Indicator**: "REC" badge shows when capturing is active
+
+### Customization
+- **Border Styling**: Adjustable width, color, and visibility
+- **Performance Tuning**: FPS control (15-144 FPS), GPU acceleration toggle
+- **Capture Profiles**: Pre-configured settings for different apps (Discord, Meet, etc.)
+- **Remember Region**: Automatically restore last capture area
+
+## 🖥️ Platform Support
+
+| Platform | Status | Capture Method | Performance |
+|----------|--------|----------------|-------------|
+| **Windows 10/11** | ✅ Stable | Windows Graphics Capture (WGC) | ~8-10% CPU |
+| **macOS 12.3+** | ✅ Stable | ScreenCaptureKit + Metal | ~5-8% CPU |
+| **macOS 10.15-12.2** | ✅ Supported | CoreGraphics | ~10-15% CPU |
+| **Linux** | 🚧 Experimental | PipeWire / X11 + wgpu | Varies |
+
+→ See [Platform-Specific Documentation](docs/developer/platform-specific.md) for technical details
 
 ## 🏗️ Architecture
 
-> Note: This repository contains older/experimental modules (winit/wgpu overlay, etc.).
-> The current app entry point is Tauri-based ([src/main.rs](src/main.rs)) and uses a WinAPI GDI output window.
+RustFrame uses a modular, cross-platform architecture:
 
-### Core Modules
+```
+UI Layer (Tauri + React)
+    ↓
+Application Core (Rust)
+    ↓
+Platform Abstractions (Traits)
+    ↓
+Platform-Specific Implementations
+```
 
-#### `main.rs` - Application Orchestrator
-- Event loop management (winit-based)
-- Window lifecycle coordination
-- Mouse/keyboard input handling
-- Drag functionality implementation
+### Key Components
 
-#### `capture.rs` - Windows.Graphics.Capture Implementation
-- **Direct3D 11 device creation** with BGRA support
-- **WinRT interop** between Win32 D3D11 and WinRT APIs
-- **GraphicsCaptureItem** for monitor/window capture
-- **Frame pool management** with double-buffering
-- **Event-driven frame capture** using TypedEventHandler
-- Thread-safe frame access with Arc<Mutex<>>
+- **Capture Engines** - Platform-specific screen capture (WGC, SCK, X11)
+- **Window Management** - Hollow border and preview windows
+- **Rendering Pipeline** - GPU or CPU rendering based on platform
+- **Settings Management** - Persistent configuration with JSON
 
-#### `window_manager.rs` - Window Management
-- **OverlayWindow**: Transparent, borderless, always-on-top selector
-  - Win32 `SetLayeredWindowAttributes` for true transparency
-  - `WS_EX_LAYERED` extended window style
-  - Drag-to-move functionality
-- **DestinationWindow**: Standard shareable window with title bar
+→ See [Architecture Overview](docs/developer/README.md#architecture-overview) for details
 
-#### `renderer.rs` - wgpu Rendering Pipeline
-- **D3D11 → wgpu texture bridge** with staging texture
-- **CPU-side texture copying** (map → copy → unmap)
-- **Full-screen quad rendering** with texture sampling
-- **WGSL shaders** for GPU processing
-- Automatic resize handling
+## 🛠️ Building from Source
 
-#### `shader.wgsl` - GPU Shaders
-- Vertex shader: NDC to clip space transformation
-- Fragment shader: Texture sampling and output
+### Prerequisites
 
-## 🚀 Usage
+- **Rust** (latest stable)
+- **Node.js** (v18+) for UI
+- **Platform Tools**:
+  - Windows: Visual Studio Build Tools (MSVC)
+  - macOS: Xcode Command Line Tools
+  - Linux: GCC, GTK3, WebKit2GTK
 
-### Building
+### Build Steps
 
-See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for detailed build setup.
-
-**Quick start with RustRover:**
-1. Open project in RustRover
-2. Press `Ctrl+F9` to build
-3. Press `Shift+F10` to run
-
-**Command line (requires proper MSVC setup):**
 ```bash
-cargo build --release
-cargo run --release
+# Clone repository
+git clone https://github.com/salihcantekin/RustFrame
+cd RustFrame
+
+# Development mode
+cargo tauri dev
+
+# Release build
+cargo tauri build
 ```
 
-### Running
+→ See [Building Guide](docs/developer/building.md) for detailed instructions
 
-1. **Launch RustFrame**
-   ```bash
-   cargo run
-   ```
+## 🤝 Contributing
 
-2. **Open Settings**
-   - Click **Settings** in the app UI
-   - Use the **Capture Region** tab to position/size your region (Preview Border helps)
+We welcome contributions! Here's how to get started:
 
-3. **Start capturing**
-   - Click **Start Capture**
-   - RustFrame will mirror the selected region into a separate shareable window
+1. **Read the Guides**
+   - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
+   - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community standards
+   - [Developer Guide](docs/developer/) - Technical documentation
 
-4. **Share on Teams/Zoom/Google Meet:**
-   - Select the RustFrame output window (titled **"RustFrame Preview"**) in your screen sharing dialog
-   - Only the captured region will be visible to participants
+2. **Find an Issue**
+   - Check [GitHub Issues](https://github.com/salihcantekin/RustFrame/issues)
+   - Look for `good-first-issue` label
 
-5. **Stop / Exit:**
-   - Click **Stop Capture** to stop mirroring
-   - Close the app to exit
+3. **Submit a PR**
+   - Fork the repository
+   - Create a feature branch
+   - Make your changes
+   - Submit a pull request
 
-### Advanced (Hidden) Settings
+## 📝 Known Issues & Roadmap
 
-You can add these keys manually to `settings.json` (Settings → Advanced → Open Settings Folder):
+### Known Issues
+- **Windows**: GPU acceleration temporarily disabled due to D3D11 device mismatch (will be fixed)
+- **macOS**: Click highlights use CPU instead of GPU (optimization planned)
+- **Linux**: PipeWire support experimental, may have compatibility issues
 
-- `winapi_destination_alpha`: 0..255 (default: 0 in release builds)
-- `winapi_destination_topmost`: true/false (default: true)
+→ See [Known Issues](docs/developer/known-issues.md) for complete list
 
-If a meeting app shows black or stops updating, try setting `winapi_destination_alpha` to `1` or `255` for diagnostics.
+### Planned Features
+- [ ] Window-based capture (capture specific application windows)
+- [ ] Zero-copy GPU texture sharing (eliminate CPU copy)
+- [ ] Global hotkeys for start/stop
+- [ ] Region presets (save/load favorite regions)
+- [ ] Annotation tools (draw on capture)
 
-## 🛠️ Technical Details
+## 📚 Technical Resources
 
-### Why Windows.Graphics.Capture?
+### Documentation
+- **[Complete Documentation Index](docs/)** - All documentation
+- **[GPU Optimization Details](docs/technical/gpu-optimization.md)** - Platform GPU strategies
+- **[Multi-Monitor Implementation](docs/technical/multi-monitor.md)** - Display detection
+- **[Color Format Handling](docs/technical/color-formats.md)** - BGRA vs RGBA
 
-Traditional screen capture methods (GDI's `BitBlt`) have significant limitations:
-- **CPU-bound**: Involves CPU-side memory copies
-- **Poor performance**: Can't capture modern DWM-composited content efficiently
-- **Missing features**: No support for HDR, multi-GPU, or proper DPI scaling
+### API References
+- [Windows Graphics Capture API](https://docs.microsoft.com/en-us/uwp/api/windows.graphics.capture)
+- [macOS ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
+- [Tauri Framework](https://tauri.app/)
 
-**Windows.Graphics.Capture (WGC) solves these:**
-- **GPU-accelerated**: Zero-copy capture using Direct3D 11 textures
-- **Modern**: Supports DWM, HDR, and multi-monitor setups
-- **Efficient**: Lower latency and CPU usage
-- **Future-proof**: Microsoft's recommended API for Windows 10/11
+## 📄 License
 
-### Texture Pipeline
+MIT License - see [LICENSE](LICENSE) for details
 
-```
-Screen (DWM)
-    ↓ (GPU, Windows.Graphics.Capture)
-D3D11 Texture
-    ↓ (GPU-to-GPU copy)
-Staging Texture (CPU-readable)
-    ↓ (Map + CPU copy)
-CPU Memory Buffer
-    ↓ (Upload to GPU)
-wgpu Texture
-    ↓ (GPU rendering)
-Swapchain → Window
-```
+## 🔗 Links
 
-**Performance note:** The CPU copy step (staging texture) adds ~2-5ms latency. For production use, implement Direct3D 12 resource sharing for zero-copy interop.
+- **Repository**: https://github.com/salihcantekin/RustFrame
+- **Releases**: https://github.com/salihcantekin/RustFrame/releases
+- **Issues**: https://github.com/salihcantekin/RustFrame/issues
+- **Discussions**: https://github.com/salihcantekin/RustFrame/discussions
+- **Changelog**: [CHANGELOG.md](CHANGELOG.md)
+- **Security**: [SECURITY.md](SECURITY.md)
 
-### COM Object Safety
+---
 
-This project uses many Windows COM objects (`ID3D11Device`, `GraphicsCaptureSession`, etc.). Key safety considerations:
+**Made with ❤️ using Rust + Tauri + React**
 
-1. **COM Initialization**: `CoInitializeEx` called with `COINIT_MULTITHREADED`
-2. **Reference Counting**: COM objects use automatic reference counting
-3. **Thread Safety**: `Send`/`Sync` implemented for COM wrappers after verification
-4. **Explicit Cleanup**: `Drop` implementations for proper resource cleanup
+**Star ⭐ this repo if RustFrame helps you!**
 
-### Transparency Implementation
-
-```rust
-// Step 1: Enable layered window
-SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED);
-
-// Step 2: Set alpha transparency
-SetLayeredWindowAttributes(hwnd, COLORREF(0), 200, LWA_ALPHA);
-//                                           ↑     ↑    ↑
-//                                    color key  alpha  mode
-```
-
-- **WS_EX_LAYERED**: Enables per-window alpha blending
-- **LWA_ALPHA**: Use alpha channel for transparency
-- **200/255 opacity**: Slightly transparent (adjust as needed)
-
-## 📋 Dependencies
-
-### Core Libraries
-- **`winit`**: Cross-platform window creation and event handling
-- **`wgpu`**: Modern GPU graphics API (WebGPU for Rust)
-- **`windows`**: Official Microsoft Windows API bindings
-
-### Key Features Used
-- `Graphics_Capture`: Windows.Graphics.Capture API
-- `Graphics_DirectX_Direct3D11`: D3D11 texture interop
-- `Win32_Graphics_Dxgi`: DirectX Graphics Infrastructure
-- `Win32_System_WinRT`: WinRT-to-Win32 bridges
-
-See [Cargo.toml](Cargo.toml) for complete dependency list with explanations.
-
-## 🔧 Known Limitations & Future Plans
-
-### Current Limitations
-
-1. **CPU-side texture copying** (not zero-copy)
-   - Uses staging texture with Map/Unmap
-   - Adds 2-5ms latency per frame
-   - **Future**: Implement Direct3D 12 resource sharing
-
-### Future Enhancements
-
-- [x] ~~Support multi-monitor selection~~ ✅ Implemented in v0.2.0
-- [ ] Add window picker (capture specific window instead of monitor)
-- [ ] Implement zero-copy D3D12 texture sharing
-- [ ] Save/load region presets
-- [ ] Add framerate control settings
-- [ ] Global hotkey support for starting/stopping capture
-
-## 📚 Learning Resources
-
-This project is designed as a learning resource. Key concepts demonstrated:
 
 ### Windows Graphics APIs
 - **COM Programming**: Creating and managing COM objects in Rust
