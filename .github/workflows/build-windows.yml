@@ -35,27 +35,44 @@ jobs:
           $version = "${{ github.event.inputs.version }}"
           Write-Host "Updating version to: $version"
           
-          # Update Cargo.toml - find the FIRST version line (package version)
-          $cargoContent = Get-Content Cargo.toml -Raw
-          # Only update the first occurrence (package version)
-          $cargoContent = $cargoContent -replace '(?m)^version\s*=\s*"[^"]*"', "version = `"$version`"" -replace '(?m)^(version\s*=\s*"[^"]*"\r?\n.*?)^version\s*=\s*"[^"]*"', "`$1version = `"$version`""
-          # Actually, let's be more precise - only update within [package] section
-          if ($cargoContent -match '(?s)(\[package\][^\[]*version\s*=\s*")[^"]*(")') {
-              $cargoContent = $cargoContent -replace '(?s)(\[package\][^\[]*version\s*=\s*")[^"]*(")', "`${1}$version`$2"
+          # Update Cargo.toml - update the first version = line after [package]
+          $cargoLines = Get-Content Cargo.toml
+          $inPackageSection = $false
+          $versionUpdated = $false
+          
+          for ($i = 0; $i -lt $cargoLines.Count; $i++) {
+              if ($cargoLines[$i] -match '^\[package\]') {
+                  $inPackageSection = $true
+                  Write-Host "Found [package] section at line $($i+1)"
+              }
+              elseif ($cargoLines[$i] -match '^\[') {
+                  $inPackageSection = $false
+              }
+              elseif ($inPackageSection -and $cargoLines[$i] -match '^version\s*=\s*"[^"]*"' -and -not $versionUpdated) {
+                  Write-Host "Found version line at line $($i+1): $($cargoLines[$i])"
+                  $cargoLines[$i] = "version = `"$version`""
+                  Write-Host "Updated to: $($cargoLines[$i])"
+                  $versionUpdated = $true
+              }
           }
-          $cargoContent | Set-Content Cargo.toml -NoNewline
+          
+          $cargoLines | Set-Content Cargo.toml
           Write-Host "[OK] Updated Cargo.toml"
           
           # Verify the change
           Write-Host "Verifying Cargo.toml version..."
           $verifyContent = Get-Content Cargo.toml -Raw
-          if ($verifyContent -match '\[package\][^\[]*version\s*=\s*"([^"]*)"') {
+          if ($verifyContent -match '(?m)^\[package\][\s\S]*?^version\s*=\s*"([^"]*)"') {
               $foundVersion = $matches[1]
               Write-Host "Found version in Cargo.toml: $foundVersion"
               if ($foundVersion -ne $version) {
-                  Write-Error "Version mismatch! Expected $version but found $foundVersion"
+                  Write-Host "✗ ERROR: Version not found in Cargo.toml!"
+                  Write-Host "version = `"$foundVersion`""
                   exit 1
               }
+          } else {
+              Write-Host "✗ ERROR: Could not find version in [package] section!"
+              exit 1
           }
           
           # Update package.json
