@@ -19,7 +19,9 @@
     "active": true,
     "targets": ["msi", "nsis", "app"],
     "icon": [
-      "icons/icon.ico"
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
     ],
     "windows": {
       "certificateThumbprint": null,

@@ -108,6 +108,40 @@ impl SingleInstanceLock {
         use objc::{class, msg_send, sel, sel_impl};
         use objc::runtime::Object;
         
+        // Strategy 1: Use AppleScript (most reliable for bringing app to front)
+        if let Some(pid) = Self::read_existing_pid() {
+            // AppleScript to activate the process by PID
+            let script = format!(
+                r#"tell application "System Events"
+                    set frontmost of first process whose unix id is {} to true
+                end tell"#,
+                pid
+            );
+            
+            let output = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .output();
+            
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        tracing::info!("Successfully activated existing instance via AppleScript (PID: {})", pid);
+                        return;
+                    } else {
+                        let stderr = String::from_utf8_lossy(&result.stderr);
+                        tracing::warn!("AppleScript activation failed: {}", stderr);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to execute osascript: {}", e);
+                }
+            }
+        }
+        
+        // Strategy 2: Fall back to NSWorkspace approach
+        tracing::debug!("Falling back to NSWorkspace activation...");
+        
         unsafe {
             // Get shared workspace
             let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
@@ -115,8 +149,6 @@ impl SingleInstanceLock {
             // Get all running applications
             let running_apps: *mut Object = msg_send![workspace, runningApplications];
             let count: usize = msg_send![running_apps, count];
-            
-            tracing::debug!("Searching through {} running applications", count);
             
             // Search for RustFrame in running applications
             for i in 0..count {
@@ -132,12 +164,21 @@ impl SingleInstanceLock {
                         
                         // Check if this is our app (by bundle identifier from tauri.conf.json)
                         if bundle_rust == "com.salihcantekin.rustframe" {
-                            tracing::info!("Found existing RustFrame application (bundle: {}), activating...", bundle_rust);
+                            tracing::info!("Found existing RustFrame by bundle ID, activating...");
                             
                             // Activate the application with all windows
-                            let options = NSApplicationActivationOptions::NSApplicationActivateAllWindows 
-                                        | NSApplicationActivationOptions::NSApplicationActivateIgnoringOtherApps;
+                            // NSApplicationActivateAllWindows (1 << 0) | NSApplicationActivateIgnoringOtherApps (1 << 1)
+                            let options: u64 = (1 << 0) | (1 << 1);
                             let _: () = msg_send![app, activateWithOptions: options];
+                            
+                            // Also try NSWorkspace launch
+                            let null_desc: *mut Object = std::ptr::null_mut();
+                            let null_ident: *mut *mut Object = std::ptr::null_mut();
+                            let _: bool = msg_send![workspace, 
+                                launchAppWithBundleIdentifier: bundle_id
+                                options: 0u32
+                                additionalEventParamDescriptor: null_desc
+                                launchIdentifier: null_ident];
                             
                             return;
                         }
@@ -153,8 +194,8 @@ impl SingleInstanceLock {
                         if name_rust.contains("RustFrame") || name_rust.contains("rustframe") {
                             tracing::info!("Found existing RustFrame by name, activating...");
                             
-                            let options = NSApplicationActivationOptions::NSApplicationActivateAllWindows 
-                                        | NSApplicationActivationOptions::NSApplicationActivateIgnoringOtherApps;
+                            // Activate with options
+                            let options: u64 = (1 << 0) | (1 << 1);
                             let _: () = msg_send![app, activateWithOptions: options];
                             
                             return;
@@ -205,6 +246,7 @@ impl SingleInstanceLock {
     fn acquire_unix() -> Result<Self> {
         use std::fs::OpenOptions;
         use std::os::unix::fs::OpenOptionsExt;
+        use std::io::{Write, Seek, SeekFrom};
         
         // Get lock file path in user's config directory
         let lock_path = Self::get_lock_file_path()?;
@@ -216,7 +258,8 @@ impl SingleInstanceLock {
         }
         
         // Open or create lock file
-        let lock_file = OpenOptions::new()
+        let mut lock_file = OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
             .mode(0o644)
@@ -254,18 +297,30 @@ impl SingleInstanceLock {
             }
         }
         
-        // Write PID to lock file
-        use std::io::Write;
+        // Truncate and write PID to lock file
+        lock_file.set_len(0).context("Failed to truncate lock file")?;
+        lock_file.seek(SeekFrom::Start(0)).context("Failed to seek lock file")?;
         let pid = std::process::id();
-        let mut file_ref = &lock_file;
-        write!(file_ref, "{}", pid)
+        write!(lock_file, "{}", pid)
             .context("Failed to write PID to lock file")?;
+        lock_file.flush().context("Failed to flush lock file")?;
         
-        tracing::info!("Single instance lock acquired (Unix file lock) at {:?}", lock_path);
+        tracing::info!("Single instance lock acquired (Unix file lock) at {:?}, PID: {}", lock_path, pid);
         
         Ok(Self {
             _lock_file: lock_file,
         })
+    }
+    
+    #[cfg(not(windows))]
+    fn read_existing_pid() -> Option<u32> {
+        use std::io::Read;
+        
+        let lock_path = Self::get_lock_file_path().ok()?;
+        let mut file = std::fs::File::open(&lock_path).ok()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        contents.trim().parse::<u32>().ok()
     }
     
     #[cfg(not(windows))]

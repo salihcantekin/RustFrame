@@ -842,16 +842,21 @@ impl MacOSCaptureEngine {
     /// Detect which display contains the given point and return its bounds
     #[cfg(target_os = "macos")]
     fn get_display_for_point(x: i32, y: i32) -> Option<(i32, i32, u32, u32)> {
-        use core_graphics::display::{CGDisplay, CGPoint};
+        use core_graphics::display::{CGDisplay, CGRect};
+        use core_graphics::geometry::{CGPoint, CGSize};
         
-        let point = CGPoint::new(x as f64, y as f64);
+        // Create a 1x1 rect at the point to query
+        let rect = CGRect::new(
+            &CGPoint::new(x as f64, y as f64),
+            &CGSize::new(1.0, 1.0)
+        );
         let display_count = 1;
         let mut display_id: u32 = 0;
         
         unsafe {
-            // Get display at point
-            if core_graphics::display::CGGetDisplaysWithPoint(
-                point,
+            // Get display at point (using 1x1 rect)
+            if core_graphics::display::CGGetDisplaysWithRect(
+                rect,
                 display_count,
                 &mut display_id,
                 std::ptr::null_mut()

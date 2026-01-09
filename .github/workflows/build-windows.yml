@@ -132,7 +132,6 @@ jobs:
           Copy-Item target/release/rustframe.exe dist/
           Copy-Item README.md dist/
           Copy-Item LICENSE dist/
-          Copy-Item QUICK_START.md dist/
         shell: powershell
       
       - name: Create ZIP archive
@@ -198,7 +197,7 @@ jobs:
             
             ### Notes
             - First run may require Windows Defender approval
-            - See QUICK_START.md for detailed instructions
+            - See [Documentation](https://github.com/salihcantekin/RustFrameApp/tree/main/docs) for detailed instructions
           files: RustFrame-Windows-x64-*.zip
           draft: false
           prerelease: false

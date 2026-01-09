@@ -212,7 +212,6 @@ jobs:
           cp -r RustFrame.app dist/
           cp README.md dist/
           cp LICENSE dist/
-          cp QUICK_START.md dist/
       
       - name: Create ZIP archive
         run: |
@@ -277,7 +276,7 @@ jobs:
             
             ### Notes
             - Universal binary supports both Apple Silicon and Intel Macs
-            - See QUICK_START.md for detailed instructions
+            - See [Documentation](https://github.com/salihcantekin/RustFrameApp/tree/main/docs) for detailed instructions
           files: RustFrame-macOS-*.zip
           draft: false
           prerelease: false

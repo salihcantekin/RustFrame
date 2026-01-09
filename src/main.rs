@@ -1076,8 +1076,8 @@ fn show_preview_border(
         // Capture is active - switch the capture border to preview mode
         // This makes it draggable from interior while maintaining capture
         // Use try_lock to prevent deadlock
-        if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
-            if let Some(ref border) = *border_lock {
+        if let Ok(mut border_lock) = HOLLOW_BORDER.try_lock() {
+            if let Some(ref mut border) = *border_lock {
                 border.set_preview_mode();
                 // Update position/size if different from current
                 let (cur_x, cur_y, cur_w, cur_h) = border.get_rect();
@@ -1123,8 +1123,8 @@ fn hide_preview_border(state: State<'_, AppState>) -> Result<(), String> {
     
     if is_capturing {
         // Use try_lock with timeout to prevent deadlock
-        if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
-            if let Some(ref border) = *border_lock {
+        if let Ok(mut border_lock) = HOLLOW_BORDER.try_lock() {
+            if let Some(ref mut border) = *border_lock {
                 border.set_capture_mode();
                 return Ok(());
             }
@@ -1653,15 +1653,20 @@ async fn start_capture(
                         if let Some(macos_eng) = eng.as_any().downcast_ref::<rustframe_capture::capture::MacOSCaptureEngine>() {
                             let current_origin = macos_eng.get_monitor_origin();
                             
-                            // Use CGGetDisplaysWithPoint to find current display
-                            use core_graphics::display::{CGDisplay, CGPoint};
-                            let point = CGPoint::new(center_x as f64, center_y as f64);
+                            // Use CGGetDisplaysWithRect to find current display (using 1x1 rect at point)
+                            use core_graphics::display::{CGDisplay, CGRect};
+                            use core_graphics::geometry::{CGPoint, CGSize};
+                            
+                            let rect = CGRect::new(
+                                &CGPoint::new(center_x as f64, center_y as f64),
+                                &CGSize::new(1.0, 1.0)
+                            );
                             let display_count = 1;
                             let mut display_id: u32 = 0;
                             
                             let changed = unsafe {
-                                if core_graphics::display::CGGetDisplaysWithPoint(
-                                    point,
+                                if core_graphics::display::CGGetDisplaysWithRect(
+                                    rect,
                                     display_count,
                                     &mut display_id,
                                     std::ptr::null_mut()
@@ -1783,6 +1788,7 @@ async fn start_capture(
 
     // Register callback for live border movement (fires during drag/resize)
     // This keeps REC indicator in sync with border while dragging
+    #[cfg(target_os = "windows")]
     {
         use crate::hollow_border::set_border_live_move_callback;
         let border_w = settings.border_width;

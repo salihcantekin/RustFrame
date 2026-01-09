@@ -123,22 +123,15 @@ jobs:
           # Create release directory
           New-Item -ItemType Directory -Force -Path "release-package"
           
-          # Copy the executable
+          # Copy the executable (main file - always required)
           Copy-Item "target/release/RustFrame.exe" -Destination "release-package/"
           
-          # Copy manifest if exists
-          if (Test-Path "RustFrame.exe.manifest") {
-            Copy-Item "RustFrame.exe.manifest" -Destination "release-package/"
-          }
-          
-          # Copy README
+          # Copy documentation files (if they exist)
           if (Test-Path "README.md") {
             Copy-Item "README.md" -Destination "release-package/"
           }
-          
-          # Copy QUICK_START if exists
-          if (Test-Path "QUICK_START.md") {
-            Copy-Item "QUICK_START.md" -Destination "release-package/"
+          if (Test-Path "LICENSE") {
+            Copy-Item "LICENSE" -Destination "release-package/"
           }
           
           # Create ZIP archive
@@ -151,10 +144,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RustFrame-${{ steps.compute.outputs.version_input }}-windows-x64
-          path: |
-            release-package/RustFrame.exe
-            release-package/README.md
-            release-package/QUICK_START.md
+          path: release-package/*
           retention-days: 30
 
       - name: Prepare release notes (from changelog if available)
