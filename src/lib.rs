@@ -5,6 +5,9 @@
 // Configuration constants
 pub mod config;
 
+// Platform-agnostic utilities
+pub mod platform_utils;
+
 // Only include modules that don't depend on egui
 pub mod capture;
 pub mod display_info;
