@@ -241,6 +241,7 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
             stride: row_bytes as u32,
             offset_x: x,
             offset_y: y,
+            gpu_texture: None,
         })
     }
 
@@ -545,6 +546,7 @@ impl WindowsCaptureEngine {
             stride: row_bytes as u32,
             offset_x: clipped_left,
             offset_y: clipped_top,
+            gpu_texture: None,
         })
     }
 }

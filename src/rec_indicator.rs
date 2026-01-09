@@ -4,6 +4,8 @@
 use crate::traits::RecordingIndicator;
 use lazy_static::lazy_static;
 use log::info;
+use rustframe_capture::config::rec_indicator::*;
+use rustframe_capture::config::timing::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -72,7 +74,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 lazy_static! {
     static ref REC_HWND: Mutex<isize> = Mutex::new(0);
     static ref REC_VISIBLE: AtomicBool = AtomicBool::new(false);
-    static ref REC_SIZE: Mutex<String> = Mutex::new("medium".to_string());
+    static ref REC_SIZE: Mutex<String> = Mutex::new(DEFAULT_SIZE.to_string());
     static ref REC_POSITION: Mutex<(i32, i32)> = Mutex::new((0, 0)); // Top-right position
 }
 
@@ -105,8 +107,8 @@ impl RecIndicator {
         });
 
         // Wait for window to be created
-        for _ in 0..50 {
-            thread::sleep(std::time::Duration::from_millis(10));
+        for _ in 0..WINDOW_CREATION_TIMEOUT_ITERATIONS {
+            thread::sleep(std::time::Duration::from_millis(WINDOW_CREATION_POLL_INTERVAL_MS));
             if let Ok(hwnd_lock) = REC_HWND.lock() {
                 if *hwnd_lock != 0 {
                     break;
@@ -348,6 +350,7 @@ impl RecIndicator {
         let (width, height) = get_indicator_dimensions();
 
         // Position in top-right corner, inside the border
+        // Note: These calculations are in logical points, will be scaled for Windows
         let pos_x = region_x + region_width - width - border_width - 5;
         let pos_y = region_y + border_width + 5;
 
@@ -356,20 +359,36 @@ impl RecIndicator {
         }
 
         #[cfg(windows)]
-        if let Ok(hwnd_lock) = REC_HWND.lock() {
-            let hwnd_val = *hwnd_lock;
-            if hwnd_val != 0 {
-                unsafe {
-                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                    let _ = SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOPMOST),
-                        pos_x,
-                        pos_y,
-                        width,
-                        height,
-                        SWP_NOACTIVATE,
-                    );
+        {
+            // Scale position and dimensions for DPI on Windows
+            use rustframe_capture::display_info;
+            let display = display_info::get();
+            let (pos_x_scaled, pos_y_scaled, width_scaled, height_scaled) = if display.initialized {
+                (
+                    display.points_to_pixels(pos_x as f64),
+                    display.points_to_pixels(pos_y as f64),
+                    display.points_to_pixels(width as f64),
+                    display.points_to_pixels(height as f64)
+                )
+            } else {
+                (pos_x, pos_y, width, height)
+            };
+            
+            if let Ok(hwnd_lock) = REC_HWND.lock() {
+                let hwnd_val = *hwnd_lock;
+                if hwnd_val != 0 {
+                    unsafe {
+                        let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                        let _ = SetWindowPos(
+                            hwnd,
+                            Some(HWND_TOPMOST),
+                            pos_x_scaled,
+                            pos_y_scaled,
+                            width_scaled,
+                            height_scaled,
+                            SWP_NOACTIVATE,
+                        );
+                    }
                 }
             }
         }
@@ -490,24 +509,53 @@ fn get_indicator_dimensions() -> (i32, i32) {
     let size = REC_SIZE
         .lock()
         .map(|s| s.clone())
-        .unwrap_or("medium".to_string());
-    match size.as_str() {
-        "small" => (50, 18),
-        "large" => (90, 30),
-        _ => (70, 24), // medium
+        .unwrap_or(DEFAULT_SIZE.to_string());
+    
+    let (width_points, height_points) = match size.as_str() {
+        "small" => SIZE_SMALL,
+        "large" => SIZE_LARGE,
+        _ => SIZE_MEDIUM, // medium (default)
+    };
+    
+    // Scale for DPI on Windows (macOS handles this automatically via NSWindow)
+    #[cfg(target_os = "windows")]
+    {
+        use rustframe_capture::display_info;
+        let display = display_info::get();
+        if display.initialized {
+            return (
+                display.points_to_pixels(width_points as f64),
+                display.points_to_pixels(height_points as f64)
+            );
+        }
     }
+    
+    (width_points, height_points)
 }
 
 fn get_font_size() -> i32 {
     let size = REC_SIZE
         .lock()
         .map(|s| s.clone())
-        .unwrap_or("medium".to_string());
-    match size.as_str() {
+        .unwrap_or(DEFAULT_SIZE.to_string());
+    
+    let font_size_points = match size.as_str() {
         "small" => 12,
         "large" => 20,
-        _ => 16, // medium
+        _ => 16, // medium (default)
+    };
+    
+    // Scale for DPI on Windows (macOS handles this automatically via NSFont)
+    #[cfg(target_os = "windows")]
+    {
+        use rustframe_capture::display_info;
+        let display = display_info::get();
+        if display.initialized {
+            return display.points_to_pixels(font_size_points as f64);
+        }
     }
+    
+    font_size_points
 }
 
 #[cfg(windows)]
@@ -570,7 +618,7 @@ fn run_rec_thread(stop_flag: Arc<AtomicBool>) {
         let _ = SetLayeredWindowAttributes(
             hwnd,
             COLORREF(0xFF00FF), // Magenta as transparency key
-            255,
+            BACKGROUND_ALPHA,
             LWA_COLORKEY,
         );
 

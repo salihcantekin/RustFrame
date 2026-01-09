@@ -5,6 +5,8 @@
 //! messages for other WinAPI windows created in the main thread.
 
 use crate::traits::PreviewWindow;
+use rustframe_capture::config::capture::DESTINATION_WINDOW_TIMER_MS;
+use rustframe_capture::display_info;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
     GetMessageW, GetSystemMetrics, GetWindowRect, KillTimer, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetTimer, SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, SM_CXSCREEN,
-    SWP_NOACTIVATE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER,
     WM_TIMER, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_VISIBLE,
@@ -59,10 +61,20 @@ struct FrameData {
 
 const CLASS_NAME: PCWSTR = w!("RustFrameDestination");
 const TIMER_ID: usize = 1;
-const TIMER_INTERVAL_MS: u32 = 16; // ~60 FPS for repaint
+const TIMER_INTERVAL_MS: u32 = DESTINATION_WINDOW_TIMER_MS; // ~60 FPS for repaint
 const WM_FRAME_UPDATE: u32 = WM_USER + 1;
 
 static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Convert points to pixels using current DPI scale
+fn points_to_pixels(points: u32) -> u32 {
+    let display = display_info::get();
+    if display.initialized {
+        display.points_to_pixels(points as f64) as u32
+    } else {
+        points // Fallback: assume 1.0 scale
+    }
+}
 
 /// Pure WinAPI destination window - runs in its own thread with message loop
 pub struct DestinationWindow {
@@ -108,9 +120,13 @@ unsafe impl Sync for DestinationWindow {}
 impl DestinationWindow {
     /// Create a new destination window in its own thread
     pub fn new(width: u32, height: u32, config: DestinationWindowConfig) -> Option<Self> {
+        // Scale dimensions for DPI (input is in logical points)
+        let width_pixels = points_to_pixels(width);
+        let height_pixels = points_to_pixels(height);
+        
         info!(
-            "Creating WinAPI destination window {}x{} in dedicated thread",
-            width, height
+            "Creating WinAPI destination window {}x{} points ({}x{} pixels) in dedicated thread",
+            width, height, width_pixels, height_pixels
         );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -118,7 +134,7 @@ impl DestinationWindow {
 
         // Spawn window thread - window will be created and message loop will run here
         let thread_handle = thread::spawn(move || {
-            run_window_thread(width, height, config, stop_flag_clone);
+            run_window_thread(width_pixels, height_pixels, config, stop_flag_clone);
         });
 
         // Wait for window to be created
@@ -564,11 +580,11 @@ impl PreviewWindow for DestinationWindow {
     }
     
     fn hwnd_value(&self) -> isize {
-        self.hwnd_value()
+        DEST_HWND.lock().map(|h| *h).unwrap_or(0)
     }
     
     fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
-        self.update_frame(data, width, height);
+        DestinationWindow::update_frame(self, data, width, height);
     }
     
     fn render(&mut self, _pixels: &[u8], _width: u32, _height: u32) {
@@ -578,10 +594,59 @@ impl PreviewWindow for DestinationWindow {
     }
     
     fn resize(&mut self, width: u32, height: u32) {
-        self.resize(width, height);
+        // Scale dimensions for DPI (input is in logical points)
+        let width_pixels = points_to_pixels(width);
+        let height_pixels = points_to_pixels(height);
+        
+        // Resize the destination window
+        if let Ok(hwnd_lock) = DEST_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        width_pixels as i32,
+                        height_pixels as i32,
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
     }
     
     fn set_pos(&mut self, x: i32, y: i32) {
-        self.set_pos(x, y);
+        // Scale coordinates for DPI (input is in logical points)
+        let display = display_info::get();
+        let (x_pixels, y_pixels) = if display.initialized {
+            (
+                display.points_to_pixels(x as f64),
+                display.points_to_pixels(y as f64)
+            )
+        } else {
+            (x, y)
+        };
+        
+        // Move the destination window
+        if let Ok(hwnd_lock) = DEST_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        x_pixels,
+                        y_pixels,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+        }
     }
 }

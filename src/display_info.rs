@@ -41,7 +41,7 @@
 
 use std::sync::{Arc, RwLock};
 use lazy_static::lazy_static;
-use log::{info, warn};
+use log::info;
 
 lazy_static! {
     /// Global display information singleton
@@ -210,25 +210,26 @@ pub fn initialize() -> anyhow::Result<()> {
 
 #[cfg(target_os = "windows")]
 pub fn initialize() -> anyhow::Result<()> {
+    use std::ptr::null_mut;
     use windows::Win32::Graphics::Gdi::{
         GetDC, GetDeviceCaps, ReleaseDC, 
-        LOGPIXELSX, HORZRES, VERTRES, HDC
+        LOGPIXELSX, HORZRES, VERTRES
     };
     use windows::Win32::Foundation::HWND;
     
     unsafe {
-        let hdc = GetDC(HWND(0));
-        if hdc.0 == 0 {
+        let hdc = GetDC(Some(HWND(null_mut())));
+        if hdc.0.is_null() {
             return Err(anyhow::anyhow!("Failed to get device context"));
         }
         
-        let dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+        let dpi = GetDeviceCaps(Some(hdc), LOGPIXELSX);
         let scale_factor = (dpi as f64 / 96.0).max(1.0); // 96 DPI is baseline, min 1.0
         
-        let width_pixels = GetDeviceCaps(hdc, HORZRES) as u32;
-        let height_pixels = GetDeviceCaps(hdc, VERTRES) as u32;
+        let width_pixels = GetDeviceCaps(Some(hdc), HORZRES) as u32;
+        let height_pixels = GetDeviceCaps(Some(hdc), VERTRES) as u32;
         
-        let _ = ReleaseDC(HWND(0), hdc);
+        let _ = ReleaseDC(Some(HWND(null_mut())), hdc);
         
         let width_points = width_pixels as f64 / scale_factor;
         let height_points = height_pixels as f64 / scale_factor;

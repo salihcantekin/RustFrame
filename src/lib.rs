@@ -2,6 +2,9 @@
 //!
 //! This library provides the core functionality for screen capture and rendering.
 
+// Configuration constants
+pub mod config;
+
 // Only include modules that don't depend on egui
 pub mod capture;
 pub mod display_info;

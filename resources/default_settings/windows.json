@@ -1,5 +1,5 @@
 {
-  "show_cursor": true,
+  "show_cursor": false,
   "capture_clicks": false,
   "click_highlight_color": [255, 255, 0, 180],
   "click_dissolve_ms": 300,

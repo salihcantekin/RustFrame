@@ -5,6 +5,9 @@
 //! Runs in its own thread with dedicated message loop.
 
 use crate::traits::BorderWindow;
+use rustframe_capture::config::window::*;
+use rustframe_capture::config::timing::*;
+use rustframe_capture::display_info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -30,11 +33,22 @@ lazy_static! {
     /// Global HWND for the hollow border (stored as isize for thread safety)
     static ref HOLLOW_HWND: Mutex<isize> = Mutex::new(0);
     /// Global rect for the hollow border - updated by window thread, read by render thread
-    static ref HOLLOW_RECT: Mutex<(i32, i32, i32, i32)> = Mutex::new((0, 0, 800, 600));
-    /// Border width
-    static ref BORDER_WIDTH: Mutex<i32> = Mutex::new(4);
+    static ref HOLLOW_RECT: Mutex<(i32, i32, i32, i32)> = Mutex::new(DEFAULT_REGION);
+    /// Border width (scaled for DPI)
+    static ref BORDER_WIDTH: Mutex<i32> = Mutex::new({
+        let display = display_info::get();
+        if display.initialized {
+            display.points_to_pixels(DEFAULT_BORDER_WIDTH as f64)
+        } else {
+            DEFAULT_BORDER_WIDTH
+        }
+    });
     /// Border color (BGR format)
-    static ref BORDER_COLOR: Mutex<u32> = Mutex::new(0x4080FF);
+    static ref BORDER_COLOR: Mutex<u32> = Mutex::new(DEFAULT_BORDER_COLOR);
+    /// Callback for border interaction completion (move/resize finished)
+    static ref BORDER_INTERACTION_COMPLETE_CALLBACK: Mutex<Option<Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>>> = Mutex::new(None);
+    /// Callback for live border movement (fires during drag/resize for REC indicator)
+    static ref BORDER_LIVE_MOVE_CALLBACK: Mutex<Option<Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>>> = Mutex::new(None);
 }
 
 // Global flag for ESC key pressed
@@ -43,11 +57,46 @@ static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
 /// Preview mode: interior is draggable, not click-through
 /// Capture mode: interior is click-through, only top edge drags
 static PREVIEW_MODE: AtomicBool = AtomicBool::new(true);
+/// Flag indicating border is being dragged/resized
+static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
 
 /// Check if ESC was pressed and reset the flag
 #[allow(dead_code)]
 pub fn was_esc_pressed() -> bool {
     ESC_PRESSED.swap(false, Ordering::SeqCst)
+}
+
+/// Check if border is currently being dragged or resized
+pub fn is_border_interacting() -> bool {
+    BORDER_INTERACTING.load(Ordering::SeqCst)
+}
+
+/// Check if HOLLOW_HWND is valid (non-zero)
+/// Used to ensure previous border window is fully cleaned up
+pub fn is_hollow_hwnd_valid() -> bool {
+    HOLLOW_HWND.lock().map(|h| *h != 0).unwrap_or(false)
+}
+
+/// Register callback to be notified when border drag/resize completes
+/// Fires only on mouse up - allows updating capture region after interaction
+pub fn set_border_interaction_complete_callback<F>(callback: F)
+where
+    F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
+{
+    if let Ok(mut cb) = BORDER_INTERACTION_COMPLETE_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Register callback for live border movement updates (fires during drag/resize)
+/// Used for REC indicator to follow border in real-time
+pub fn set_border_live_move_callback<F>(callback: F)
+where
+    F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
+{
+    if let Ok(mut cb) = BORDER_LIVE_MOVE_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
 }
 
 /// Hollow border window - runs in its own thread with message loop
@@ -271,7 +320,7 @@ impl HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA};
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA, ShowWindow, SW_HIDE, SW_SHOW};
                     
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                     
@@ -285,6 +334,10 @@ impl HollowBorder {
                     let h = win_rect.bottom - win_rect.top;
                     let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
                     apply_hollow_region(hwnd, w, h, border);
+                    
+                    // Force window refresh to apply transparency changes
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    let _ = ShowWindow(hwnd, SW_SHOW);
                     let _ = InvalidateRect(Some(hwnd), None, true);
                 }
             }
@@ -301,7 +354,7 @@ impl HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY};
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY, ShowWindow, SW_HIDE, SW_SHOW};
                     
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                     
@@ -314,6 +367,10 @@ impl HollowBorder {
                     let h = win_rect.bottom - win_rect.top;
                     let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
                     apply_hollow_region(hwnd, w, h, border);
+                    
+                    // Force window refresh to apply transparency changes
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    let _ = ShowWindow(hwnd, SW_SHOW);
                     let _ = InvalidateRect(Some(hwnd), None, true);
                 }
             }
@@ -328,47 +385,91 @@ impl BorderWindow for HollowBorder {
     }
 
     fn get_rect(&self) -> (i32, i32, i32, i32) {
-        self.get_rect()
+        HollowBorder::get_rect(self)
     }
 
     fn get_inner_rect(&self) -> (i32, i32, i32, i32) {
-        self.get_inner_rect()
+        HollowBorder::get_inner_rect(self)
     }
 
     fn update_rect(&self, x: i32, y: i32, width: i32, height: i32) {
-        self.update_rect(x, y, width, height)
+        HollowBorder::update_rect(self, x, y, width, height)
     }
 
     fn update_color(&self, color: u32) {
-        self.update_color(color)
+        HollowBorder::update_color(self, color)
     }
 
     fn update_style(&self, width: i32, color: u32) {
-        self.update_style(width, color)
+        HollowBorder::update_style(self, width, color)
     }
 
     fn hide(&self) {
-        self.hide()
+        HollowBorder::hide(self)
     }
 
     fn show(&self) {
-        self.show()
+        HollowBorder::show(self)
     }
 
     fn hwnd_value(&self) -> isize {
-        self.hwnd_value()
+        HollowBorder::hwnd_value(self)
     }
 
     fn set_capture_mode(&mut self) {
-        self.set_capture_mode()
+        // Set capture mode: interior is click-through, only edges/corners are interactive
+        PREVIEW_MODE.store(false, Ordering::SeqCst);
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Foundation::RECT;
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY};
+                    
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
+                    
+                    let mut win_rect = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut win_rect);
+                    let w = win_rect.right - win_rect.left;
+                    let h = win_rect.bottom - win_rect.top;
+                    let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+                    apply_hollow_region(hwnd, w, h, border);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
     }
 
     fn set_preview_mode(&mut self) {
-        self.set_preview_mode()
+        // Set preview mode: interior is semi-transparent and draggable
+        PREVIEW_MODE.store(true, Ordering::SeqCst);
+        if let Ok(hwnd_lock) = HOLLOW_HWND.lock() {
+            let hwnd_val = *hwnd_lock;
+            if hwnd_val != 0 {
+                unsafe {
+                    use windows::Win32::Foundation::RECT;
+                    use windows::Win32::Graphics::Gdi::InvalidateRect;
+                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA};
+                    
+                    let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+                    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
+                    
+                    let mut win_rect = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut win_rect);
+                    let w = win_rect.right - win_rect.left;
+                    let h = win_rect.bottom - win_rect.top;
+                    let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
+                    apply_hollow_region(hwnd, w, h, border);
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                }
+            }
+        }
     }
 
     fn was_esc_pressed() -> bool {
-        Self::was_esc_pressed()
+        was_esc_pressed()
     }
 
     fn stop(&mut self) {
@@ -579,7 +680,7 @@ unsafe extern "system" fn window_proc(
             // Fill background based on mode
             // Preview mode: dark gray overlay to show it's not click-through
             // Capture mode: green (color key) for transparency/click-through
-            let bg_color = if is_preview { 0x202020 } else { 0x00FF00 }; // Dark gray vs green
+            let bg_color = if is_preview { PREVIEW_BG_COLOR } else { CAPTURE_BG_COLOR }; // Dark gray vs green
             let bg_brush = CreateSolidBrush(COLORREF(bg_color));
             let _ = FillRect(hdc, &rect, bg_brush);
             let _ = DeleteObject(bg_brush.into());
@@ -761,42 +862,91 @@ unsafe extern "system" fn subclass_proc(
         if new_width > 0 && new_height > 0 {
             let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
             apply_hollow_region(hwnd, new_width, new_height, border);
+            
+            // Update global rect with new size
+            let mut win_rect = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut win_rect);
+            if let Ok(mut rect) = HOLLOW_RECT.lock() {
+                *rect = (win_rect.left, win_rect.top, new_width, new_height);
+            }
+            
+            // Call live move callback for REC indicator
+            if BORDER_INTERACTING.load(Ordering::SeqCst) {
+                if let Ok(cb_lock) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {
+                    if let Some(ref callback) = *cb_lock {
+                        callback(win_rect.left, win_rect.top, new_width, new_height);
+                    }
+                }
+            }
         }
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 
-    // Handle move - update global rect
+    // Handle move - update global rect and call live callback
     if msg == WM_MOVE {
         // Use GetWindowRect for consistency with other handlers
         let mut win_rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut win_rect);
+        
+        let width = win_rect.right - win_rect.left;
+        let height = win_rect.bottom - win_rect.top;
 
         if let Ok(mut rect) = HOLLOW_RECT.lock() {
             // Store window position directly (window = capture area)
             rect.0 = win_rect.left;
             rect.1 = win_rect.top;
-            // Keep existing width/height since WM_MOVE doesn't change size
+            rect.2 = width;
+            rect.3 = height;
         }
+        
+        // Call live move callback for REC indicator during drag
+        if BORDER_INTERACTING.load(Ordering::SeqCst) {
+            if let Ok(cb_lock) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {
+                if let Some(ref callback) = *cb_lock {
+                    callback(win_rect.left, win_rect.top, width, height);
+                }
+            }
+        }
+        
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 
-    // Handle resize completion - update global rect
+    // Handle start of move/resize - set interacting flag
+    if msg == WM_ENTERSIZEMOVE {
+        BORDER_INTERACTING.store(true, Ordering::SeqCst);
+        tracing::debug!("Border interaction started");
+        return DefSubclassProc(hwnd, msg, wparam, lparam);
+    }
+
+    // Handle resize completion - update global rect and call callback
     if msg == WM_EXITSIZEMOVE {
+        BORDER_INTERACTING.store(false, Ordering::SeqCst);
+        
         let mut win_rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut win_rect);
 
+        let (x, y, width, height) = (
+            win_rect.left,
+            win_rect.top,
+            win_rect.right - win_rect.left,
+            win_rect.bottom - win_rect.top,
+        );
+
         if let Ok(mut rect) = HOLLOW_RECT.lock() {
             // Store window rect directly (window = capture area)
-            *rect = (
-                win_rect.left,
-                win_rect.top,
-                win_rect.right - win_rect.left,
-                win_rect.bottom - win_rect.top,
-            );
+            *rect = (x, y, width, height);
         }
 
         let _ = InvalidateRect(Some(hwnd), None, true);
         tracing::debug!(rect = ?win_rect, "Hollow border resize complete");
+        
+        // Call the interaction complete callback to update capture region, destination window, etc.
+        if let Ok(cb_lock) = BORDER_INTERACTION_COMPLETE_CALLBACK.lock() {
+            if let Some(ref callback) = *cb_lock {
+                callback(x, y, width, height);
+            }
+        }
+        
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 

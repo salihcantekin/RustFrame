@@ -10,6 +10,7 @@ use tauri::State;
 
 // Import capture engine from library
 use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRect};
+use rustframe_capture::config;
 use rustframe_capture::display_info;
 
 // Import modules
@@ -24,6 +25,7 @@ mod traits; // Cross-platform trait definitions
 use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
 use rec_indicator::RecIndicator;
+use traits::PreviewWindow;
 
 // Global state for Windows (not thread-safe, but only accessed from commands)
 lazy_static! {
@@ -134,7 +136,7 @@ fn draw_click_highlight(
                 1.0 - (dist - inner_radius as f32) / (radius - inner_radius) as f32
             };
 
-            let final_alpha = (color[3] as f32 / 255.0) * alpha_factor * ring_alpha;
+            let final_alpha = config::colors::normalize_alpha(color[3]) * alpha_factor * ring_alpha;
 
             if final_alpha <= 0.0 {
                 continue;
@@ -327,7 +329,7 @@ fn default_log_to_file() -> bool {
 }
 
 fn default_log_retention_days() -> u32 {
-    30 // Keep logs for 30 days
+    config::capture::LOG_RETENTION_DAYS as u32
 }
 
 fn default_gpu_acceleration() -> bool {
@@ -337,15 +339,15 @@ fn default_gpu_acceleration() -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            show_cursor: true,
+            show_cursor: false, // Disabled by default to avoid double cursor in screen sharing
             capture_clicks: true, // Default to enabled for testing
-            click_highlight_color: [255, 255, 0, 180],
+            click_highlight_color: config::capture::DEFAULT_CLICK_HIGHLIGHT_COLOR,
             click_dissolve_ms: 300, // Reduced from 5000ms - 300ms is plenty for click feedback
             click_highlight_radius: 20,
             show_border: true,
             border_color: [255, 0, 0, 255],
-            border_width: 3,
-            target_fps: 60,
+            border_width: config::window::DEFAULT_BORDER_WIDTH as u32,
+            target_fps: config::capture::DEFAULT_TARGET_FPS,
             gpu_acceleration: true,
             capture_method: CaptureMethod::default(),
             preview_mode: PreviewMode::default(),
@@ -361,10 +363,10 @@ impl Default for Settings {
             remember_last_region: true,
             last_region: Some([100, 100, 600, 400]),
             show_rec_indicator: true,
-            rec_indicator_size: "medium".to_string(),
+            rec_indicator_size: config::rec_indicator::DEFAULT_SIZE.to_string(),
             log_level: "Error".to_string(),
             log_to_file: true,
-            log_retention_days: 30,
+            log_retention_days: config::capture::LOG_RETENTION_DAYS as u32,
         }
     }
 }
@@ -1053,12 +1055,43 @@ fn show_preview_border(
     height: i32,
     border_width: i32,
     border_color: u32,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Check if capture is active - if so, switch existing border to preview mode
+    // instead of creating a new one (they share global state)
+    let is_capturing = *state.is_capturing.lock().unwrap();
+    
+    if is_capturing {
+        // Capture is active - switch the capture border to preview mode
+        // This makes it draggable from interior while maintaining capture
+        // Use try_lock to prevent deadlock
+        if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
+            if let Some(ref border) = *border_lock {
+                border.set_preview_mode();
+                // Update position/size if different from current
+                let (cur_x, cur_y, cur_w, cur_h) = border.get_rect();
+                if cur_x != x || cur_y != y || cur_w != width || cur_h != height {
+                    border.update_rect(x, y, width, height);
+                }
+                border.update_style(border_width, border_color);
+                return Ok(());
+            }
+        } else {
+            tracing::warn!("Could not acquire HOLLOW_BORDER lock in show_preview_border");
+            return Err("Border is locked".to_string());
+        }
+        // Capture is active but no border found - this shouldn't happen
+        return Err("Capture is active but no border found".to_string());
+    }
+    
+    // No capture active - create a preview border
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
 
     // Close existing preview if any
     if preview.is_some() {
         *preview = None;
+        // Give time for cleanup
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     // Create new preview border
@@ -1073,10 +1106,28 @@ fn show_preview_border(
 }
 
 #[tauri::command]
-fn hide_preview_border() -> Result<(), String> {
+fn hide_preview_border(state: State<'_, AppState>) -> Result<(), String> {
+    // If capture is active, switch border back to capture mode
+    let is_capturing = *state.is_capturing.lock().unwrap();
+    
+    if is_capturing {
+        // Use try_lock with timeout to prevent deadlock
+        if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
+            if let Some(ref border) = *border_lock {
+                border.set_capture_mode();
+                return Ok(());
+            }
+        } else {
+            tracing::warn!("Could not acquire HOLLOW_BORDER lock in hide_preview_border");
+            return Err("Border is locked".to_string());
+        }
+    }
+    
+    // No capture active - hide the preview border
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
     
-    // Note: Preview border position is tracked by get_preview_border_rect()
+    // Reset preview mode flag so next border created starts fresh
+    // Note: This is important because PREVIEW_BORDER and HOLLOW_BORDER share global state
     // which is polled by frontend. Settings dialog saves position when user
     // confirms changes.
     
@@ -1128,6 +1179,51 @@ async fn start_capture(
         "Starting capture"
     );
     log::info!("Starting capture at ({}, {}) size {}x{}", x, y, width, height);
+    
+    // CRITICAL: Always close BOTH preview border and capture border first
+    // PREVIEW_BORDER and HOLLOW_BORDER share global state (HOLLOW_HWND, HOLLOW_RECT, etc.)
+    // and must be completely cleaned up before creating new border
+    {
+        tracing::info!("Cleaning up any existing borders before starting capture");
+        
+        // Close preview border first
+        let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
+        if preview.is_some() {
+            tracing::info!("Closing preview border");
+            *preview = None;
+        }
+        drop(preview); // Release lock explicitly
+        
+        // Close any existing capture border
+        let mut hollow = HOLLOW_BORDER.lock().map_err(|e| e.to_string())?;
+        if hollow.is_some() {
+            tracing::info!("Closing existing capture border");
+            *hollow = None;
+        }
+        drop(hollow); // Release lock explicitly
+        
+        // Give time for threads to fully clean up
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    
+    // Ensure HOLLOW_HWND is actually cleared (defensive check)
+    #[cfg(target_os = "windows")]
+    {
+        use crate::hollow_border::is_hollow_hwnd_valid;
+        let mut retries = 0;
+        while is_hollow_hwnd_valid() && retries < 15 {
+            tracing::debug!("Waiting for HOLLOW_HWND to be cleared (retry {})", retries);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            retries += 1;
+        }
+        if is_hollow_hwnd_valid() {
+            tracing::error!("HOLLOW_HWND still valid after {} retries - forcing cleanup", retries);
+            return Err("Failed to clean up previous border window".to_string());
+        }
+        if retries > 0 {
+            tracing::info!("HOLLOW_HWND cleared after {} retries", retries);
+        }
+    }
     
     // Clean up any previous capture session first (always, not just if capturing)
     
@@ -1419,7 +1515,6 @@ async fn start_capture(
     // Register callback for border interaction completion (mouseUp event)
     // Strategy: Pause capture during drag/resize, update everything once at the end
     // Benefits: ~40-45% CPU reduction during interaction (50% → 5-10%)
-    #[cfg(target_os = "macos")]
     {
         use crate::hollow_border::set_border_interaction_complete_callback;
         let engine_for_cb = state.capture_engine.clone();
@@ -1474,6 +1569,22 @@ async fn start_capture(
         });
     }
 
+    // Register callback for live border movement (fires during drag/resize)
+    // This keeps REC indicator in sync with border while dragging
+    {
+        use crate::hollow_border::set_border_live_move_callback;
+        let border_w = settings.border_width;
+        
+        set_border_live_move_callback(move |x, y, width, height| {
+            // Update REC indicator position in real-time during drag
+            if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
+                if let Some(ref rec) = *rec_lock {
+                    rec.update_position(x, y, width, border_w as i32);
+                }
+            }
+        });
+    }
+
     // Start frame rendering thread
     let engine_clone = state.capture_engine.clone();
     let settings_clone = state.settings.clone(); // Clone settings for GPU check
@@ -1499,10 +1610,7 @@ async fn start_capture(
             // PERFORMANCE OPTIMIZATION: Skip capture during border drag/resize
             // Reduces CPU from ~50% to ~5-10% during interaction
             // Border updates happen once on mouseUp event (see callback above)
-            #[cfg(target_os = "macos")]
             let is_interacting = crate::hollow_border::is_border_interacting();
-            #[cfg(not(target_os = "macos"))]
-            let is_interacting = false;
             
             if is_interacting {
                 // Skip frame capture and rendering during interaction
@@ -1617,12 +1725,9 @@ async fn start_capture(
             let elapsed = frame_start.elapsed();
             
             // During border interaction (drag/resize), use faster update rate for Meet sync
-            #[cfg(target_os = "macos")]
-            let is_interacting = hollow_border::is_border_interacting();
-            #[cfg(not(target_os = "macos"))]
-            let is_interacting = false;
+            let is_interacting_for_fps = hollow_border::is_border_interacting();
             
-            let min_frame_duration = if is_interacting {
+            let min_frame_duration = if is_interacting_for_fps {
                 // 5ms during interaction = ~200 FPS max for smooth Meet updates
                 std::time::Duration::from_millis(5)
             } else {
@@ -1642,7 +1747,7 @@ async fn start_capture(
 }
 
 #[tauri::command]
-async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
+async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     tracing::info!("Stopping capture");
     log::info!("Stopping capture");
 
@@ -1672,6 +1777,8 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 
             if let Err(e) = persist_settings_to_disk(&updated_settings) {
                 log::error!("Failed to persist last_region: {}", e);
+            } else {
+                log::info!("Successfully saved last_region to disk");
             }
         }
     }
@@ -1692,13 +1799,16 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
     }
     drop(engine_lock);
 
-    // Hide hollow border but keep it for repositioning
-    if let Ok(border_lock) = HOLLOW_BORDER.lock() {
-        if let Some(ref border) = *border_lock {
-            border.hide();
-            log::info!("Hollow border hidden");
-        }
-    }
+    // Clean up ALL borders - both capture border and preview border
+    // First, clear the capture border
+    tracing::debug!("Clearing HOLLOW_BORDER");
+    *HOLLOW_BORDER.lock().unwrap() = None;
+    log::info!("Capture border cleared");
+    
+    // Also clear preview border if it somehow exists
+    tracing::debug!("Clearing PREVIEW_BORDER");
+    *PREVIEW_BORDER.lock().unwrap() = None;
+    log::info!("Preview border cleared");
 
     // Clean up capture-related windows
     tracing::debug!("Clearing DESTINATION_WINDOW");
@@ -1712,8 +1822,10 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<(), String> {
 
     *state.is_capturing.lock().unwrap() = false;
 
+    // Return updated settings so frontend can sync
+    let final_settings = state.settings.lock().unwrap().clone();
     log::info!("Capture stopped successfully");
-    Ok(())
+    Ok(final_settings)
 }
 
 #[tauri::command]

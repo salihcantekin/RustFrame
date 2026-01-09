@@ -11,6 +11,11 @@ export const AppConfig = {
     enabled: true,
     paypalUrl: "https://www.paypal.com/donate/?hosted_button_id=C9HWTHFJJQTJ6",
     qrCodePath: "/donate-qr.png",
+    reminder: {
+      showInterval: 3, // Show reminder every N capture sessions
+      delayMs: 800, // Delay before showing reminder after stop capture
+      storageKey: "rustframe_capture_count", // LocalStorage key for tracking
+    },
   },
   
   // Links

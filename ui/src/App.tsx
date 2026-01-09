@@ -79,6 +79,7 @@ function App() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showDonate, setShowDonate] = useState(false);
+  const [showDonateReminder, setShowDonateReminder] = useState(false);
   const [captureRegion, setCaptureRegion] = useState({ x: 0, y: 0, width: 800, height: 600 });
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [selectedMonitor, setSelectedMonitor] = useState<number>(0);
@@ -253,35 +254,45 @@ function App() {
 
   const handleStopCapture = async () => {
     try {
-      let borderRect: [number, number, number, number] | null = null;
-      if (settings?.remember_last_region) {
-        try {
-          borderRect = await invoke<[number, number, number, number] | null>("get_border_rect");
-        } catch {
-          borderRect = null;
-        }
-      }
-
-      await invoke("stop_capture");
+      // Backend stop_capture now saves last_region and returns updated settings
+      const updatedSettings = await invoke<Settings>("stop_capture");
       setIsCapturing(false);
-
-      // Save last region if remember_last_region is enabled
-      if (settings?.remember_last_region) {
-        const [x, y, width, height] = borderRect
-          ? borderRect
-          : ([captureRegion.x, captureRegion.y, captureRegion.width, captureRegion.height] as [number, number, number, number]);
-
+      
+      // Update frontend state with backend's saved settings
+      setSettings(updatedSettings);
+      
+      // If last_region was saved, update captureRegion for UI
+      if (updatedSettings.last_region) {
+        const [x, y, width, height] = updatedSettings.last_region;
         setCaptureRegion({ x, y, width, height });
-
-        const updatedSettings = {
-          ...settings,
-          last_region: [x, y, width, height] as [number, number, number, number],
-        };
-        await invoke("save_settings", { settings: updatedSettings });
-        setSettings(updatedSettings);
+        console.log("Last region saved:", { x, y, width, height });
+      }
+      
+      // Show donation reminder occasionally (only in release mode)
+      if (!devMode) {
+        showDonationReminderIfNeeded();
       }
     } catch (error) {
       console.error("Failed to stop capture:", error);
+    }
+  };
+  
+  // Smart donation reminder: shows every N capture sessions (configured in AppConfig)
+  const showDonationReminderIfNeeded = () => {
+    try {
+      const storageKey = AppConfig.donate.reminder.storageKey;
+      const captureCount = parseInt(localStorage.getItem(storageKey) || '0', 10);
+      const newCount = captureCount + 1;
+      localStorage.setItem(storageKey, newCount.toString());
+      
+      // Show reminder at configured interval
+      if (newCount % AppConfig.donate.reminder.showInterval === 0) {
+        // Small delay so user sees capture stopped first
+        setTimeout(() => setShowDonateReminder(true), AppConfig.donate.reminder.delayMs);
+      }
+    } catch (error) {
+      // LocalStorage might not be available, silently fail
+      console.log('Could not access localStorage for donation reminder');
     }
   };
 
@@ -627,6 +638,64 @@ function App() {
 
               <p className="text-gray-500 text-xs text-center mt-4">
                 Thank you for your support! 💜
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Donation Reminder Modal - Gentle version shown after captures */}
+      {showDonateReminder && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fadeIn" onClick={() => setShowDonateReminder(false)}>
+          <div 
+            className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl overflow-hidden max-w-sm w-full mx-4 border border-gray-600 shadow-2xl animate-slideUp"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Content */}
+            <div className="p-6 text-center">
+              {/* Icon */}
+              <div className="flex justify-center mb-4">
+                <div className="w-16 h-16 bg-gradient-to-br from-pink-500 to-purple-600 rounded-full flex items-center justify-center animate-pulse">
+                  <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                  </svg>
+                </div>
+              </div>
+
+              <h3 className="text-xl font-bold text-white mb-2">
+                Enjoying RustFrame? ✨
+              </h3>
+              
+              <p className="text-gray-300 text-sm mb-6 leading-relaxed">
+                We noticed you've been using RustFrame quite a bit! 🎉
+                <br />
+                <span className="text-gray-400 text-xs mt-2 block">
+                  If it's been helpful, a small donation would mean the world and help keep this project alive!
+                </span>
+              </p>
+
+              {/* Action Buttons */}
+              <div className="space-y-2">
+                <button
+                  onClick={() => { setShowDonateReminder(false); setShowDonate(true); }}
+                  className="w-full py-3 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white font-semibold rounded-lg transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+                >
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                  </svg>
+                  Yes, I'd love to help! 💝
+                </button>
+                
+                <button
+                  onClick={() => setShowDonateReminder(false)}
+                  className="w-full py-2.5 text-gray-400 hover:text-white text-sm font-medium transition-colors"
+                >
+                  Maybe later
+                </button>
+              </div>
+
+              <p className="text-gray-500 text-xs mt-4">
+                This message appears occasionally. Thank you for understanding! 🙏
               </p>
             </div>
           </div>
