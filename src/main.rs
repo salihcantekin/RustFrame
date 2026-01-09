@@ -20,6 +20,7 @@ mod logging;
 mod platform;
 mod platform_info;
 mod rec_indicator;
+mod single_instance;
 mod traits; // Cross-platform trait definitions
 
 use destination_window::{DestinationWindow, DestinationWindowConfig};
@@ -34,6 +35,8 @@ lazy_static! {
     static ref REC_INDICATOR: Mutex<Option<RecIndicator>> = Mutex::new(None);
     // Global flag to track if cleanup has been performed
     static ref CLEANUP_PERFORMED: AtomicBool = AtomicBool::new(false);
+    // Single instance lock - prevents multiple instances from running
+    static ref SINGLE_INSTANCE_LOCK: Mutex<Option<single_instance::SingleInstanceLock>> = Mutex::new(None);
 }
 
 // ============================================================================
@@ -82,6 +85,14 @@ fn perform_cleanup() {
     // Clear click capture data
     platform::input::clear_clicks();
     tracing::debug!("Click capture data cleared");
+
+    // Release single instance lock
+    if let Ok(mut lock) = SINGLE_INSTANCE_LOCK.try_lock() {
+        if lock.is_some() {
+            *lock = None;
+            tracing::debug!("Single instance lock released");
+        }
+    }
 
     tracing::info!("Cleanup completed successfully");
 }
@@ -2207,7 +2218,25 @@ fn get_platform_info() -> platform_info::PlatformInfo {
 // ============================================================================
 
 fn main() {
-    // Initialize logging system FIRST (before any other operations)
+    // Acquire single instance lock FIRST (before any other operations)
+    // This prevents multiple instances from running simultaneously
+    let instance_lock = match single_instance::SingleInstanceLock::acquire() {
+        Ok(lock) => lock,
+        Err(_e) => {
+            eprintln!("RustFrame is already running!");
+            eprintln!("Attempting to activate existing window...");
+            
+            // Try to bring the existing window to foreground
+            single_instance::SingleInstanceLock::activate_existing_instance();
+            
+            std::process::exit(1);
+        }
+    };
+    
+    // Store the lock in global state so it's held for the entire application lifetime
+    *SINGLE_INSTANCE_LOCK.lock().unwrap() = Some(instance_lock);
+    
+    // Initialize logging system AFTER acquiring lock
     // Load settings early to get log level configuration
     let (initial_settings, _) = if let Some(dir) = rustframe_config_dir() {
         load_settings_and_profile_from_disk(&dir)

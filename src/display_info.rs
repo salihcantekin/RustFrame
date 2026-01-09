@@ -27,8 +27,9 @@
 //! # Usage
 //!
 //! ```rust
+//! # use rustframe_capture::display_info;
 //! // Initialize once at application startup
-//! display_info::initialize()?;
+//! display_info::initialize().ok();
 //!
 //! // Get display info anywhere
 //! let info = display_info::get();
@@ -36,6 +37,7 @@
 //!
 //! // Convert coordinates
 //! let pixels = info.points_to_pixels(100.0);
+//! let (x_pt, y_pt) = (100, 200);
 //! let (x_px, y_px) = info.point_to_pixel_coords(x_pt, y_pt);
 //! ```
 
