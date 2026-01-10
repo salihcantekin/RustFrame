@@ -244,11 +244,41 @@ function App() {
       console.log("[DEBUG] invoke completed successfully");
       setIsCapturing(true);
       console.log("Capture started successfully!");
-      //alert("Capture started successfully! Check for hollow border and preview window.");
     } catch (error) {
       console.error("[DEBUG] invoke failed with error:", error);
       console.error("Failed to start capture:", error);
-      //alert(`Failed to start capture: ${error}`);
+      
+      // CRITICAL: Clean up any partially created windows/borders
+      try {
+        console.log("[DEBUG] Calling cleanup_on_capture_failed...");
+        await invoke("cleanup_on_capture_failed");
+        console.log("[DEBUG] Cleanup completed");
+      } catch (cleanupError) {
+        console.error("Cleanup also failed:", cleanupError);
+      }
+      
+      // Show user-friendly error message
+      const errorMsg = typeof error === 'string' ? error : String(error);
+      let userMessage = "Failed to start capture. ";
+      
+      // Platform-specific error hints
+      if (platformInfo?.os === "macos") {
+        if (errorMsg.toLowerCase().includes("permission") || errorMsg.toLowerCase().includes("denied")) {
+          userMessage += "Please grant Screen Recording and Accessibility permissions in System Settings > Privacy & Security. Then restart RustFrame.";
+        } else {
+          userMessage += "Check System Settings > Privacy & Security for Screen Recording permission. See logs for details.";
+        }
+      } else if (platformInfo?.os === "windows") {
+        if (errorMsg.toLowerCase().includes("permission") || errorMsg.toLowerCase().includes("access")) {
+          userMessage += "Check Windows permissions or try running as Administrator. See logs for details.";
+        } else {
+          userMessage += "Try restarting the application. See logs for details.";
+        }
+      } else {
+        userMessage += "Check system permissions. See logs for details.";
+      }
+      
+      alert(userMessage);
     }
   };
 

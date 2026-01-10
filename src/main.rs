@@ -2062,6 +2062,36 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(final_settings)
 }
 
+/// Cleanup borders and windows when capture fails to start
+/// This is called from frontend when start_capture returns an error
+#[tauri::command]
+async fn cleanup_on_capture_failed(state: State<'_, AppState>) -> Result<(), String> {
+    tracing::error!("Cleaning up after capture start failure");
+    log::error!("Cleaning up after capture start failure");
+    
+    // Stop any capture engine that might have started
+    let mut engine_lock = state.capture_engine.lock().unwrap();
+    if let Some(ref mut engine) = *engine_lock {
+        engine.stop();
+    }
+    drop(engine_lock);
+    
+    // Clean up all borders and windows
+    *HOLLOW_BORDER.lock().unwrap() = None;
+    *PREVIEW_BORDER.lock().unwrap() = None;
+    *DESTINATION_WINDOW.lock().unwrap() = None;
+    *REC_INDICATOR.lock().unwrap() = None;
+    
+    // Clear click capture data
+    platform::input::clear_clicks();
+    
+    // Ensure capturing state is false
+    *state.is_capturing.lock().unwrap() = false;
+    
+    log::info!("Cleanup completed after capture failure");
+    Ok(())
+}
+
 #[tauri::command]
 async fn is_capturing(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(*state.is_capturing.lock().unwrap())
@@ -2397,6 +2427,7 @@ fn main() {
             get_preview_border_rect,
             start_capture,
             stop_capture,
+            cleanup_on_capture_failed,
             is_capturing,
             get_screen_dimensions,
             get_monitor_refresh_rate,
