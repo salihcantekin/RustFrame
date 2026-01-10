@@ -2249,6 +2249,39 @@ fn get_platform_info() -> platform_info::PlatformInfo {
     platform_info::PlatformInfo::detect()
 }
 
+/// Get the display scale factor for DPI-aware UI sizing
+/// Returns the scale factor (1.0 for standard displays, 2.0 for Retina, etc.)
+#[tauri::command]
+fn get_display_scale_factor() -> f64 {
+    let display_info = display_info::get();
+    display_info.scale_factor
+}
+
+/// Get recommended window size based on display scale
+/// Returns (width, height) in logical pixels that accounts for DPI/scaling
+#[tauri::command]
+fn get_recommended_window_size() -> (u32, u32) {
+    let display_info = display_info::get();
+    
+    // Base size in logical pixels (for 1.0 scale)
+    let base_width = 900.0;
+    let base_height = 820.0;
+    
+    // Adjust based on scale factor to maintain consistent physical size
+    // Higher DPI = smaller logical size to keep same physical dimensions
+    let logical_width = (base_width / display_info.scale_factor).round() as u32;
+    let logical_height = (base_height / display_info.scale_factor).round() as u32;
+    
+    // Ensure minimum size
+    let min_width = 600;
+    let min_height = 500;
+    
+    (
+        logical_width.max(min_width),
+        logical_height.max(min_height)
+    )
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -2408,6 +2441,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             is_dev_mode,
             get_platform_info,
+            get_display_scale_factor,
+            get_recommended_window_size,
             get_settings,
             get_border_rect,
             get_capture_profiles,
