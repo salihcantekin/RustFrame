@@ -48,6 +48,48 @@ sudo spctl --master-disable  # Disable Gatekeeper temporarily
 sudo spctl --master-enable   # Re-enable Gatekeeper
 ```
 
+### macOS: "Apple could not verify" or Malware Warning
+
+**Error**: "Apple could not verify 'RustFrame' is free of malware that may harm your Mac or compromise your privacy"
+
+**Why this happens**: RustFrame is not code-signed with an Apple Developer ID certificate. This is a macOS Gatekeeper security feature that blocks unsigned applications.
+
+**Solution 1: Remove quarantine flag (Recommended)**
+```bash
+# Navigate to where you extracted the app
+cd ~/Downloads  # or wherever RustFrame.app is located
+
+# Remove quarantine attribute
+xattr -cr RustFrame.app
+
+# Now you can run it normally
+open RustFrame.app
+```
+
+**Solution 2: Right-click + Open**
+```
+1. Right-click (or Control + click) on RustFrame.app
+2. Select "Open" from the menu
+3. Click "Open" in the security dialog
+4. This creates a permanent exception
+```
+
+**Solution 3: System Settings**
+```
+1. Try to open RustFrame.app (it will be blocked)
+2. Go to System Settings > Privacy & Security
+3. Scroll down to find "RustFrame was blocked"
+4. Click "Open Anyway"
+5. Enter your password
+6. Try opening RustFrame again
+```
+
+**Note for developers**: To avoid this warning for end users, you need to:
+- Enroll in Apple Developer Program ($99/year)
+- Code sign the app with a Developer ID Application certificate
+- Notarize the app through Apple's notarization service
+- See [Developer Guide - Code Signing](../developer/code-signing.md) for details
+
 ### Linux: AppImage Won't Run
 
 **Error**: `fusermount: failed to open /etc/fuse.conf`
