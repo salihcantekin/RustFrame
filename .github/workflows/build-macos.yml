@@ -17,15 +17,6 @@ on:
           - macos-13
           - self-hosted
         default: 'macos-latest'
-      architecture:
-        description: 'Build architecture'
-        required: true
-        type: choice
-        options:
-          - universal
-          - arm64-only
-          - x86_64-only
-        default: 'universal'
       create_release:
         description: 'Create GitHub release'
         required: true
@@ -42,8 +33,17 @@ permissions:
 
 jobs:
   build-macos:
-    name: Build macOS
+    name: Build macOS (${{ matrix.arch }})
     runs-on: ${{ github.event.inputs.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            display_name: ARM64 (Apple Silicon)
+          - arch: x86_64
+            target: x86_64-apple-darwin
+            display_name: Intel (x86_64)
     
     steps:
       - name: Checkout code
@@ -114,7 +114,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       
       - name: Clear build cache to force version update
         run: |
@@ -140,37 +140,8 @@ jobs:
         working-directory: ./ui
         run: npm run build
       
-      - name: Build Rust for ARM64 (Apple Silicon)
-        if: github.event.inputs.architecture == 'universal' || github.event.inputs.architecture == 'arm64-only'
-        run: cargo build --release --target aarch64-apple-darwin --verbose
-      
-      - name: Build Rust for x86_64 (Intel)
-        if: github.event.inputs.architecture == 'universal' || github.event.inputs.architecture == 'x86_64-only'
-        run: cargo build --release --target x86_64-apple-darwin --verbose
-      
-      - name: Create universal binary
-        if: github.event.inputs.architecture == 'universal'
-        run: |
-          mkdir -p target/universal-apple-darwin/release
-          lipo -create \
-            target/aarch64-apple-darwin/release/rustframe \
-            target/x86_64-apple-darwin/release/rustframe \
-            -output target/universal-apple-darwin/release/rustframe
-          lipo -info target/universal-apple-darwin/release/rustframe
-      
-      - name: Determine binary path
-        id: binary-path
-        run: |
-          if [ "${{ github.event.inputs.architecture }}" = "universal" ]; then
-            echo "path=target/universal-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
-            echo "arch=Universal" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event.inputs.architecture }}" = "arm64-only" ]; then
-            echo "path=target/aarch64-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
-            echo "arch=ARM64" >> $GITHUB_OUTPUT
-          else
-            echo "path=target/x86_64-apple-darwin/release/rustframe" >> $GITHUB_OUTPUT
-            echo "arch=x86_64" >> $GITHUB_OUTPUT
-          fi
+      - name: Build Rust for ${{ matrix.display_name }}
+        run: cargo build --release --target ${{ matrix.target }} --verbose
       
       - name: Create .app bundle
         run: |
@@ -178,7 +149,7 @@ jobs:
           mkdir -p RustFrame.app/Contents/Resources
           
           # Copy binary
-          cp ${{ steps.binary-path.outputs.path }} RustFrame.app/Contents/MacOS/rustframe
+          cp target/${{ matrix.target }}/release/rustframe RustFrame.app/Contents/MacOS/rustframe
           chmod +x RustFrame.app/Contents/MacOS/rustframe
           
           # Create Info.plist
@@ -229,17 +200,17 @@ jobs:
         run: |
           cd dist
           timestamp=$(date +%Y%m%d-%H%M%S)
-          arch="${{ steps.binary-path.outputs.arch }}"
-          zipname="RustFrame-macOS-${arch}-${timestamp}.zip"
+          zipname="RustFrame-macOS-${{ matrix.arch }}-v${{ github.event.inputs.version }}-${timestamp}.zip"
           zip -r "../${zipname}" *
           cd ..
           echo "Created: ${zipname}"
+          echo "ZIP_NAME=${zipname}" >> $GITHUB_ENV
       
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: RustFrame-macOS-${{ steps.binary-path.outputs.arch }}-${{ github.run_number }}
-          path: RustFrame-macOS-*.zip
+          name: RustFrame-macOS-${{ matrix.arch }}-v${{ github.event.inputs.version }}-${{ github.run_number }}
+          path: ${{ env.ZIP_NAME }}
           retention-days: 30
       
       - name: Build summary
@@ -248,11 +219,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Platform**: macOS" >> $GITHUB_STEP_SUMMARY
-          echo "- **Architecture**: ${{ steps.binary-path.outputs.arch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Architecture**: ${{ matrix.display_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner**: ${{ github.event.inputs.runner }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Rust Version**: $(rustc --version)" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number**: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact**: ${{ env.ZIP_NAME }}" >> $GITHUB_STEP_SUMMARY
       
       - name: Create Git tag
         if: github.event.inputs.create_release == 'true'
@@ -271,25 +244,30 @@ jobs:
           body: |
             # RustFrame v${{ github.event.inputs.version }}
             
-            ## macOS Build
+            ## macOS Build - ${{ matrix.display_name }}
             
             Built with:
-            - Architecture: ${{ steps.binary-path.outputs.arch }}
+            - Architecture: ${{ matrix.display_name }}
+            - Target: ${{ matrix.target }}
             - Runner: ${{ github.event.inputs.runner }}
             - Rust: $(rustc --version)
             - Build #${{ github.run_number }}
             
             ### Installation
-            1. Download `RustFrame-macOS-*.zip`
+            1. Download the appropriate version:
+               - **Apple Silicon (M1/M2/M3)**: `RustFrame-macOS-arm64-*.zip`
+               - **Intel**: `RustFrame-macOS-x86_64-*.zip`
             2. Extract the archive
             3. Drag `RustFrame.app` to Applications folder
-            4. Right-click and select "Open" on first launch (if from self-hosted runner)
+            4. Right-click and select "Open" on first launch
             5. Grant Screen Recording permission when prompted
             
             ### Notes
-            - Universal binary supports both Apple Silicon and Intel Macs
+            - Choose the correct architecture for your Mac
+            - ARM64 for Apple Silicon Macs (M1, M2, M3, etc.)
+            - x86_64 for Intel Macs
             - See [Documentation](https://github.com/salihcantekin/RustFrameApp/tree/main/docs) for detailed instructions
-          files: RustFrame-macOS-*.zip
+          files: ${{ env.ZIP_NAME }}
           draft: false
           prerelease: false
         env:
