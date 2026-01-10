@@ -258,7 +258,7 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
         self.capture_region = Some(region);
         Ok(())
     }
-    
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -428,7 +428,7 @@ impl WindowsCaptureEngine {
         // Get texture description for dimensions
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         unsafe { source_texture.GetDesc(&mut desc) };
-        
+
         // Calculate monitor bounds in screen coordinates
         let monitor_left = self.monitor_origin.0;
         let monitor_top = self.monitor_origin.1;
@@ -450,11 +450,11 @@ impl WindowsCaptureEngine {
         // Calculate clipped dimensions
         let clipped_width = (clipped_right - clipped_left) as u32;
         let clipped_height = (clipped_bottom - clipped_top) as u32;
-        
+
         // Calculate source position in texture coordinates (relative to monitor origin)
         let src_x = (clipped_left - monitor_left) as i32;
         let src_y = (clipped_top - monitor_top) as i32;
-        
+
         // Clone texture COM pointer for safe cross-thread usage
         // SAFETY: Clone increments reference count (AddRef)
         // We use ManuallyDrop to prevent automatic Release - destination window will Release it
@@ -463,10 +463,12 @@ impl WindowsCaptureEngine {
             let cloned_texture = ManuallyDrop::new(source_texture.clone()); // AddRef
             cloned_texture.as_raw() as usize
         };
-        
-        debug!("GPU frame: {}x{} at screen({}, {}), texture crop({}, {}), ptr: 0x{:X}",
-            clipped_width, clipped_height, clipped_left, clipped_top, src_x, src_y, texture_ptr);
-        
+
+        debug!(
+            "GPU frame: {}x{} at screen({}, {}), texture crop({}, {}), ptr: 0x{:X}",
+            clipped_width, clipped_height, clipped_left, clipped_top, src_x, src_y, texture_ptr
+        );
+
         Some(CaptureFrame {
             data: Vec::new(), // No CPU data for GPU path
             width: clipped_width,
@@ -484,7 +486,7 @@ impl WindowsCaptureEngine {
             }),
         })
     }
-    
+
     /// Copy texture to CPU-accessible staging texture and read pixels
     /// Clips region to monitor bounds and returns only the visible portion
     /// Used as fallback when GPU rendering is not available or clicks need to be drawn
@@ -793,7 +795,7 @@ impl CaptureEngine for WindowsCaptureEngine {
             // Fallback to CPU if GPU path fails
             warn!("GPU path failed, falling back to CPU");
         }
-        
+
         // CPU fallback path
         self.copy_frame_to_cpu(&texture, region)
     }
@@ -817,7 +819,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.capture_region = Some(region);
         Ok(())
     }
-    
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

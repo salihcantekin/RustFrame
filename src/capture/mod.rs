@@ -92,12 +92,12 @@ pub enum GpuTextureHandle {
     },
     #[cfg(target_os = "windows")]
     D3D11 {
-        texture_ptr: usize, // ID3D11Texture2D* (AddRef'd for safety)
+        texture_ptr: usize,   // ID3D11Texture2D* (AddRef'd for safety)
         shared_handle: usize, // HANDLE (for cross-process, 0 for same-process)
-        crop_x: i32,        // Crop region X in pixels (relative to texture)
-        crop_y: i32,        // Crop region Y in pixels (relative to texture)
-        crop_width: u32,    // Crop width in pixels
-        crop_height: u32,   // Crop height in pixels
+        crop_x: i32,          // Crop region X in pixels (relative to texture)
+        crop_y: i32,          // Crop region Y in pixels (relative to texture)
+        crop_width: u32,      // Crop width in pixels
+        crop_height: u32,     // Crop height in pixels
     },
     #[cfg(target_os = "linux")]
     DmaBuf {
@@ -135,7 +135,7 @@ pub trait CaptureEngine: Send {
 
     /// Update the capture region (called when border is resized/moved)
     fn update_region(&mut self, region: CaptureRect) -> anyhow::Result<()>;
-    
+
     /// Downcast to Any for platform-specific access
     fn as_any(&self) -> &dyn std::any::Any;
 }

@@ -12,10 +12,10 @@
 /// RGBA color as byte array [R, G, B, A]
 pub fn bgr_to_rgba(bgr: u32) -> [u8; 4] {
     [
-        (bgr & 0xFF) as u8,          // R (lowest byte)
+        (bgr & 0xFF) as u8,         // R (lowest byte)
         ((bgr >> 8) & 0xFF) as u8,  // G
         ((bgr >> 16) & 0xFF) as u8, // B (highest byte)
-        255,                          // A (fully opaque)
+        255,                        // A (fully opaque)
     ]
 }
 
@@ -66,10 +66,16 @@ pub fn calculate_inner_rect(
 /// Ok(()) if valid, Err with description if invalid
 pub fn validate_window_size(width: i32, height: i32) -> Result<(), String> {
     if width < 50 || height < 50 {
-        return Err(format!("Window too small: {}x{} (minimum 50x50)", width, height));
+        return Err(format!(
+            "Window too small: {}x{} (minimum 50x50)",
+            width, height
+        ));
     }
     if width > 7680 || height > 4320 {
-        return Err(format!("Window too large: {}x{} (maximum 7680x4320)", width, height));
+        return Err(format!(
+            "Window too large: {}x{} (maximum 7680x4320)",
+            width, height
+        ));
     }
     Ok(())
 }
@@ -100,16 +106,16 @@ mod tests {
         // Input: RGB(255, 128, 64) with alpha=200
         let rgba = [255, 128, 64, 200];
         let bgr = rgba_to_bgr(rgba); // Alpha is ignored in BGR
-        
+
         // BGR format: 0xBBGGRR
         // Expected: 0x00408064 = (64 << 16) | (128 << 8) | 255
         assert_eq!(bgr, 0x4080FF);
-        
+
         let converted = bgr_to_rgba(bgr);
         assert_eq!(rgba[0], converted[0]); // R = 255
         assert_eq!(rgba[1], converted[1]); // G = 128
         assert_eq!(rgba[2], converted[2]); // B = 64
-        assert_eq!(255, converted[3]);      // A (always 255 in BGR->RGBA)
+        assert_eq!(255, converted[3]); // A (always 255 in BGR->RGBA)
     }
 
     #[test]

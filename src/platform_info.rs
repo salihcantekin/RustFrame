@@ -1,6 +1,5 @@
 /// Platform-specific information and capabilities
 /// This module provides runtime platform detection and available features
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,28 +164,27 @@ impl PlatformInfo {
 
         #[cfg(target_os = "macos")]
         {
-            vec![
-                CaptureMethodInfo {
-                    id: "CoreGraphics".to_string(),
-                    name: "ScreenCaptureKit".to_string(),
-                    description: "Modern macOS screen capture using ScreenCaptureKit. Requires macOS 12.3+.".to_string(),
-                    recommended: true,
-                    hardware_accelerated: true,
-                },
-            ]
+            vec![CaptureMethodInfo {
+                id: "CoreGraphics".to_string(),
+                name: "ScreenCaptureKit".to_string(),
+                description:
+                    "Modern macOS screen capture using ScreenCaptureKit. Requires macOS 12.3+."
+                        .to_string(),
+                recommended: true,
+                hardware_accelerated: true,
+            }]
         }
 
         #[cfg(target_os = "linux")]
         {
-            vec![
-                CaptureMethodInfo {
-                    id: "CoreGraphics".to_string(),
-                    name: "PipeWire / X11".to_string(),
-                    description: "Wayland/X11 screen capture. Automatically detects compositor.".to_string(),
-                    recommended: true,
-                    hardware_accelerated: false,
-                },
-            ]
+            vec![CaptureMethodInfo {
+                id: "CoreGraphics".to_string(),
+                name: "PipeWire / X11".to_string(),
+                description: "Wayland/X11 screen capture. Automatically detects compositor."
+                    .to_string(),
+                recommended: true,
+                hardware_accelerated: false,
+            }]
         }
     }
 

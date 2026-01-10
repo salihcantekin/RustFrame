@@ -163,15 +163,21 @@ fn draw_click_highlight(
             let inv_alpha = 1.0 - final_alpha;
             #[cfg(target_os = "macos")]
             {
-                data[idx] = (color[0] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8;     // R
-                data[idx + 1] = (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
-                data[idx + 2] = (color[2] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8; // B
+                data[idx] = (color[0] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8; // R
+                data[idx + 1] =
+                    (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
+                data[idx + 2] =
+                    (color[2] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8;
+                // B
             }
             #[cfg(not(target_os = "macos"))]
             {
-                data[idx] = (color[2] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8;     // B
-                data[idx + 1] = (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
-                data[idx + 2] = (color[0] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8; // R
+                data[idx] = (color[2] as f32 * final_alpha + data[idx] as f32 * inv_alpha) as u8; // B
+                data[idx + 1] =
+                    (color[1] as f32 * final_alpha + data[idx + 1] as f32 * inv_alpha) as u8; // G
+                data[idx + 2] =
+                    (color[0] as f32 * final_alpha + data[idx + 2] as f32 * inv_alpha) as u8;
+                // R
             }
             // Keep original alpha at data[idx + 3]
         }
@@ -184,11 +190,11 @@ fn draw_click_highlight(
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum PreviewMode {
-    TauriCanvas,      // Cross-platform, WebView overhead (not implemented on macOS/Linux)
+    TauriCanvas, // Cross-platform, WebView overhead (not implemented on macOS/Linux)
     #[cfg(windows)]
-    WinApiGdi,        // Windows-only, lightweight native
+    WinApiGdi, // Windows-only, lightweight native
     #[cfg(not(windows))]
-    Native,           // macOS/Linux native preview window
+    Native, // macOS/Linux native preview window
 }
 
 impl Default for PreviewMode {
@@ -382,10 +388,14 @@ impl Default for Settings {
     }
 }
 
-fn create_capture_engine_for_settings(settings: &Settings) -> Result<Box<dyn CaptureEngine>, String> {
+fn create_capture_engine_for_settings(
+    settings: &Settings,
+) -> Result<Box<dyn CaptureEngine>, String> {
     #[cfg(target_os = "windows")]
     {
-        use rustframe_capture::capture::windows::{WindowsCaptureEngine, WindowsGdiCopyCaptureEngine};
+        use rustframe_capture::capture::windows::{
+            WindowsCaptureEngine, WindowsGdiCopyCaptureEngine,
+        };
         return match settings.capture_method {
             CaptureMethod::Wgc => WindowsCaptureEngine::new()
                 .map(|e| Box::new(e) as Box<dyn CaptureEngine>)
@@ -463,16 +473,16 @@ fn get_os_profile_subdir() -> &'static str {
 
 fn scan_capture_profiles(dir: &Path) -> Vec<CaptureProfileInfo> {
     let mut profiles = Vec::new();
-    
+
     // First, check OS-specific subdirectory
     let os_dir = dir.join(get_os_profile_subdir());
     if os_dir.exists() {
         scan_profiles_from_dir(&os_dir, &mut profiles);
     }
-    
+
     // Also scan root directory for backward compatibility
     scan_profiles_from_dir(dir, &mut profiles);
-    
+
     profiles.sort_by(|a, b| a.id.cmp(&b.id));
     profiles.dedup_by(|a, b| a.id == b.id);
     profiles
@@ -485,21 +495,21 @@ fn scan_profiles_from_dir(dir: &Path, profiles: &mut Vec<CaptureProfileInfo>) {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        
+
         // Skip directories
         if path.is_dir() {
             continue;
         }
-        
+
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        
+
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
             None => continue,
         };
-        
+
         // Support both "profile_xyz.json" (old) and "xyz.json" (new) formats
         let id = if file_name.starts_with("profile_") {
             file_name
@@ -507,11 +517,9 @@ fn scan_profiles_from_dir(dir: &Path, profiles: &mut Vec<CaptureProfileInfo>) {
                 .trim_end_matches(".json")
                 .to_string()
         } else {
-            file_name
-                .trim_end_matches(".json")
-                .to_string()
+            file_name.trim_end_matches(".json").to_string()
         };
-        
+
         if id.is_empty() {
             continue;
         }
@@ -535,7 +543,7 @@ fn read_profile_overrides(dir: &Path, profile_id: &str) -> Option<serde_json::Va
     // Try new format first: Profiles/os/profilename.json
     let os_subdir = dir.join(get_os_profile_subdir());
     let new_format_path = os_subdir.join(format!("{}.json", profile_id));
-    
+
     if new_format_path.exists() {
         if let Ok(raw) = std::fs::read_to_string(&new_format_path) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -545,11 +553,11 @@ fn read_profile_overrides(dir: &Path, profile_id: &str) -> Option<serde_json::Va
             }
         }
     }
-    
+
     // Try old format: profile_profilename.json in root
     let old_format_name = format!("profile_{}.json", profile_id);
     let old_format_path = dir.join(&old_format_name);
-    
+
     if old_format_path.exists() {
         if let Ok(raw) = std::fs::read_to_string(&old_format_path) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -559,7 +567,7 @@ fn read_profile_overrides(dir: &Path, profile_id: &str) -> Option<serde_json::Va
             }
         }
     }
-    
+
     // Try simple format in root: profilename.json
     let simple_format_path = dir.join(format!("{}.json", profile_id));
     if simple_format_path.exists() {
@@ -571,7 +579,7 @@ fn read_profile_overrides(dir: &Path, profile_id: &str) -> Option<serde_json::Va
             }
         }
     }
-    
+
     None
 }
 
@@ -619,17 +627,16 @@ fn sanitize_settings_json_for_platform(value: &mut serde_json::Value) {
     }
 
     if let Some(cm) = obj.get("capture_method").and_then(|v| v.as_str()) {
-        let invalid_for_platform = cm == "auto"
-            || {
-                #[cfg(target_os = "windows")]
-                {
-                    cm == "CoreGraphics"
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    cm == "Wgc" || cm == "GdiCopy"
-                }
-            };
+        let invalid_for_platform = cm == "auto" || {
+            #[cfg(target_os = "windows")]
+            {
+                cm == "CoreGraphics"
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                cm == "Wgc" || cm == "GdiCopy"
+            }
+        };
 
         if invalid_for_platform {
             obj.remove("capture_method");
@@ -693,7 +700,8 @@ fn bootstrap_settings_if_missing(config_dir: &Path) {
     }
 
     // Create a fully-populated, platform-aware settings.json.
-    let mut merged = serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
+    let mut merged =
+        serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
     merge_json(&mut merged, load_bundled_default_overrides());
     let mut merged_obj = merged;
     sanitize_settings_json_for_platform(&mut merged_obj);
@@ -743,7 +751,8 @@ fn load_settings_and_profile_from_disk(dir: &Path) -> (Settings, Option<String>)
     let settings_path = dir.join("settings.json");
 
     let raw = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| "{}".to_string());
-    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+    let mut value: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
 
     let active_profile = value
         .get("active_profile")
@@ -753,7 +762,8 @@ fn load_settings_and_profile_from_disk(dir: &Path) -> (Settings, Option<String>)
     sanitize_settings_json_for_platform(&mut value);
 
     // Merge onto current defaults so missing keys don't break deserialization.
-    let mut merged = serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
+    let mut merged =
+        serde_json::to_value(Settings::default()).unwrap_or_else(|_| serde_json::json!({}));
     merge_json(&mut merged, value);
 
     let settings: Settings = serde_json::from_value(merged).unwrap_or_default();
@@ -767,10 +777,14 @@ fn load_settings_and_profile_from_disk(dir: &Path) -> (Settings, Option<String>)
     (settings, active_profile)
 }
 
-fn apply_profile_overrides(base: &Settings, overrides: serde_json::Value) -> Result<Settings, String> {
+fn apply_profile_overrides(
+    base: &Settings,
+    overrides: serde_json::Value,
+) -> Result<Settings, String> {
     let mut merged = serde_json::to_value(base).map_err(|e| e.to_string())?;
     merge_json(&mut merged, overrides);
-    serde_json::from_value::<Settings>(merged).map_err(|e| format!("Invalid profile overrides: {}", e))
+    serde_json::from_value::<Settings>(merged)
+        .map_err(|e| format!("Invalid profile overrides: {}", e))
 }
 
 fn read_active_profile_from_settings_json(dir: &Path) -> Option<String> {
@@ -783,7 +797,10 @@ fn read_active_profile_from_settings_json(dir: &Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn write_active_profile_to_settings_json(dir: &Path, profile: Option<String>) -> Result<(), String> {
+fn write_active_profile_to_settings_json(
+    dir: &Path,
+    profile: Option<String>,
+) -> Result<(), String> {
     let _ = std::fs::create_dir_all(dir);
     let settings_path = dir.join("settings.json");
     let mut value: serde_json::Value = match std::fs::read_to_string(&settings_path) {
@@ -843,10 +860,10 @@ async fn get_capture_profiles() -> Result<Vec<CaptureProfileInfo>, String> {
     let Some(profiles_dir) = rustframe_profiles_dir() else {
         return Ok(vec![]);
     };
-    
+
     // Ensure Profiles directory exists
     let _ = std::fs::create_dir_all(&profiles_dir);
-    
+
     // Scan profiles from the Profiles directory
     Ok(scan_capture_profiles(&profiles_dir))
 }
@@ -896,7 +913,7 @@ async fn set_active_capture_profile(
 async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let old_log_level = state.settings.lock().unwrap().log_level.clone();
     let old_log_to_file = state.settings.lock().unwrap().log_to_file;
-    
+
     let mut app_settings = state.settings.lock().unwrap();
     *app_settings = settings.clone();
     drop(app_settings); // Release lock before potentially blocking operations
@@ -913,10 +930,12 @@ async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result
             new_file = settings.log_to_file,
             "Logging settings changed, reinitializing logger"
         );
-        
-        let log_level = settings.log_level.parse::<logging::LogLevel>()
+
+        let log_level = settings
+            .log_level
+            .parse::<logging::LogLevel>()
             .unwrap_or(logging::LogLevel::Error);
-        
+
         if let Err(e) = logging::init_logging(log_level, settings.log_to_file) {
             tracing::error!(error = %e, "Failed to reinitialize logging");
         } else {
@@ -926,7 +945,7 @@ async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result
                 "Logging reinitialized successfully"
             );
         }
-        
+
         // If retention days changed, trigger cleanup
         if settings.log_to_file {
             logging::auto_cleanup_old_logs(settings.log_retention_days);
@@ -1030,8 +1049,8 @@ async fn export_settings(path: String, state: State<'_, AppState>) -> Result<(),
 
 #[tauri::command]
 async fn import_settings(path: String, state: State<'_, AppState>) -> Result<Settings, String> {
-    let json =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read settings file: {}", e))?;
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read settings file: {}", e))?;
     let imported: Settings =
         serde_json::from_str(&json).map_err(|e| format!("Invalid settings file: {}", e))?;
 
@@ -1071,7 +1090,7 @@ fn show_preview_border(
     // Check if capture is active - if so, switch existing border to preview mode
     // instead of creating a new one (they share global state)
     let is_capturing = *state.is_capturing.lock().unwrap();
-    
+
     if is_capturing {
         // Capture is active - switch the capture border to preview mode
         // This makes it draggable from interior while maintaining capture
@@ -1094,7 +1113,7 @@ fn show_preview_border(
         // Capture is active but no border found - this shouldn't happen
         return Err("Capture is active but no border found".to_string());
     }
-    
+
     // No capture active - create a preview border
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
 
@@ -1120,7 +1139,7 @@ fn show_preview_border(
 fn hide_preview_border(state: State<'_, AppState>) -> Result<(), String> {
     // If capture is active, switch border back to capture mode
     let is_capturing = *state.is_capturing.lock().unwrap();
-    
+
     if is_capturing {
         // Use try_lock with timeout to prevent deadlock
         if let Ok(mut border_lock) = HOLLOW_BORDER.try_lock() {
@@ -1133,15 +1152,15 @@ fn hide_preview_border(state: State<'_, AppState>) -> Result<(), String> {
             return Err("Border is locked".to_string());
         }
     }
-    
+
     // No capture active - hide the preview border
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
-    
+
     // Reset preview mode flag so next border created starts fresh
     // Note: This is important because PREVIEW_BORDER and HOLLOW_BORDER share global state
     // which is polled by frontend. Settings dialog saves position when user
     // confirms changes.
-    
+
     *preview = None;
     Ok(())
 }
@@ -1189,14 +1208,20 @@ async fn start_capture(
         height = height,
         "Starting capture"
     );
-    log::info!("Starting capture at ({}, {}) size {}x{}", x, y, width, height);
-    
+    log::info!(
+        "Starting capture at ({}, {}) size {}x{}",
+        x,
+        y,
+        width,
+        height
+    );
+
     // CRITICAL: Always close BOTH preview border and capture border first
     // PREVIEW_BORDER and HOLLOW_BORDER share global state (HOLLOW_HWND, HOLLOW_RECT, etc.)
     // and must be completely cleaned up before creating new border
     {
         tracing::info!("Cleaning up any existing borders before starting capture");
-        
+
         // Close preview border first
         let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
         if preview.is_some() {
@@ -1204,7 +1229,7 @@ async fn start_capture(
             *preview = None;
         }
         drop(preview); // Release lock explicitly
-        
+
         // Close any existing capture border
         let mut hollow = HOLLOW_BORDER.lock().map_err(|e| e.to_string())?;
         if hollow.is_some() {
@@ -1212,11 +1237,11 @@ async fn start_capture(
             *hollow = None;
         }
         drop(hollow); // Release lock explicitly
-        
+
         // Give time for threads to fully clean up
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    
+
     // Ensure HOLLOW_HWND is actually cleared (defensive check)
     #[cfg(target_os = "windows")]
     {
@@ -1228,21 +1253,24 @@ async fn start_capture(
             retries += 1;
         }
         if is_hollow_hwnd_valid() {
-            tracing::error!("HOLLOW_HWND still valid after {} retries - forcing cleanup", retries);
+            tracing::error!(
+                "HOLLOW_HWND still valid after {} retries - forcing cleanup",
+                retries
+            );
             return Err("Failed to clean up previous border window".to_string());
         }
         if retries > 0 {
             tracing::info!("HOLLOW_HWND cleared after {} retries", retries);
         }
     }
-    
+
     // Clean up any previous capture session first (always, not just if capturing)
-    
+
     // Stop capture engine if running
     if let Some(ref mut engine) = *state.capture_engine.lock().unwrap() {
         engine.stop();
     }
-    
+
     // Stop render thread if running
     *state.render_thread_stop.lock().unwrap() = true;
 
@@ -1250,7 +1278,7 @@ async fn start_capture(
     if let Some(handle) = state.render_thread_handle.lock().unwrap().take() {
         let _ = handle.join();
     }
-    
+
     // Clean up windows - this will trigger Drop which must be on main thread
     tracing::debug!("Clearing HOLLOW_BORDER");
     *HOLLOW_BORDER.lock().unwrap() = None;
@@ -1258,26 +1286,28 @@ async fn start_capture(
     *DESTINATION_WINDOW.lock().unwrap() = None;
     tracing::debug!("Clearing REC_INDICATOR");
     *REC_INDICATOR.lock().unwrap() = None;
-    
+
     // Reset capturing state
     *state.is_capturing.lock().unwrap() = false;
-    
+
     tracing::debug!("Waiting for cleanup to complete");
     // Give a moment for cleanup
     std::thread::sleep(std::time::Duration::from_millis(100));
-    
+
     tracing::debug!("Loading settings for capture start");
     log::info!("[MAIN] About to load settings...");
-    
+
     // Base settings + optional active profile overrides
     tracing::debug!("Acquiring base_settings lock");
     let base_settings = state.settings.lock().unwrap().clone();
     tracing::debug!("Acquiring active_profile lock");
     let active_profile = state.active_profile.lock().unwrap().clone();
-    
+
     tracing::debug!(active_profile = ?active_profile, "Profile settings loaded");
-    
-    let settings = if let (Some(profiles_dir), Some(profile_id)) = (rustframe_profiles_dir(), active_profile) {
+
+    let settings = if let (Some(profiles_dir), Some(profile_id)) =
+        (rustframe_profiles_dir(), active_profile)
+    {
         tracing::info!(profile_id = %profile_id, profiles_dir = ?profiles_dir, "Loading capture profile");
         match read_profile_overrides(&profiles_dir, &profile_id) {
             Some(overrides) => match apply_profile_overrides(&base_settings, overrides) {
@@ -1296,7 +1326,7 @@ async fn start_capture(
     } else {
         base_settings
     };
-    
+
     tracing::debug!(
         show_rec_indicator = settings.show_rec_indicator,
         capture_clicks = settings.capture_clicks,
@@ -1307,7 +1337,7 @@ async fn start_capture(
     // Create hollow border (always WinAPI)
     // COLORREF format is 0x00BBGGRR, border_color is [R, G, B, A]
     log::info!("[MAIN] Creating hollow border...");
-    
+
     let border_color = (settings.border_color[0] as u32)
         | ((settings.border_color[1] as u32) << 8)
         | ((settings.border_color[2] as u32) << 16);
@@ -1349,9 +1379,9 @@ async fn start_capture(
     } else {
         tracing::debug!("REC indicator disabled in settings");
     }
-    
+
     tracing::info!(preview_mode = ?settings.preview_mode, "Creating destination window");
-    
+
     #[cfg(target_os = "windows")]
     match settings.preview_mode {
         PreviewMode::WinApiGdi => {
@@ -1422,19 +1452,23 @@ async fn start_capture(
     #[cfg(not(target_os = "windows"))]
     {
         tracing::debug!(
-            os = if cfg!(target_os = "macos") { "macOS" } else { "Linux" },
+            os = if cfg!(target_os = "macos") {
+                "macOS"
+            } else {
+                "Linux"
+            },
             "Creating native destination window"
         );
         // On macOS/Linux, always use native destination window (ignore preview_mode setting)
         // TauriCanvas is not implemented yet
-        
+
         // macOS configuration optimized for screen sharing apps (Meet, Zoom, Discord)
         let config = DestinationWindowConfig {
             alpha: Some(255),
             // Don't use floating level - it hides from screen sharing pickers
             topmost: Some(false),
             click_through: Some(true),
-            
+
             #[cfg(target_os = "macos")]
             macos_floating_level: Some(false), // Use normal level for visibility
             #[cfg(target_os = "macos")]
@@ -1443,7 +1477,7 @@ async fn start_capture(
             macos_collection_behavior: None, // Use defaults (managed, joinable, etc.)
             #[cfg(target_os = "macos")]
             macos_participates_in_cycle: Some(true), // Visible in window pickers
-            
+
             // Windows fields (ignored on macOS)
             toolwindow: None,
             layered: None,
@@ -1451,14 +1485,14 @@ async fn start_capture(
             noactivate: None,
             overlapped: None,
         };
-        
+
         tracing::debug!(width, height, "Creating DestinationWindow");
         let dest_window = DestinationWindow::new(width, height, config)
             .ok_or("Failed to create destination window")?;
-        
+
         tracing::info!("Destination window created successfully");
         *DESTINATION_WINDOW.lock().unwrap() = Some(dest_window);
-        
+
         // Verify window is stored
         {
             let lock = DESTINATION_WINDOW.lock().unwrap();
@@ -1473,13 +1507,13 @@ async fn start_capture(
     // Start capture engine
     tracing::debug!("Starting capture engine");
     let mut engine_lock = state.capture_engine.lock().unwrap();
-    
+
     // (Re)create capture engine so users can change capture_method from Settings
     if let Some(ref mut existing) = *engine_lock {
         tracing::debug!("Stopping existing capture engine");
         existing.stop();
     }
-    
+
     tracing::info!(
         capture_method = ?settings.capture_method,
         "Creating new capture engine"
@@ -1505,9 +1539,12 @@ async fn start_capture(
         tracing::error!("Capture engine is None after creation");
     }
     drop(engine_lock);
-    
-    tracing::debug!(capture_clicks = settings.capture_clicks, "Checking click capture setting");
-    
+
+    tracing::debug!(
+        capture_clicks = settings.capture_clicks,
+        "Checking click capture setting"
+    );
+
     // Start click capture if enabled
     if settings.capture_clicks {
         tracing::info!("Starting click capture");
@@ -1530,58 +1567,92 @@ async fn start_capture(
         use crate::hollow_border::set_border_interaction_complete_callback;
         let engine_for_cb = state.capture_engine.clone();
         let border_w = settings.border_width;
-        
+
         set_border_interaction_complete_callback(move |x, y, width, height| {
-            log::info!("🔄 Border interaction COMPLETE - Border window: x={}, y={}, w={}, h={}", x, y, width, height);
-            
+            log::info!(
+                "🔄 Border interaction COMPLETE - Border window: x={}, y={}, w={}, h={}",
+                x,
+                y,
+                width,
+                height
+            );
+
             // Calculate inner region (excluding border)
             let border_offset = border_w as i32;
             let inner_width = (width - border_offset * 2).max(1);
             let inner_height = (height - border_offset * 2).max(1);
-            log::info!("🔄 Border offset: {}, Inner region: {}x{} pixels", border_offset, inner_width, inner_height);
-            
+            log::info!(
+                "🔄 Border offset: {}, Inner region: {}x{} pixels",
+                border_offset,
+                inner_width,
+                inner_height
+            );
+
             // Check if border moved to a different monitor
             let center_x = x + width / 2;
             let center_y = y + height / 2;
-            
+
             #[cfg(target_os = "windows")]
             {
                 use windows::Win32::Foundation::POINT;
-                use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+                use windows::Win32::Graphics::Gdi::{
+                    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+                };
                 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-                
+
                 let current_monitor = unsafe {
                     MonitorFromPoint(
-                        POINT { x: center_x, y: center_y },
-                        MONITOR_DEFAULTTONEAREST
+                        POINT {
+                            x: center_x,
+                            y: center_y,
+                        },
+                        MONITOR_DEFAULTTONEAREST,
                     )
                 };
-                
+
                 if !current_monitor.is_invalid() {
                     let mut monitor_info = MONITORINFO {
                         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                         ..Default::default()
                     };
-                    
+
                     if unsafe { GetMonitorInfoW(current_monitor, &mut monitor_info) }.as_bool() {
                         let monitor_left = monitor_info.rcMonitor.left;
                         let monitor_top = monitor_info.rcMonitor.top;
-                        
+
                         // Get monitor DPI for scaling calculations
                         let mut dpi_x: u32 = 96; // Default DPI
                         let mut dpi_y: u32 = 96;
-                        if unsafe { GetDpiForMonitor(current_monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.is_ok() {
-                            let scale_factor = dpi_x as f32 / 96.0;
-                            log::info!("🖥️  Monitor DPI: {}x{}, Scale factor: {:.2}x", dpi_x, dpi_y, scale_factor);
+                        if unsafe {
+                            GetDpiForMonitor(
+                                current_monitor,
+                                MDT_EFFECTIVE_DPI,
+                                &mut dpi_x,
+                                &mut dpi_y,
+                            )
                         }
-                        
+                        .is_ok()
+                        {
+                            let scale_factor = dpi_x as f32 / 96.0;
+                            log::info!(
+                                "🖥️  Monitor DPI: {}x{}, Scale factor: {:.2}x",
+                                dpi_x,
+                                dpi_y,
+                                scale_factor
+                            );
+                        }
+
                         // Get current capture monitor origin
                         let mut engine = engine_for_cb.lock().unwrap();
                         let needs_restart = if let Some(ref eng) = *engine {
                             // Check if we have a WindowsCaptureEngine with monitor_origin
-                            if let Some(wce) = eng.as_any().downcast_ref::<rustframe_capture::capture::WindowsCaptureEngine>() {
+                            if let Some(wce) = eng
+                                .as_any()
+                                .downcast_ref::<rustframe_capture::capture::WindowsCaptureEngine>(
+                            ) {
                                 let current_origin = wce.get_monitor_origin();
-                                let changed = current_origin.0 != monitor_left || current_origin.1 != monitor_top;
+                                let changed = current_origin.0 != monitor_left
+                                    || current_origin.1 != monitor_top;
                                 if changed {
                                     log::info!("🖥️  Monitor changed! Old origin: {:?}, New origin: ({}, {})", 
                                         current_origin, monitor_left, monitor_top);
@@ -1593,14 +1664,14 @@ async fn start_capture(
                         } else {
                             false
                         };
-                        
+
                         if needs_restart {
                             // Stop current capture
                             if let Some(ref mut eng) = *engine {
                                 log::info!("Stopping capture to switch monitors...");
                                 eng.stop();
                             }
-                            
+
                             // Restart capture on new monitor
                             if let Some(ref mut eng) = *engine {
                                 let new_region = crate::CaptureRect {
@@ -1609,8 +1680,11 @@ async fn start_capture(
                                     width: inner_width as u32,
                                     height: inner_height as u32,
                                 };
-                                
-                                log::info!("Restarting capture on new monitor with region: {:?}", new_region);
+
+                                log::info!(
+                                    "Restarting capture on new monitor with region: {:?}",
+                                    new_region
+                                );
                                 if let Err(e) = eng.start(new_region, true) {
                                     log::error!("Failed to restart capture: {}", e);
                                 } else {
@@ -1620,7 +1694,7 @@ async fn start_capture(
                             drop(engine);
                         } else {
                             drop(engine);
-                            
+
                             // Same monitor - just update region
                             let mut engine = engine_for_cb.lock().unwrap();
                             if let Some(ref mut eng) = *engine {
@@ -1633,8 +1707,13 @@ async fn start_capture(
                                 if let Err(e) = eng.update_region(new_region) {
                                     log::error!("Failed to update capture region: {}", e);
                                 } else {
-                                    log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
-                                        new_region.x, new_region.y, new_region.width, new_region.height);
+                                    log::info!(
+                                        "✅ Capture region updated: x={}, y={}, w={}, h={}",
+                                        new_region.x,
+                                        new_region.y,
+                                        new_region.width,
+                                        new_region.height
+                                    );
                                 }
                             }
                             drop(engine);
@@ -1642,7 +1721,7 @@ async fn start_capture(
                     }
                 }
             }
-            
+
             #[cfg(not(target_os = "windows"))]
             {
                 #[cfg(target_os = "macos")]
@@ -1650,32 +1729,39 @@ async fn start_capture(
                     // macOS: Check if border moved to different display
                     let mut engine = engine_for_cb.lock().unwrap();
                     let needs_restart = if let Some(ref eng) = *engine {
-                        if let Some(macos_eng) = eng.as_any().downcast_ref::<rustframe_capture::capture::MacOSCaptureEngine>() {
+                        if let Some(macos_eng) =
+                            eng.as_any()
+                                .downcast_ref::<rustframe_capture::capture::MacOSCaptureEngine>()
+                        {
                             let current_origin = macos_eng.get_monitor_origin();
-                            
+
                             // Use CGGetDisplaysWithRect to find current display (using 1x1 rect at point)
                             use core_graphics::display::{CGDisplay, CGRect};
                             use core_graphics::geometry::{CGPoint, CGSize};
-                            
+
                             let rect = CGRect::new(
                                 &CGPoint::new(center_x as f64, center_y as f64),
-                                &CGSize::new(1.0, 1.0)
+                                &CGSize::new(1.0, 1.0),
                             );
                             let display_count = 1;
                             let mut display_id: u32 = 0;
-                            
+
                             let changed = unsafe {
                                 if core_graphics::display::CGGetDisplaysWithRect(
                                     rect,
                                     display_count,
                                     &mut display_id,
-                                    std::ptr::null_mut()
-                                ) == 0 {
+                                    std::ptr::null_mut(),
+                                ) == 0
+                                {
                                     let display = CGDisplay::new(display_id);
                                     let bounds = display.bounds();
-                                    let new_origin = (bounds.origin.x as i32, bounds.origin.y as i32);
-                                    
-                                    if current_origin.0 != new_origin.0 || current_origin.1 != new_origin.1 {
+                                    let new_origin =
+                                        (bounds.origin.x as i32, bounds.origin.y as i32);
+
+                                    if current_origin.0 != new_origin.0
+                                        || current_origin.1 != new_origin.1
+                                    {
                                         log::info!("🖥️  Monitor changed! Old origin: {:?}, New origin: {:?}", 
                                             current_origin, new_origin);
                                         true
@@ -1686,7 +1772,7 @@ async fn start_capture(
                                     false
                                 }
                             };
-                            
+
                             changed
                         } else {
                             false
@@ -1694,14 +1780,14 @@ async fn start_capture(
                     } else {
                         false
                     };
-                    
+
                     if needs_restart {
                         // Stop current capture
                         if let Some(ref mut eng) = *engine {
                             log::info!("Stopping capture to switch monitors...");
                             eng.stop();
                         }
-                        
+
                         // Restart capture on new monitor
                         if let Some(ref mut eng) = *engine {
                             let new_region = crate::CaptureRect {
@@ -1710,8 +1796,11 @@ async fn start_capture(
                                 width: inner_width as u32,
                                 height: inner_height as u32,
                             };
-                            
-                            log::info!("Restarting capture on new monitor with region: {:?}", new_region);
+
+                            log::info!(
+                                "Restarting capture on new monitor with region: {:?}",
+                                new_region
+                            );
                             if let Err(e) = eng.start(new_region, true) {
                                 log::error!("Failed to restart capture: {}", e);
                             } else {
@@ -1721,7 +1810,7 @@ async fn start_capture(
                         drop(engine);
                     } else {
                         drop(engine);
-                        
+
                         // Same monitor - just update region
                         let mut engine = engine_for_cb.lock().unwrap();
                         if let Some(ref mut eng) = *engine {
@@ -1734,14 +1823,19 @@ async fn start_capture(
                             if let Err(e) = eng.update_region(new_region) {
                                 log::error!("Failed to update capture region: {}", e);
                             } else {
-                                log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
-                                    new_region.x, new_region.y, new_region.width, new_region.height);
+                                log::info!(
+                                    "✅ Capture region updated: x={}, y={}, w={}, h={}",
+                                    new_region.x,
+                                    new_region.y,
+                                    new_region.width,
+                                    new_region.height
+                                );
                             }
                         }
                         drop(engine);
                     }
                 }
-                
+
                 #[cfg(not(target_os = "macos"))]
                 {
                     // Linux and other platforms: just update region
@@ -1756,16 +1850,25 @@ async fn start_capture(
                         if let Err(e) = eng.update_region(new_region) {
                             log::error!("Failed to update capture region: {}", e);
                         } else {
-                            log::info!("✅ Capture region updated: x={}, y={}, w={}, h={}", 
-                                new_region.x, new_region.y, new_region.width, new_region.height);
+                            log::info!(
+                                "✅ Capture region updated: x={}, y={}, w={}, h={}",
+                                new_region.x,
+                                new_region.y,
+                                new_region.width,
+                                new_region.height
+                            );
                         }
                     }
                     drop(engine);
                 }
             }
-            
+
             // Resize destination window
-            log::info!("🔄 Attempting to resize destination window to {}x{} pixels...", inner_width, inner_height);
+            log::info!(
+                "🔄 Attempting to resize destination window to {}x{} pixels...",
+                inner_width,
+                inner_height
+            );
             if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref mut dest) = *dest_lock {
                     dest.resize(inner_width as u32, inner_height as u32);
@@ -1776,7 +1879,7 @@ async fn start_capture(
             } else {
                 log::warn!("⚠️ Could not lock DESTINATION_WINDOW!");
             }
-            
+
             // Update REC indicator position
             if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
                 if let Some(ref rec) = *rec_lock {
@@ -1792,7 +1895,7 @@ async fn start_capture(
     {
         use crate::hollow_border::set_border_live_move_callback;
         let border_w = settings.border_width;
-        
+
         set_border_live_move_callback(move |x, y, width, height| {
             // Update REC indicator position in real-time during drag
             if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
@@ -1829,7 +1932,7 @@ async fn start_capture(
             // Reduces CPU from ~50% to ~5-10% during interaction
             // Border updates happen once on mouseUp event (see callback above)
             let is_interacting = crate::hollow_border::is_border_interacting();
-            
+
             if is_interacting {
                 // Skip frame capture and rendering during interaction
                 std::thread::sleep(frame_duration);
@@ -1848,25 +1951,30 @@ async fn start_capture(
 
             // Render frame to destination window (use try_lock to avoid blocking)
             if let Some(mut frame) = frame {
-                log::debug!("Got frame: {}x{}, data len: {}, gpu: {}", 
-                    frame.width, frame.height, frame.data.len(), frame.gpu_texture.is_some());
-                    
+                log::debug!(
+                    "Got frame: {}x{}, data len: {}, gpu: {}",
+                    frame.width,
+                    frame.height,
+                    frame.data.len(),
+                    frame.gpu_texture.is_some()
+                );
+
                 // Check if GPU acceleration is available and enabled
                 let gpu_enabled = settings_clone.lock().unwrap().gpu_acceleration;
                 let use_gpu = gpu_enabled && frame.gpu_texture.is_some();
-                
+
                 // Overlay click highlights if enabled
                 let has_clicks = if capture_clicks {
                     // Get display info for coordinate conversion
                     let display_info = display_info::get();
-                    
+
                     // frame.offset_x/y are in points, but clicks are stored in pixels
                     // Convert to pixels using centralized display info
                     let offset_x_pixels = display_info.points_to_pixels(frame.offset_x as f64);
                     let offset_y_pixels = display_info.points_to_pixels(frame.offset_y as f64);
                     let width_pixels = display_info.points_to_pixels(frame.width as f64) as u32;
                     let height_pixels = display_info.points_to_pixels(frame.height as f64) as u32;
-                    
+
                     // Use frame's offset for accurate click detection
                     // frame.offset_x/y tell us where the frame starts in screen coordinates
                     // This handles clipped regions correctly
@@ -1918,10 +2026,22 @@ async fn start_capture(
                         #[cfg(target_os = "macos")]
                         {
                             if use_gpu && !has_clicks {
-                                if let Some(rustframe_capture::capture::GpuTextureHandle::Metal { 
-                                    iosurface_ptr, crop_x, crop_y, crop_w, crop_h, .. 
-                                }) = frame.gpu_texture {
-                                    window.update_frame_from_iosurface_ptr(iosurface_ptr, crop_x, crop_y, crop_w, crop_h);
+                                if let Some(rustframe_capture::capture::GpuTextureHandle::Metal {
+                                    iosurface_ptr,
+                                    crop_x,
+                                    crop_y,
+                                    crop_w,
+                                    crop_h,
+                                    ..
+                                }) = frame.gpu_texture
+                                {
+                                    window.update_frame_from_iosurface_ptr(
+                                        iosurface_ptr,
+                                        crop_x,
+                                        crop_y,
+                                        crop_w,
+                                        crop_h,
+                                    );
                                 } else {
                                     window.update_frame(frame.data, frame.width, frame.height);
                                 }
@@ -1930,14 +2050,26 @@ async fn start_capture(
                                 window.update_frame(frame.data, frame.width, frame.height);
                             }
                         }
-                        
+
                         #[cfg(target_os = "windows")]
                         {
                             if use_gpu && !has_clicks {
-                                if let Some(rustframe_capture::capture::GpuTextureHandle::D3D11 { 
-                                    texture_ptr, crop_x, crop_y, crop_width, crop_height, .. 
-                                }) = frame.gpu_texture {
-                                    window.update_frame_from_texture(texture_ptr, crop_x, crop_y, crop_width, crop_height);
+                                if let Some(rustframe_capture::capture::GpuTextureHandle::D3D11 {
+                                    texture_ptr,
+                                    crop_x,
+                                    crop_y,
+                                    crop_width,
+                                    crop_height,
+                                    ..
+                                }) = frame.gpu_texture
+                                {
+                                    window.update_frame_from_texture(
+                                        texture_ptr,
+                                        crop_x,
+                                        crop_y,
+                                        crop_width,
+                                        crop_height,
+                                    );
                                 } else {
                                     window.update_frame(frame.data, frame.width, frame.height);
                                 }
@@ -1946,7 +2078,7 @@ async fn start_capture(
                                 window.update_frame(frame.data, frame.width, frame.height);
                             }
                         }
-                        
+
                         #[cfg(target_os = "linux")]
                         {
                             window.update_frame(frame.data, frame.width, frame.height);
@@ -1957,17 +2089,17 @@ async fn start_capture(
 
             // Frame rate limiting
             let elapsed = frame_start.elapsed();
-            
+
             // During border interaction (drag/resize), use faster update rate for Meet sync
             let is_interacting_for_fps = hollow_border::is_border_interacting();
-            
+
             let min_frame_duration = if is_interacting_for_fps {
                 // 5ms during interaction = ~200 FPS max for smooth Meet updates
                 std::time::Duration::from_millis(5)
             } else {
                 frame_duration
             };
-            
+
             if elapsed < min_frame_duration {
                 std::thread::sleep(min_frame_duration - elapsed);
             }
@@ -2038,7 +2170,7 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     tracing::debug!("Clearing HOLLOW_BORDER");
     *HOLLOW_BORDER.lock().unwrap() = None;
     log::info!("Capture border cleared");
-    
+
     // Also clear preview border if it somehow exists
     tracing::debug!("Clearing PREVIEW_BORDER");
     *PREVIEW_BORDER.lock().unwrap() = None;
@@ -2068,26 +2200,26 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
 async fn cleanup_on_capture_failed(state: State<'_, AppState>) -> Result<(), String> {
     tracing::error!("Cleaning up after capture start failure");
     log::error!("Cleaning up after capture start failure");
-    
+
     // Stop any capture engine that might have started
     let mut engine_lock = state.capture_engine.lock().unwrap();
     if let Some(ref mut engine) = *engine_lock {
         engine.stop();
     }
     drop(engine_lock);
-    
+
     // Clean up all borders and windows
     *HOLLOW_BORDER.lock().unwrap() = None;
     *PREVIEW_BORDER.lock().unwrap() = None;
     *DESTINATION_WINDOW.lock().unwrap() = None;
     *REC_INDICATOR.lock().unwrap() = None;
-    
+
     // Clear click capture data
     platform::input::clear_clicks();
-    
+
     // Ensure capturing state is false
     *state.is_capturing.lock().unwrap() = false;
-    
+
     log::info!("Cleanup completed after capture failure");
     Ok(())
 }
@@ -2198,8 +2330,11 @@ async fn get_monitors(window: tauri::Window) -> Result<Vec<MonitorInfo>, String>
                 let scale_factor = m.scale_factor();
                 let size = m.size().to_logical::<u32>(scale_factor);
                 let position = m.position().to_logical::<i32>(scale_factor);
-                let name = m.name().map(|s| s.to_string()).unwrap_or_else(|| format!("Display {}", idx + 1));
-                
+                let name = m
+                    .name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("Display {}", idx + 1));
+
                 result.push(MonitorInfo {
                     id: idx,
                     name,
@@ -2213,8 +2348,8 @@ async fn get_monitors(window: tauri::Window) -> Result<Vec<MonitorInfo>, String>
                 });
             }
             Ok(result)
-        },
-        Err(e) => Err(format!("Failed to list monitors: {}", e))
+        }
+        Err(e) => Err(format!("Failed to list monitors: {}", e)),
     }
 }
 
@@ -2242,9 +2377,7 @@ async fn get_screen_dimensions() -> Result<(u32, u32), String> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 async fn get_monitor_refresh_rate() -> Result<u32, String> {
-    use windows::Win32::Graphics::Gdi::{
-        EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS,
-    };
+    use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS};
     unsafe {
         let mut devmode: DEVMODEW = std::mem::zeroed();
         devmode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
@@ -2291,7 +2424,7 @@ fn get_app_version() -> String {
 #[tauri::command]
 fn get_recommended_window_size() -> (u32, u32) {
     let display_info = display_info::get();
-    
+
     // Instead of fixed pixels, let's target 60% of screen height (max 900px width)
     // This scales better across different screen sizes
     let screen_height = if display_info.height_points > 0.0 {
@@ -2299,19 +2432,19 @@ fn get_recommended_window_size() -> (u32, u32) {
     } else {
         900.0
     };
-    
+
     let target_height = (screen_height * 0.7).min(900.0).max(700.0);
     let target_width = (target_height * 1.1).min(1100.0).max(900.0);
-    
+
     // Convert to logical if the OS doesn't handle it automatically (display_info returns physical usually)
     // But Tauri usually expects logical.
-    
+
     // If we assume display_info.height is physical, and we want logical size for Tauri:
     // logical = physical / scale
-    
+
     let logical_width = (target_width / display_info.scale_factor).round() as u32;
     let logical_height = (target_height / display_info.scale_factor).round() as u32;
-    
+
     (logical_width, logical_height)
 }
 
@@ -2327,17 +2460,17 @@ fn main() {
         Err(_e) => {
             eprintln!("RustFrame is already running!");
             eprintln!("Attempting to activate existing window...");
-            
+
             // Try to bring the existing window to foreground
             single_instance::SingleInstanceLock::activate_existing_instance();
-            
+
             std::process::exit(1);
         }
     };
-    
+
     // Store the lock in global state so it's held for the entire application lifetime
     *SINGLE_INSTANCE_LOCK.lock().unwrap() = Some(instance_lock);
-    
+
     // Initialize logging system AFTER acquiring lock
     // Load settings early to get log level configuration
     let (initial_settings, _) = if let Some(dir) = rustframe_config_dir() {
@@ -2347,9 +2480,11 @@ fn main() {
     };
 
     // Parse log level and initialize logger
-    let log_level = initial_settings.log_level.parse::<logging::LogLevel>()
+    let log_level = initial_settings
+        .log_level
+        .parse::<logging::LogLevel>()
         .unwrap_or(logging::LogLevel::Error);
-    
+
     if let Err(e) = logging::init_logging(log_level, initial_settings.log_to_file) {
         eprintln!("Failed to initialize logging: {}", e);
     } else {
@@ -2364,7 +2499,7 @@ fn main() {
             "Application started"
         );
         tracing::info!("***********************************************************************");
-        
+
         // Log system information for debugging
         tracing::debug!("");
         tracing::debug!("=== SYSTEM INFORMATION ===");
@@ -2386,7 +2521,7 @@ fn main() {
         eprintln!("Warning: Failed to initialize display info: {}", e);
     } else {
         tracing::debug!("Display info initialized successfully");
-        
+
         // Log display configuration for debugging
         tracing::debug!("");
         tracing::debug!("=== DISPLAY CONFIGURATION ===");
@@ -2404,7 +2539,10 @@ fn main() {
     // Set up panic hook for cleanup on crash
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        tracing::error!(?panic_info, "Application panic detected! Performing emergency cleanup");
+        tracing::error!(
+            ?panic_info,
+            "Application panic detected! Performing emergency cleanup"
+        );
         log::error!("Application panic detected! Performing emergency cleanup...");
         perform_cleanup();
         default_panic(panic_info);
@@ -2417,7 +2555,7 @@ fn main() {
     } else {
         None
     };
-    
+
     // Log active settings for debugging
     tracing::debug!("");
     tracing::debug!("=== ACTIVE SETTINGS ===");
@@ -2448,14 +2586,14 @@ fn main() {
         capture_method = %settings.capture_method.to_string(),
         "Initializing capture engine"
     );
-    
+
     let capture_engine = create_capture_engine_for_settings(&settings)
         .or_else(|e| {
             tracing::warn!(error = %e, "Failed to create capture engine with settings, using default");
             create_capture_engine().map_err(|e| e.to_string())
         })
         .expect("Failed to initialize capture engine");
-    
+
     tracing::debug!("Capture engine created successfully");
 
     let app_state = AppState {
@@ -2516,7 +2654,8 @@ fn main() {
                         *app_state.render_thread_stop.lock().unwrap() = true;
 
                         // Join render thread to avoid dropping windows while it's rendering
-                        if let Some(handle) = app_state.render_thread_handle.lock().unwrap().take() {
+                        if let Some(handle) = app_state.render_thread_handle.lock().unwrap().take()
+                        {
                             let _ = handle.join();
                         }
 

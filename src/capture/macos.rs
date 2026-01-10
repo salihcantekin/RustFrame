@@ -8,12 +8,12 @@
 
 use super::{CaptureEngine, CaptureFrame, CaptureRect};
 use anyhow::{anyhow, Result};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use core_graphics::image::CGImage;
-use core_graphics::geometry::{CGRect, CGPoint, CGSize};
-use core_graphics::window::{kCGWindowListOptionOnScreenOnly, kCGNullWindowID};
-use std::sync::Arc;
-use log::info;
+use core_graphics::window::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly};
 use foreign_types_shared::ForeignType;
+use log::info;
+use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 #[path = "macos_sck.rs"]
@@ -49,9 +49,9 @@ extern "C" {
 /// Get current macOS version
 #[cfg(target_os = "macos")]
 fn get_macos_version() -> (isize, isize, isize) {
-    use objc::{class, msg_send, sel, sel_impl};
     use objc::runtime::Object;
-    
+    use objc::{class, msg_send, sel, sel_impl};
+
     unsafe {
         let process_info: *mut Object = msg_send![class!(NSProcessInfo), processInfo];
         let version: NSOperatingSystemVersion = msg_send![process_info, operatingSystemVersion];
@@ -61,10 +61,10 @@ fn get_macos_version() -> (isize, isize, isize) {
 
 /// Check if we should use legacy CGWindowListCreateImage
 /// or modern CGDisplayCreateImageForRect (macOS 15+/Sequoia)
-/// 
+///
 /// BOTH APIs require Screen Recording permission (one-time setup).
 /// After permission is granted once, no more prompts appear.
-/// 
+///
 /// Note: macOS internal versioning:
 /// - macOS 11 Big Sur = 20.x
 /// - macOS 12 Monterey = 21.x
@@ -84,7 +84,10 @@ fn should_use_legacy_capture() -> bool {
 fn log_capture_method() {
     let (major, minor, patch) = get_macos_version();
     if should_use_legacy_capture() {
-        info!("macOS {}.{}.{}: Using legacy CGWindowListCreateImage (one-time permission required)", major, minor, patch);
+        info!(
+            "macOS {}.{}.{}: Using legacy CGWindowListCreateImage (one-time permission required)",
+            major, minor, patch
+        );
     } else {
         info!("macOS {}.{}.{}: Using modern CGDisplayCreateImageForRect (one-time permission required)", major, minor, patch);
     }
@@ -93,9 +96,7 @@ fn log_capture_method() {
 #[cfg(target_os = "macos")]
 fn supports_screen_capture_kit() -> bool {
     let (major, minor, patch) = get_macos_version();
-    (major > 12)
-        || (major == 12 && minor > 3)
-        || (major == 12 && minor == 3 && patch >= 0)
+    (major > 12) || (major == 12 && minor > 3) || (major == 12 && minor == 3 && patch >= 0)
 }
 
 #[cfg(target_os = "macos")]
@@ -109,7 +110,7 @@ extern "C" {
         windowID: u32,
         imageOption: u32,
     ) -> *mut core_graphics::sys::CGImage;
-    
+
     // Modern API for macOS 15+ (less intrusive)
     fn CGDisplayCreateImage(display: u32) -> *mut core_graphics::sys::CGImage;
     fn CGDisplayCreateImageForRect(display: u32, rect: CGRect) -> *mut core_graphics::sys::CGImage;
@@ -164,7 +165,8 @@ fn cursor_rgba_premultiplied() -> Option<(Vec<u8>, u32, u32, i32, i32)> {
             return None;
         }
 
-        let image_source = CGImageSourceCreateWithData(tiff as *const std::ffi::c_void, std::ptr::null());
+        let image_source =
+            CGImageSourceCreateWithData(tiff as *const std::ffi::c_void, std::ptr::null());
         if image_source.is_null() {
             return None;
         }
@@ -334,13 +336,13 @@ fn overlay_software_cursor_dot_rgba(
 #[cfg(target_os = "macos")]
 extern "C" {
     static _dispatch_main_q: std::ffi::c_void;
-    
+
     fn dispatch_sync_f(
         queue: *const std::ffi::c_void,
         context: *mut std::ffi::c_void,
         work: extern "C" fn(*mut std::ffi::c_void),
     );
-    
+
     fn pthread_main_np() -> i32;
 }
 
@@ -357,7 +359,7 @@ pub struct MacOSCaptureEngine {
     last_frame: Option<Arc<Vec<u8>>>,
     frame_width: u32,
     frame_height: u32,
-    
+
     // Monitor tracking for multi-monitor support
     monitor_origin: (i32, i32),
 
@@ -402,10 +404,10 @@ fn ensure_screen_recording_permission() -> Result<()> {
 #[cfg(target_os = "macos")]
 extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
     let ctx = unsafe { &mut *(context as *mut CaptureContext) };
-    
+
     autoreleasepool(|| {
         // Permission is checked before dispatching to the main thread.
-        
+
         let capture_rect = CGRect {
             origin: CGPoint {
                 x: ctx.region.x as f64,
@@ -416,7 +418,7 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
                 height: ctx.region.height as f64,
             },
         };
-        
+
         // Choose capture method based on macOS version
         let image_ptr = if should_use_legacy_capture() {
             unsafe {
@@ -433,12 +435,12 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
                 CGDisplayCreateImageForRect(display_id, capture_rect)
             }
         };
-        
+
         if image_ptr.is_null() {
             ctx.error = Some("Screen capture returned NULL - screen recording permission may be denied or region may be invalid".to_string());
             return;
         }
-        
+
         // Take ownership of the image
         let screen_image: CGImage = unsafe { CGImage::from_ptr(image_ptr) };
 
@@ -449,11 +451,11 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
             ctx.error = Some("Captured image has zero dimensions".to_string());
             return;
         }
-        
+
         let width = img_width as u32;
         let height = img_height as u32;
         let bytes_per_row = width as usize * 4;
-        
+
         let color_space = core_graphics::color_space::CGColorSpace::create_device_rgb();
         let mut pixel_data = vec![0u8; bytes_per_row * height as usize];
         let cg_context = core_graphics::context::CGContext::create_bitmap_context(
@@ -520,7 +522,9 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
                         let cursor_x_px = rel_x_px.round() as i32;
                         let cursor_y_px = rel_y_px_from_top.round() as i32;
 
-                        if let Some((cursor_rgba, cw, ch, hot_x, hot_y)) = cursor_rgba_premultiplied() {
+                        if let Some((cursor_rgba, cw, ch, hot_x, hot_y)) =
+                            cursor_rgba_premultiplied()
+                        {
                             let draw_x = cursor_x_px - hot_x;
                             let draw_y = cursor_y_px - hot_y;
                             overlay_cursor_rgba_premultiplied(
@@ -546,7 +550,7 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
                 }
             }
         }
-        
+
         // Store results
         ctx.pixel_data = Some(pixel_data);
         ctx.result_width = width;
@@ -557,24 +561,38 @@ extern "C" fn capture_on_main_thread(context: *mut std::ffi::c_void) {
 impl MacOSCaptureEngine {
     pub fn new() -> Result<Self> {
         log::info!("[MACOS_ENGINE] new() called");
-        
+
         // Log which capture method will be used
         #[cfg(target_os = "macos")]
         log_capture_method();
-        
+
         log::info!("[MACOS_ENGINE] Checking SCK availability...");
-        log::info!("[MACOS_ENGINE]   cfg!(target_os = \"macos\"): {}", cfg!(target_os = "macos"));
-        log::info!("[MACOS_ENGINE]   supports_screen_capture_kit(): {}", supports_screen_capture_kit());
-        log::info!("[MACOS_ENGINE]   ScreenCaptureKitCapture::is_available(): {}", ScreenCaptureKitCapture::is_available());
-        
-        let sck = if cfg!(target_os = "macos") && supports_screen_capture_kit() && ScreenCaptureKitCapture::is_available() {
+        log::info!(
+            "[MACOS_ENGINE]   cfg!(target_os = \"macos\"): {}",
+            cfg!(target_os = "macos")
+        );
+        log::info!(
+            "[MACOS_ENGINE]   supports_screen_capture_kit(): {}",
+            supports_screen_capture_kit()
+        );
+        log::info!(
+            "[MACOS_ENGINE]   ScreenCaptureKitCapture::is_available(): {}",
+            ScreenCaptureKitCapture::is_available()
+        );
+
+        let sck = if cfg!(target_os = "macos")
+            && supports_screen_capture_kit()
+            && ScreenCaptureKitCapture::is_available()
+        {
             log::info!("[MACOS_ENGINE] Creating ScreenCaptureKit instance...");
             Some(ScreenCaptureKitCapture::new())
         } else {
-            log::warn!("[MACOS_ENGINE] ScreenCaptureKit NOT available, will use CoreGraphics fallback");
+            log::warn!(
+                "[MACOS_ENGINE] ScreenCaptureKit NOT available, will use CoreGraphics fallback"
+            );
             None
         };
-        
+
         log::info!("[MACOS_ENGINE] sck.is_some() = {}", sck.is_some());
 
         Ok(Self {
@@ -606,7 +624,7 @@ impl MacOSCaptureEngine {
             result_height: 0,
             error: None,
         };
-        
+
         // Dispatch ALL capture work to main thread synchronously.
         // IMPORTANT: dispatching synchronously to the main queue from the main thread will deadlock.
         unsafe {
@@ -622,25 +640,31 @@ impl MacOSCaptureEngine {
                 );
             }
         }
-        
+
         // Check for errors from the callback
         if let Some(err) = ctx.error {
             log::error!("Capture error: {}", err);
             return Err(anyhow!(err));
         }
-        
+
         // Get the pixel data (already converted on main thread)
-        let pixel_data = ctx.pixel_data.ok_or_else(|| anyhow!("No pixel data captured"))?;
-        
+        let pixel_data = ctx
+            .pixel_data
+            .ok_or_else(|| anyhow!("No pixel data captured"))?;
+
         self.frame_width = ctx.result_width;
         self.frame_height = ctx.result_height;
         self.last_frame = Some(Arc::new(pixel_data));
         self.region = Some(region);
-        
-        log::info!("Capture region completed successfully: {}x{}", self.frame_width, self.frame_height);
+
+        log::info!(
+            "Capture region completed successfully: {}x{}",
+            self.frame_width,
+            self.frame_height
+        );
         Ok(())
     }
-    
+
     #[cfg(not(target_os = "macos"))]
     fn capture_region(&mut self, _region: CaptureRect) -> Result<()> {
         Err(anyhow!("macOS capture engine called on non-macOS build"))
@@ -649,7 +673,11 @@ impl MacOSCaptureEngine {
 
 impl CaptureEngine for MacOSCaptureEngine {
     fn start(&mut self, region: CaptureRect, show_cursor: bool) -> Result<()> {
-        log::info!("[MACOS_ENGINE] start() called with region: {:?}, cursor: {}", region, show_cursor);
+        log::info!(
+            "[MACOS_ENGINE] start() called with region: {:?}, cursor: {}",
+            region,
+            show_cursor
+        );
 
         // IMPORTANT: If Screen Recording permission is not granted, calling into
         // ScreenCaptureKit/CoreGraphics can fail in non-obvious ways. Preflight
@@ -673,18 +701,32 @@ impl CaptureEngine for MacOSCaptureEngine {
         // Detect which monitor contains this region
         let center_x = region.x + (region.width as i32 / 2);
         let center_y = region.y + (region.height as i32 / 2);
-        
-        if let Some((origin_x, origin_y, display_width, display_height)) = Self::get_display_for_point(center_x, center_y) {
+
+        if let Some((origin_x, origin_y, display_width, display_height)) =
+            Self::get_display_for_point(center_x, center_y)
+        {
             self.monitor_origin = (origin_x, origin_y);
-            log::info!("[MACOS_ENGINE] Capture region on monitor at origin ({}, {}), size: {}x{}", 
-                      origin_x, origin_y, display_width, display_height);
+            log::info!(
+                "[MACOS_ENGINE] Capture region on monitor at origin ({}, {}), size: {}x{}",
+                origin_x,
+                origin_y,
+                display_width,
+                display_height
+            );
         } else {
-            log::warn!("[MACOS_ENGINE] Could not determine display for point ({}, {})", center_x, center_y);
+            log::warn!(
+                "[MACOS_ENGINE] Could not determine display for point ({}, {})",
+                center_x,
+                center_y
+            );
             self.monitor_origin = (0, 0);
         }
 
         // Prefer ScreenCaptureKit when available; it includes the real system cursor.
-        log::info!("[MACOS_ENGINE] Checking if SCK is available... self.sck.is_some()={}", self.sck.is_some());
+        log::info!(
+            "[MACOS_ENGINE] Checking if SCK is available... self.sck.is_some()={}",
+            self.sck.is_some()
+        );
         if let Some(ref mut sck) = self.sck {
             log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
             if supports_screen_capture_kit() {
@@ -758,20 +800,30 @@ impl CaptureEngine for MacOSCaptureEngine {
                         if seq != self.sck_last_seq {
                             self.sck_last_seq = seq;
                         }
-                        
-// Get IOSurface data for GPU acceleration (includes retained pointer)
-						let gpu_texture = sck.latest_iosurface().map(|(iosurface_ptr, iosurface_id, pixel_format, crop_x, crop_y, crop_w, crop_h)| {
-							super::GpuTextureHandle::Metal {
-								iosurface_ptr,
+
+                        // Get IOSurface data for GPU acceleration (includes retained pointer)
+                        let gpu_texture = sck.latest_iosurface().map(
+                            |(
+                                iosurface_ptr,
                                 iosurface_id,
                                 pixel_format,
                                 crop_x,
                                 crop_y,
                                 crop_w,
                                 crop_h,
-                            }
-                        });
-                        
+                            )| {
+                                super::GpuTextureHandle::Metal {
+                                    iosurface_ptr,
+                                    iosurface_id,
+                                    pixel_format,
+                                    crop_x,
+                                    crop_y,
+                                    crop_w,
+                                    crop_h,
+                                }
+                            },
+                        );
+
                         return Some(CaptureFrame {
                             data,
                             width: w,
@@ -827,7 +879,7 @@ impl CaptureEngine for MacOSCaptureEngine {
     fn get_region(&self) -> Option<CaptureRect> {
         self.region
     }
-    
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -838,29 +890,27 @@ impl MacOSCaptureEngine {
     pub fn get_monitor_origin(&self) -> (i32, i32) {
         self.monitor_origin
     }
-    
+
     /// Detect which display contains the given point and return its bounds
     #[cfg(target_os = "macos")]
     fn get_display_for_point(x: i32, y: i32) -> Option<(i32, i32, u32, u32)> {
         use core_graphics::display::{CGDisplay, CGRect};
         use core_graphics::geometry::{CGPoint, CGSize};
-        
+
         // Create a 1x1 rect at the point to query
-        let rect = CGRect::new(
-            &CGPoint::new(x as f64, y as f64),
-            &CGSize::new(1.0, 1.0)
-        );
+        let rect = CGRect::new(&CGPoint::new(x as f64, y as f64), &CGSize::new(1.0, 1.0));
         let display_count = 1;
         let mut display_id: u32 = 0;
-        
+
         unsafe {
             // Get display at point (using 1x1 rect)
             if core_graphics::display::CGGetDisplaysWithRect(
                 rect,
                 display_count,
                 &mut display_id,
-                std::ptr::null_mut()
-            ) == 0 {
+                std::ptr::null_mut(),
+            ) == 0
+            {
                 let display = CGDisplay::new(display_id);
                 let bounds = display.bounds();
                 return Some((

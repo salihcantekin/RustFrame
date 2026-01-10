@@ -3,22 +3,23 @@
 //! Creates a transparent window with a colored border using NSPanel and custom NSView.
 
 use crate::traits::BorderWindow;
-use cocoa::appkit::{NSWindow, NSView, NSWindowStyleMask, NSBackingStoreType, NSColor, NSScreen};
-use cocoa::base::{id, nil, YES, NO};
-use cocoa::foundation::{NSRect, NSPoint, NSSize, NSAutoreleasePool};
+use cocoa::appkit::{NSBackingStoreType, NSColor, NSScreen, NSView, NSWindow, NSWindowStyleMask};
+use cocoa::base::{id, nil, NO, YES};
+use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize};
+use lazy_static::lazy_static;
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
-use std::sync::{Arc, Mutex};
+use objc::{class, msg_send, sel, sel_impl};
 use std::sync::atomic::{AtomicBool, Ordering};
-use objc::{msg_send, sel, sel_impl, class};
 use std::sync::Once;
-use lazy_static::lazy_static;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 // Global cache for border rectangle - updated by mouse events
 // Allows lock-free reads in capture loop (60 FPS)
 lazy_static! {
-    static ref BORDER_RECT_CACHE: Arc<Mutex<(i32, i32, i32, i32)>> = Arc::new(Mutex::new((0, 0, 800, 600)));
+    static ref BORDER_RECT_CACHE: Arc<Mutex<(i32, i32, i32, i32)>> =
+        Arc::new(Mutex::new((0, 0, 800, 600)));
 }
 
 // Flag indicating border is being dragged/resized
@@ -29,7 +30,8 @@ static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
 // Called once after drag/resize finishes - updates capture region and windows
 type BorderInteractionCompleteCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
 lazy_static! {
-    static ref BORDER_INTERACTION_COMPLETE_CALLBACK: Arc<Mutex<Option<BorderInteractionCompleteCallback>>> = Arc::new(Mutex::new(None));
+    static ref BORDER_INTERACTION_COMPLETE_CALLBACK: Arc<Mutex<Option<BorderInteractionCompleteCallback>>> =
+        Arc::new(Mutex::new(None));
 }
 
 /// Register callback to be notified when border drag/resize completes
@@ -117,37 +119,42 @@ fn start_mouse_poll(window: id) {
 
                     // Helper: set the cursor immediately based on current mouse position.
                     // This avoids requiring an initial click/resize before cursor feedback works.
-                    let desired_cursor_kind = |_window: id, view: id, x: f64, y: f64, width: f64, height: f64| -> i32 {
-                        if view == nil {
-                            return CURSOR_NONE;
-                        }
+                    let desired_cursor_kind =
+                        |_window: id, view: id, x: f64, y: f64, width: f64, height: f64| -> i32 {
+                            if view == nil {
+                                return CURSOR_NONE;
+                            }
 
-                        let border_width: f64 = msg_send![view, borderWidth];
-                        let border = border_width.max(8.0);
-                        let corner = (border * 2.0).max(20.0);
+                            let border_width: f64 = msg_send![view, borderWidth];
+                            let border = border_width.max(8.0);
+                            let corner = (border * 2.0).max(20.0);
 
-                        let in_left = x >= 0.0 && x < border;
-                        let in_right = x <= width && x > width - border;
-                        let in_bottom = y >= 0.0 && y < border;
-                        let in_top = y <= height && y > height - border;
+                            let in_left = x >= 0.0 && x < border;
+                            let in_right = x <= width && x > width - border;
+                            let in_bottom = y >= 0.0 && y < border;
+                            let in_top = y <= height && y > height - border;
 
-                        let in_tl = x >= 0.0 && x < corner && y <= height && y > height - corner;
-                        let in_tr = x <= width && x > width - corner && y <= height && y > height - corner;
-                        let in_bl = x >= 0.0 && x < corner && y >= 0.0 && y < corner;
-                        let in_br = x <= width && x > width - corner && y >= 0.0 && y < corner;
+                            let in_tl =
+                                x >= 0.0 && x < corner && y <= height && y > height - corner;
+                            let in_tr = x <= width
+                                && x > width - corner
+                                && y <= height
+                                && y > height - corner;
+                            let in_bl = x >= 0.0 && x < corner && y >= 0.0 && y < corner;
+                            let in_br = x <= width && x > width - corner && y >= 0.0 && y < corner;
 
-                        if in_tl || in_tr || in_bl || in_br {
-                            CURSOR_CROSSHAIR
-                        } else if in_top {
-                            CURSOR_OPEN_HAND
-                        } else if in_bottom {
-                            CURSOR_RESIZE_UD
-                        } else if in_left || in_right {
-                            CURSOR_RESIZE_LR
-                        } else {
-                            CURSOR_NONE
-                        }
-                    };
+                            if in_tl || in_tr || in_bl || in_br {
+                                CURSOR_CROSSHAIR
+                            } else if in_top {
+                                CURSOR_OPEN_HAND
+                            } else if in_bottom {
+                                CURSOR_RESIZE_UD
+                            } else if in_left || in_right {
+                                CURSOR_RESIZE_LR
+                            } else {
+                                CURSOR_NONE
+                            }
+                        };
 
                     let set_cursor_kind = |kind: i32| {
                         let cursor: id = match kind {
@@ -238,7 +245,11 @@ fn start_mouse_poll(window: id) {
             }
 
             // Polling thread for click-through management (still needed for capture mode)
-            let mut ctx = PollCtx { window_ptr, last_interactive: false, last_cursor_kind: CURSOR_NONE };
+            let mut ctx = PollCtx {
+                window_ptr,
+                last_interactive: false,
+                last_cursor_kind: CURSOR_NONE,
+            };
             while MOUSE_POLL_RUNNING.load(Ordering::SeqCst) {
                 unsafe {
                     dispatch_sync_f(
@@ -256,13 +267,13 @@ fn start_mouse_poll(window: id) {
 // GCD dispatch functions for main thread execution
 extern "C" {
     static _dispatch_main_q: std::ffi::c_void;
-    
+
     fn dispatch_sync_f(
         queue: *const std::ffi::c_void,
         context: *mut std::ffi::c_void,
         work: extern "C" fn(*mut std::ffi::c_void),
     );
-    
+
     fn pthread_main_np() -> i32;
 }
 
@@ -277,15 +288,15 @@ const EDGE_TOP: i32 = 1 << 3;
 /// Callback executed on main thread to create hollow border window
 extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
     let ctx = unsafe { &mut *(context as *mut CreateBorderContext) };
-    
+
     unsafe {
         let _pool = NSAutoreleasePool::new(nil);
         let screen: id = msg_send![class!(NSScreen), mainScreen];
         let screen_frame: NSRect = msg_send![screen, frame];
         let screen_height = screen_frame.size.height;
-        
+
         let macos_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
-        
+
         // Use NSPanel instead of NSWindow - panels don't activate the application
         // NSNonactivatingPanelMask (1 << 7) = 128 prevents application activation
         const NS_NONACTIVATING_PANEL_MASK: u64 = 1 << 7;
@@ -293,102 +304,108 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // We implement manual resize in mouseDragged; native resize conflicts with top-edge drag.
         let style_mask = NSWindowStyleMask::NSBorderlessWindowMask;
         let style_mask_raw = style_mask.bits() | NS_NONACTIVATING_PANEL_MASK;
-        
+
         let frame = NSRect::new(
             NSPoint::new(ctx.x as f64, macos_y),
-            NSSize::new(ctx.width as f64, ctx.height as f64)
+            NSSize::new(ctx.width as f64, ctx.height as f64),
         );
-        
+
         // Register custom classes first
         register_border_view_class();
-        
+
         // Create as custom NSPanel (utility window type) that can become key
-        let panel_class = Class::get("HollowBorderPanel").expect("HollowBorderPanel class not registered");
+        let panel_class =
+            Class::get("HollowBorderPanel").expect("HollowBorderPanel class not registered");
         let window: id = msg_send![panel_class, alloc];
-        let window: id = msg_send![window, 
+        let window: id = msg_send![window,
             initWithContentRect:frame
             styleMask:style_mask_raw
             backing:NSBackingStoreType::NSBackingStoreBuffered as u64
             defer:NO
         ];
-        
+
         if window == nil {
             log::error!("Failed to create hollow border NSWindow");
             ctx.result_window = None;
             return;
         }
-        
+
         window.setOpaque_(NO);
         PREVIEW_MODE.store(true, Ordering::SeqCst);
-        let preview_bg: id = msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
+        let preview_bg: id =
+            msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
         window.setBackgroundColor_(preview_bg);
         let _: () = msg_send![window, setMovableByWindowBackground: YES];
-        
+
         // NSPanel-specific settings
         // Note: Removed setBecomesKeyOnlyIfNeeded to allow immediate key window activation
         let _: () = msg_send![window, setWorksWhenModal: YES];
-        
+
         // Set window level to floating (3) - always on top
         let _: () = msg_send![window, setLevel: 3i32];
-        
+
         // Configure collection behavior to prevent affecting main window
         // - Stay in all spaces (CanJoinAllSpaces)
         // - Don't show in Cmd+Tab (IgnoresCycle)
         // Note: Removed Transient and Stationary to allow main window activation
-        let collection_behavior = 
-            (1u64 << 0) | // CanJoinAllSpaces
-            (1u64 << 6);  // IgnoresCycle
+        let collection_behavior = (1u64 << 0) | // CanJoinAllSpaces
+            (1u64 << 6); // IgnoresCycle
         let _: () = msg_send![window, setCollectionBehavior: collection_behavior];
-        
+
         // Start in click-through mode; capture mode will dynamically enable events on the border.
         window.setIgnoresMouseEvents_(YES);
-        
+
         // Accept mouse events without becoming key window
         // This allows interaction without activating the main application window
         let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
-        
+
         // Note: register_border_view_class() already called before window creation
-        
-        let view_class = Class::get("HollowBorderView").expect("HollowBorderView class not registered");
+
+        let view_class =
+            Class::get("HollowBorderView").expect("HollowBorderView class not registered");
         let view: id = msg_send![view_class, alloc];
         let view_frame = NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(ctx.width as f64, ctx.height as f64)
+            NSSize::new(ctx.width as f64, ctx.height as f64),
         );
         let view: id = msg_send![view, initWithFrame: view_frame];
-        
+
         let mut view_obj: &mut Object = &mut *(view as *mut Object);
         view_obj.set_ivar::<i32>("_isResizing", 0);
         view_obj.set_ivar::<i32>("_resizeEdgeMask", 0);
         view_obj.set_ivar::<NSPoint>("_initialMouseScreen", NSPoint::new(0.0, 0.0));
-        view_obj.set_ivar::<NSRect>("_initialWindowFrame", NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)));
-        
+        view_obj.set_ivar::<NSRect>(
+            "_initialWindowFrame",
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        );
+
         let r = ((ctx.border_color >> 16) & 0xFF) as f64 / 255.0;
         let g = ((ctx.border_color >> 8) & 0xFF) as f64 / 255.0;
         let b = (ctx.border_color & 0xFF) as f64 / 255.0;
-        let ns_border_color: id = msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
+        let ns_border_color: id =
+            msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
         let _: () = msg_send![view, setBorderColor: ns_border_color];
         let _: () = msg_send![view, setBorderWidth: ctx.border_width as f64];
-        
+
         let _: () = msg_send![window, setContentView: view];
-        
+
         // Enable cursor rect tracking
         let _: () = msg_send![window, invalidateCursorRectsForView: view];
-        
+
         // Initialize tracking areas for mouse movement detection
         let _: () = msg_send![view, updateTrackingAreas];
-        
+
         // Show window WITHOUT making it key window
         // This prevents the border from activating the main application window
         let _: () = msg_send![window, orderFront: nil];
-        
+
         // Initialize cache with window's initial position
         update_border_cache_from_window(window);
-        
+
         log::info!("Border window created and shown (non-key)");
         ctx.result_window = Some(window);
     }
-    
+
     tracing::trace!("create_border_on_main_thread callback exited");
 }
 
@@ -408,20 +425,20 @@ extern "C" fn draw_rect(this: &Object, _cmd: Sel, _dirty_rect: NSRect) {
     unsafe {
         let border_color: id = msg_send![this, borderColor];
         let border_width: f64 = msg_send![this, borderWidth];
-        
+
         if border_color == nil {
             return;
         }
-        
+
         // Set the stroke color
         let _: () = msg_send![border_color, set];
-        
+
         // Get the bounds
         let bounds: NSRect = msg_send![this, bounds];
-        
+
         // Create the outer rect (full bounds)
         let outer_rect = bounds;
-        
+
         // Create the inner rect (inset by border width)
         let inner_rect = NSRect::new(
             NSPoint::new(border_width, border_width),
@@ -430,17 +447,18 @@ extern "C" fn draw_rect(this: &Object, _cmd: Sel, _dirty_rect: NSRect) {
                 bounds.size.height - 2.0 * border_width,
             ),
         );
-        
+
         // Preview mode: fill interior with a very transparent dark overlay (like Windows)
         if PREVIEW_MODE.load(Ordering::SeqCst) {
-            let bg: id = msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
+            let bg: id =
+                msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
             let _: () = msg_send![bg, set];
             let bg_path: id = msg_send![class!(NSBezierPath), bezierPathWithRect: outer_rect];
             let _: () = msg_send![bg_path, fill];
             // Restore border color for border fill
             let _: () = msg_send![border_color, set];
         }
-        
+
         // Fill the border area (outer rect minus inner rect)
         let path: id = msg_send![class!(NSBezierPath), bezierPath];
         let _: () = msg_send![path, appendBezierPathWithRect: outer_rect];
@@ -500,7 +518,7 @@ extern "C" fn draw_rect(this: &Object, _cmd: Sel, _dirty_rect: NSRect) {
             let p: id = msg_send![class!(NSBezierPath), bezierPathWithRect: r];
             let _: () = msg_send![p, fill];
         }
-        
+
         // REC indicator removed from border view to prevent screen sharing capture
         // Now handled by separate overlay window with NSWindowSharingNone
     }
@@ -511,7 +529,7 @@ extern "C" fn draw_rect(this: &Object, _cmd: Sel, _dirty_rect: NSRect) {
 extern "C" fn hit_test(this: &Object, _cmd: Sel, point: NSPoint) -> id {
     unsafe {
         let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
-        
+
         // In preview mode, the whole window should be interactive.
         if preview_mode {
             return this as *const _ as id;
@@ -537,7 +555,7 @@ extern "C" fn hit_test(this: &Object, _cmd: Sel, point: NSPoint) -> id {
                     tracing::warn!("ignoresMouseEvents was true, setting to false");
                     let _: () = msg_send![window, setIgnoresMouseEvents: NO];
                 }
-                
+
                 // CRITICAL: Make window key to receive mouse events (required for trackpad)
                 let is_key: bool = msg_send![window, isKeyWindow];
                 if !is_key {
@@ -590,7 +608,7 @@ extern "C" fn mouse_down(this: &mut Object, _cmd: Sel, event: id) {
         let on_top_left_corner = on_top && point.x < corner;
         let on_top_right_corner = on_top && point.x > bounds.size.width - corner;
         let on_top_edge_drag = on_top && !on_top_left_corner && !on_top_right_corner;
-        
+
         tracing::debug!(
             x = point.x,
             y = point.y,
@@ -621,7 +639,7 @@ extern "C" fn mouse_down(this: &mut Object, _cmd: Sel, event: id) {
             BORDER_INTERACTING.store(true, Ordering::SeqCst);
             this.set_ivar::<i32>("_isResizing", 0);
             this.set_ivar::<i32>("_resizeEdgeMask", -1); // -1 = dragging mode
-            
+
             // Hide REC indicator during drag (only in capture mode, not preview)
             let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
             if !preview_mode {
@@ -636,17 +654,25 @@ extern "C" fn mouse_down(this: &mut Object, _cmd: Sel, event: id) {
 
         // Resize mask: left/right/bottom edges, plus top only for the top corners.
         let mut edge_mask: i32 = 0;
-        if on_left { edge_mask |= EDGE_LEFT; }
-        if on_right { edge_mask |= EDGE_RIGHT; }
-        if on_bottom { edge_mask |= EDGE_BOTTOM; }
-        if on_top_left_corner || on_top_right_corner { edge_mask |= EDGE_TOP; }
+        if on_left {
+            edge_mask |= EDGE_LEFT;
+        }
+        if on_right {
+            edge_mask |= EDGE_RIGHT;
+        }
+        if on_bottom {
+            edge_mask |= EDGE_BOTTOM;
+        }
+        if on_top_left_corner || on_top_right_corner {
+            edge_mask |= EDGE_TOP;
+        }
 
         if edge_mask != 0 {
             tracing::debug!(edge_mask, "Starting resize interaction");
             BORDER_INTERACTING.store(true, Ordering::SeqCst);
             this.set_ivar::<i32>("_isResizing", 1);
             this.set_ivar::<i32>("_resizeEdgeMask", edge_mask);
-            
+
             // Hide REC indicator during resize (only in capture mode, not preview)
             let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
             if !preview_mode {
@@ -680,12 +706,12 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
         }
 
         let edge_mask = *this.get_ivar::<i32>("_resizeEdgeMask");
-        
+
         // edge_mask == 0 means no operation
         if edge_mask == 0 {
             return;
         }
-        
+
         let initial_mouse = *this.get_ivar::<NSPoint>("_initialMouseScreen");
         let initial_frame = *this.get_ivar::<NSRect>("_initialWindowFrame");
 
@@ -694,7 +720,7 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
 
         let dx = current_mouse.x - initial_mouse.x;
         let dy = current_mouse.y - initial_mouse.y;
-        
+
         // Log drag calculations only in capture mode (not preview)
         let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
         if !preview_mode {
@@ -703,7 +729,8 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
                 initial_mouse_y = initial_mouse.y,
                 current_mouse_x = current_mouse.x,
                 current_mouse_y = current_mouse.y,
-                dx, dy,
+                dx,
+                dy,
                 initial_frame_x = initial_frame.origin.x,
                 initial_frame_y = initial_frame.origin.y,
                 "Mouse dragged delta calculation"
@@ -711,7 +738,7 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
         }
 
         let mut new_frame = initial_frame;
-        
+
         // edge_mask == -1 means dragging (move window)
         if edge_mask == -1 {
             new_frame.origin.x += dx;
@@ -742,46 +769,48 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
             if new_frame.size.width < min_w {
                 new_frame.size.width = min_w;
                 if (edge_mask & EDGE_LEFT) != 0 {
-                    new_frame.origin.x = initial_frame.origin.x + (initial_frame.size.width - min_w);
+                    new_frame.origin.x =
+                        initial_frame.origin.x + (initial_frame.size.width - min_w);
                 }
             }
             if new_frame.size.height < min_h {
                 new_frame.size.height = min_h;
                 if (edge_mask & EDGE_BOTTOM) != 0 {
-                    new_frame.origin.y = initial_frame.origin.y + (initial_frame.size.height - min_h);
+                    new_frame.origin.y =
+                        initial_frame.origin.y + (initial_frame.size.height - min_h);
                 }
             }
         }
 
         let _: () = msg_send![window, setFrame: new_frame display: YES];
         let _: () = msg_send![this, setNeedsDisplay: YES];
-        
+
         let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
-        
+
         // In capture mode: force immediate updates for screen sharing apps
         if !preview_mode {
             let _: () = msg_send![window, displayIfNeeded];
             let _: () = msg_send![window, flushWindow]; // Force backing store flush for Meet
-            
+
             // Update cursor rects after frame changes
             let _: () = msg_send![window, invalidateCursorRectsForView: this];
         }
-        
+
         // Update global cache for capture loop (not needed in preview)
         if !preview_mode {
             let screen: id = msg_send![class!(NSScreen), mainScreen];
             let screen_frame: NSRect = msg_send![screen, frame];
             let screen_height = screen_frame.size.height;
-            
+
             let x = new_frame.origin.x as i32;
             let y = (screen_height - new_frame.origin.y - new_frame.size.height) as i32;
             let width = new_frame.size.width as i32;
-            
+
             // Update cache for render thread to read
             if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
                 *cache = (x, y, width, new_frame.size.height as i32);
             }
-            
+
             // Update REC indicator position during dragging (if moving, not resizing)
             if edge_mask == -1 {
                 if let Ok(rec_lock) = crate::REC_INDICATOR.try_lock() {
@@ -800,13 +829,13 @@ extern "C" fn mouse_up(this: &mut Object, _cmd: Sel, _event: id) {
     unsafe {
         let edge_mask = *this.get_ivar::<i32>("_resizeEdgeMask");
         let was_interacting = edge_mask != 0;
-        
+
         tracing::debug!(was_interacting, "Mouse up event");
-        
+
         // Always reset state to avoid stuck interactions
         this.set_ivar::<i32>("_isResizing", 0);
         this.set_ivar::<i32>("_resizeEdgeMask", 0);
-        
+
         // Update cache and force redraw after interaction completes
         let window: id = msg_send![this, window];
         if window != nil {
@@ -814,32 +843,38 @@ extern "C" fn mouse_up(this: &mut Object, _cmd: Sel, _event: id) {
             // Force display update for screen sharing apps
             let _: () = msg_send![this, setNeedsDisplay: YES];
             let _: () = msg_send![window, displayIfNeeded];
-            
+
             // Notify callback: interaction complete - update capture region and windows
             let frame: NSRect = msg_send![window, frame];
             let screen: id = msg_send![class!(NSScreen), mainScreen];
             let screen_frame: NSRect = msg_send![screen, frame];
             let screen_height = screen_frame.size.height;
-            
+
             let x = frame.origin.x as i32;
             let y = (screen_height - frame.origin.y - frame.size.height) as i32;
             let width = frame.size.width as i32;
             let height = frame.size.height as i32;
-            
+
             // Get border_width from the view
             let border_width: f64 = msg_send![this, borderWidth];
             let border_width_i32 = border_width as i32;
-            
+
             // Only call callback and show REC if NOT in preview mode
             let preview_mode = PREVIEW_MODE.load(Ordering::SeqCst);
             if !preview_mode {
                 if let Ok(cb_lock) = BORDER_INTERACTION_COMPLETE_CALLBACK.try_lock() {
                     if let Some(ref callback) = *cb_lock {
-                        tracing::info!(x, y, width, height, "Interaction complete, notifying callback");
+                        tracing::info!(
+                            x,
+                            y,
+                            width,
+                            height,
+                            "Interaction complete, notifying callback"
+                        );
                         callback(x, y, width, height);
                     }
                 }
-                
+
                 // Show REC indicator after interaction completes (at new position)
                 if let Ok(rec_lock) = crate::REC_INDICATOR.try_lock() {
                     if let Some(rec) = rec_lock.as_ref() {
@@ -848,7 +883,7 @@ extern "C" fn mouse_up(this: &mut Object, _cmd: Sel, _event: id) {
                 }
             }
         }
-        
+
         // Interaction complete
         if was_interacting {
             if edge_mask == -1 {
@@ -879,12 +914,12 @@ fn update_border_cache_from_window(window: id) {
         let screen: id = msg_send![class!(NSScreen), mainScreen];
         let screen_frame: NSRect = msg_send![screen, frame];
         let screen_height = screen_frame.size.height;
-        
+
         let x = frame.origin.x as i32;
         let y = (screen_height - frame.origin.y - frame.size.height) as i32;
         let width = frame.size.width as i32;
         let height = frame.size.height as i32;
-        
+
         if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
             *cache = (x, y, width, height);
         }
@@ -896,65 +931,62 @@ extern "C" fn reset_cursor_rects(this: &Object, _cmd: Sel) {
     unsafe {
         // Clear old cursor rects first
         let _: () = msg_send![this, discardCursorRects];
-        
+
         let bounds: NSRect = msg_send![this, bounds];
         let border_width: f64 = msg_send![this, borderWidth];
         let border = border_width.max(8.0);
-        
+
         // Corner resize cursors
         let corner = (border * 2.0).max(20.0);
-        
+
         // Top-left and bottom-right: diagonal resize
         let tl_rect = NSRect::new(
             NSPoint::new(0.0, bounds.size.height - corner),
-            NSSize::new(corner, corner)
+            NSSize::new(corner, corner),
         );
         let br_rect = NSRect::new(
             NSPoint::new(bounds.size.width - corner, 0.0),
-            NSSize::new(corner, corner)
+            NSSize::new(corner, corner),
         );
         // Note: macOS doesn't have nwseResizeCursor, use crosshair or pointingHand
         let resize_cursor: id = msg_send![class!(NSCursor), crosshairCursor];
         let _: () = msg_send![this, addCursorRect:tl_rect cursor:resize_cursor];
         let _: () = msg_send![this, addCursorRect:br_rect cursor:resize_cursor];
-        
+
         // Top-right and bottom-left: other diagonal
         let tr_rect = NSRect::new(
             NSPoint::new(bounds.size.width - corner, bounds.size.height - corner),
-            NSSize::new(corner, corner)
+            NSSize::new(corner, corner),
         );
-        let bl_rect = NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(corner, corner)
-        );
+        let bl_rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(corner, corner));
         let _: () = msg_send![this, addCursorRect:tr_rect cursor:resize_cursor];
         let _: () = msg_send![this, addCursorRect:bl_rect cursor:resize_cursor];
 
         // Top edge (excluding corners): open hand cursor (dragging)
         let top_rect = NSRect::new(
             NSPoint::new(corner, bounds.size.height - border),
-            NSSize::new((bounds.size.width - 2.0 * corner).max(0.0), border)
+            NSSize::new((bounds.size.width - 2.0 * corner).max(0.0), border),
         );
         let open_hand_cursor: id = msg_send![class!(NSCursor), openHandCursor];
         let _: () = msg_send![this, addCursorRect:top_rect cursor:open_hand_cursor];
-        
+
         // Left and right edges: horizontal resize
         let left_rect = NSRect::new(
             NSPoint::new(0.0, corner),
-            NSSize::new(border, bounds.size.height - 2.0 * corner)
+            NSSize::new(border, bounds.size.height - 2.0 * corner),
         );
         let right_rect = NSRect::new(
             NSPoint::new(bounds.size.width - border, corner),
-            NSSize::new(border, bounds.size.height - 2.0 * corner)
+            NSSize::new(border, bounds.size.height - 2.0 * corner),
         );
         let h_resize: id = msg_send![class!(NSCursor), resizeLeftRightCursor];
         let _: () = msg_send![this, addCursorRect:left_rect cursor:h_resize];
         let _: () = msg_send![this, addCursorRect:right_rect cursor:h_resize];
-        
+
         // Bottom edge: vertical resize
         let bottom_rect = NSRect::new(
             NSPoint::new(corner, 0.0),
-            NSSize::new(bounds.size.width - 2.0 * corner, border)
+            NSSize::new(bounds.size.width - 2.0 * corner, border),
         );
         // Try resizeUpDown first, fallback to resizeUpDownCursor
         let v_resize: id = msg_send![class!(NSCursor), resizeUpDownCursor];
@@ -968,7 +1000,7 @@ extern "C" fn update_tracking_areas(this: &Object, _cmd: Sel) {
         // Call super
         let superclass = class!(NSView);
         let _: () = msg_send![super(this, superclass), updateTrackingAreas];
-        
+
         // Remove old tracking areas
         let tracking_areas: id = msg_send![this, trackingAreas];
         let count: usize = msg_send![tracking_areas, count];
@@ -976,14 +1008,14 @@ extern "C" fn update_tracking_areas(this: &Object, _cmd: Sel) {
             let area: id = msg_send![tracking_areas, objectAtIndex: i];
             let _: () = msg_send![this, removeTrackingArea: area];
         }
-        
+
         // Add new tracking area for entire view
         let bounds: NSRect = msg_send![this, bounds];
-        
+
         // NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingCursorUpdate | NSTrackingActiveAlways | NSTrackingInVisibleRect
         // NSTrackingCursorUpdate (1 << 2) is CRITICAL for cursor rects to work!
         let options: u64 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 7) | (1 << 9);
-        
+
         let tracking_area_class = class!(NSTrackingArea);
         let tracking_area: id = msg_send![tracking_area_class, alloc];
         let tracking_area: id = msg_send![tracking_area,
@@ -1068,11 +1100,11 @@ fn register_border_view_class() {
         // Register custom NSPanel subclass that can become key window
         let panel_superclass = class!(NSPanel);
         let mut panel_decl = ClassDecl::new("HollowBorderPanel", panel_superclass).unwrap();
-        
+
         extern "C" fn can_become_key_window(_this: &Object, _cmd: Sel) -> bool {
             true // No logging - called frequently
         }
-        
+
         unsafe {
             panel_decl.add_method(
                 sel!(canBecomeKeyWindow),
@@ -1081,13 +1113,13 @@ fn register_border_view_class() {
             // No sendEvent: override - let standard Cocoa event chain work
             // hit_test in view controls click-through behavior
         }
-        
+
         panel_decl.register();
-        
+
         // Register view class
         let superclass = class!(NSView);
         let mut decl = ClassDecl::new("HollowBorderView", superclass).unwrap();
-        
+
         // Add ivars
         decl.add_ivar::<id>("_borderColor");
         decl.add_ivar::<f64>("_borderWidth");
@@ -1095,7 +1127,7 @@ fn register_border_view_class() {
         decl.add_ivar::<i32>("_resizeEdgeMask");
         decl.add_ivar::<NSPoint>("_initialMouseScreen");
         decl.add_ivar::<NSRect>("_initialWindowFrame");
-        
+
         // Add methods
         unsafe {
             decl.add_method(
@@ -1167,7 +1199,7 @@ fn register_border_view_class() {
                 accepts_first_responder as extern "C" fn(&Object, Sel) -> bool,
             );
         }
-        
+
         decl.register();
     });
 }
@@ -1198,7 +1230,7 @@ impl HollowBorder {
         border_color: u32,
     ) -> Option<Self> {
         tracing::debug!(x, y, width, height, "Creating HollowBorder");
-        
+
         log::info!(
             "Creating macOS hollow border at ({}, {}) size {}x{}, border_width={}, color={:06x}",
             x,
@@ -1208,11 +1240,14 @@ impl HollowBorder {
             border_width,
             border_color
         );
-        
+
         // Check if we're on main thread
         let is_main = unsafe { pthread_main_np() } != 0;
-        tracing::debug!(is_main_thread = is_main, "HollowBorder creation thread check");
-        
+        tracing::debug!(
+            is_main_thread = is_main,
+            "HollowBorder creation thread check"
+        );
+
         let mut ctx = CreateBorderContext {
             x,
             y,
@@ -1222,11 +1257,13 @@ impl HollowBorder {
             border_color,
             result_window: None,
         };
-        
+
         if is_main {
             // Already on main thread
             tracing::debug!("Already on main thread, creating border directly");
-            create_border_on_main_thread(&mut ctx as *mut CreateBorderContext as *mut std::ffi::c_void);
+            create_border_on_main_thread(
+                &mut ctx as *mut CreateBorderContext as *mut std::ffi::c_void,
+            );
         } else {
             // Dispatch to main thread
             tracing::debug!("Dispatching border creation to main thread");
@@ -1240,17 +1277,17 @@ impl HollowBorder {
             }
             tracing::trace!("dispatch_sync_f returned");
         }
-        
+
         let window = ctx.result_window?;
-        
+
         tracing::info!("HollowBorder created successfully");
         log::info!("macOS hollow border created successfully");
-        
+
         // Initialize global cache
         *BORDER_RECT_CACHE.lock().unwrap() = (x, y, width, height);
-        
+
         let cached_rect = BORDER_RECT_CACHE.clone();
-        
+
         Some(Self {
             window,
             x,
@@ -1273,12 +1310,7 @@ impl HollowBorder {
         // Get current window frame (may have been moved/resized by user)
         let (x, y, width, height) = self.get_rect();
         let bw = self.border_width;
-        (
-            x + bw,
-            y + bw,
-            width - 2 * bw,
-            height - 2 * bw,
-        )
+        (x + bw, y + bw, width - 2 * bw, height - 2 * bw)
     }
 
     pub fn update_rect(&self, x: i32, y: i32, width: i32, height: i32) {
@@ -1289,7 +1321,7 @@ impl HollowBorder {
             width,
             height
         );
-        
+
         struct UpdateRectContext {
             window: id,
             x: i32,
@@ -1297,7 +1329,7 @@ impl HollowBorder {
             width: i32,
             height: i32,
         }
-        
+
         extern "C" fn update_rect_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let ctx = unsafe { &*(ctx_ptr as *const UpdateRectContext) };
             unsafe {
@@ -1305,16 +1337,16 @@ impl HollowBorder {
                 let screen_frame: NSRect = msg_send![screen, frame];
                 let screen_height = screen_frame.size.height;
                 let macos_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
-                
+
                 let new_frame = NSRect::new(
                     NSPoint::new(ctx.x as f64, macos_y),
-                    NSSize::new(ctx.width as f64, ctx.height as f64)
+                    NSSize::new(ctx.width as f64, ctx.height as f64),
                 );
-                
+
                 let _: () = msg_send![ctx.window, setFrame:new_frame display:YES];
             }
         }
-        
+
         let mut context = UpdateRectContext {
             window: self.window,
             x,
@@ -1322,7 +1354,7 @@ impl HollowBorder {
             width,
             height,
         };
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1339,32 +1371,33 @@ impl HollowBorder {
 
     pub fn update_color(&self, color: u32) {
         log::info!("Updating hollow border color: {:06x}", color);
-        
+
         struct UpdateColorContext {
             window: id,
             color: u32,
         }
-        
+
         extern "C" fn update_color_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let ctx = unsafe { &*(ctx_ptr as *const UpdateColorContext) };
             unsafe {
                 let r = ((ctx.color >> 16) & 0xFF) as f64 / 255.0;
                 let g = ((ctx.color >> 8) & 0xFF) as f64 / 255.0;
                 let b = (ctx.color & 0xFF) as f64 / 255.0;
-                
-                let ns_color: id = msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
+
+                let ns_color: id =
+                    msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
                 let view: id = msg_send![ctx.window, contentView];
                 if view != nil {
                     let _: () = msg_send![view, setBorderColor: ns_color];
                 }
             }
         }
-        
+
         let mut context = UpdateColorContext {
             window: self.window,
             color,
         };
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1385,35 +1418,36 @@ impl HollowBorder {
             width,
             color
         );
-        
+
         struct UpdateStyleContext {
             window: id,
             width: i32,
             color: u32,
         }
-        
+
         extern "C" fn update_style_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let ctx = unsafe { &*(ctx_ptr as *const UpdateStyleContext) };
             unsafe {
                 let view: id = msg_send![ctx.window, contentView];
                 if view != nil {
                     let _: () = msg_send![view, setBorderWidth: ctx.width as f64];
-                    
+
                     let r = ((ctx.color >> 16) & 0xFF) as f64 / 255.0;
                     let g = ((ctx.color >> 8) & 0xFF) as f64 / 255.0;
                     let b = (ctx.color & 0xFF) as f64 / 255.0;
-                    let ns_color: id = msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
+                    let ns_color: id =
+                        msg_send![class!(NSColor), colorWithRed:r green:g blue:b alpha:1.0];
                     let _: () = msg_send![view, setBorderColor: ns_color];
                 }
             }
         }
-        
+
         let mut context = UpdateStyleContext {
             window: self.window,
             width,
             color,
         };
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1430,14 +1464,14 @@ impl HollowBorder {
 
     pub fn hide(&self) {
         log::info!("Hiding macOS hollow border");
-        
+
         extern "C" fn hide_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
                 let _: () = msg_send![window, orderOut: nil];
             }
         }
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1454,7 +1488,7 @@ impl HollowBorder {
 
     pub fn show(&self) {
         log::info!("Showing macOS hollow border");
-        
+
         extern "C" fn show_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let window = ctx_ptr as id;
             unsafe {
@@ -1463,7 +1497,7 @@ impl HollowBorder {
                 let _: () = msg_send![window, orderFront: nil];
             }
         }
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1492,11 +1526,11 @@ impl HollowBorder {
     pub fn set_capture_mode(&mut self) {
         tracing::debug!("set_capture_mode() called");
         PREVIEW_MODE.store(false, Ordering::SeqCst);
-        
+
         struct SetCaptureModeContext {
             window: id,
         }
-        
+
         extern "C" fn set_capture_mode_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let ctx = unsafe { &*(ctx_ptr as *const SetCaptureModeContext) };
             unsafe {
@@ -1513,11 +1547,11 @@ impl HollowBorder {
                 }
             }
         }
-        
+
         let mut context = SetCaptureModeContext {
             window: self.window,
         };
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
             if !is_main {
@@ -1544,7 +1578,8 @@ impl HollowBorder {
             // Disable native drag - we handle it manually in mouse events
             let _: () = msg_send![self.window, setMovableByWindowBackground: NO];
             let _: () = msg_send![self.window, setIgnoresMouseEvents: NO];
-            let preview_bg: id = msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
+            let preview_bg: id =
+                msg_send![class!(NSColor), colorWithRed:0.125 green:0.125 blue:0.125 alpha:0.15];
             let _: () = msg_send![self.window, setBackgroundColor: preview_bg];
 
             let view: id = msg_send![self.window, contentView];
@@ -1565,10 +1600,10 @@ impl Drop for HollowBorder {
                 let _: () = msg_send![window, close];
             }
         }
-        
+
         unsafe {
             let is_main = pthread_main_np() != 0;
-            
+
             if !is_main {
                 dispatch_sync_f(
                     &_dispatch_main_q,
@@ -1585,7 +1620,14 @@ impl Drop for HollowBorder {
 
 // Implement cross-platform BorderWindow trait
 impl BorderWindow for HollowBorder {
-    fn new(x: i32, y: i32, width: i32, height: i32, border_width: i32, border_color: u32) -> Option<Self> {
+    fn new(
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        border_width: i32,
+        border_color: u32,
+    ) -> Option<Self> {
         HollowBorder::new(x, y, width, height, border_width, border_color)
     }
 

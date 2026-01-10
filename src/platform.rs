@@ -187,12 +187,12 @@ pub mod input {
             use cocoa::base::{id, nil};
             use cocoa::foundation::{NSPoint, NSRect};
             use core_foundation::base::TCFType;
-            use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
-            use std::sync::atomic::Ordering;
+            use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
             use objc::*;
-            
+            use std::sync::atomic::Ordering;
+
             log::info!("[MACOS_CLICK] start_click_capture() called");
-            
+
             if MOUSE_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
                 log::warn!("[MACOS_CLICK] Already monitoring, skipping");
                 return Ok(()); // Already monitoring
@@ -204,13 +204,16 @@ pub mod input {
                 if screen != nil {
                     let frame: NSRect = msg_send![screen, frame];
                     let scale_factor: f64 = msg_send![screen, backingScaleFactor];
-                    
+
                     // Store as bits in atomic
                     SCREEN_HEIGHT.store(frame.size.height.to_bits(), Ordering::Relaxed);
                     SCREEN_SCALE_FACTOR.store(scale_factor.to_bits(), Ordering::Relaxed);
-                    
-                    log::info!("[MACOS_CLICK] Screen info cached: height={:.1}, scale={:.1}x", 
-                        frame.size.height, scale_factor);
+
+                    log::info!(
+                        "[MACOS_CLICK] Screen info cached: height={:.1}, scale={:.1}x",
+                        frame.size.height,
+                        scale_factor
+                    );
                 } else {
                     log::error!("[MACOS_CLICK] Failed to get main screen!");
                     return Err(anyhow::anyhow!("Could not get main screen"));
@@ -218,18 +221,18 @@ pub mod input {
             }
 
             log::info!("[MACOS_CLICK] Setting up CGEventTap for event-driven click capture...");
-            
+
             // Use CGEventTap for event-driven click capture (no polling, 0Hz when idle)
             std::thread::spawn(|| {
                 log::info!("[MACOS_CLICK] CGEventTap thread STARTED");
-                
+
                 unsafe {
                     use std::sync::atomic::Ordering;
-                    
+
                     // Get cached screen parameters
                     let screen_height_bits = SCREEN_HEIGHT.load(Ordering::Relaxed);
                     let scale_factor_bits = SCREEN_SCALE_FACTOR.load(Ordering::Relaxed);
-                    
+
                     // External C functions for CGEventTap
                     extern "C" {
                         fn CGEventTapCreate(
@@ -237,31 +240,39 @@ pub mod input {
                             place: u32,
                             options: u32,
                             events_of_interest: u64,
-                            callback: extern "C" fn(*mut std::ffi::c_void, u32, *mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+                            callback: extern "C" fn(
+                                *mut std::ffi::c_void,
+                                u32,
+                                *mut std::ffi::c_void,
+                                *mut std::ffi::c_void,
+                            )
+                                -> *mut std::ffi::c_void,
                             user_info: *mut std::ffi::c_void,
                         ) -> *mut std::ffi::c_void;
-                        
+
                         fn CFMachPortCreateRunLoopSource(
                             allocator: *mut std::ffi::c_void,
                             port: *mut std::ffi::c_void,
                             order: isize,
                         ) -> *mut std::ffi::c_void;
-                        
+
                         fn CFRunLoopAddSource(
                             rl: *mut std::ffi::c_void,
                             source: *mut std::ffi::c_void,
                             mode: *mut std::ffi::c_void,
                         );
-                        
+
                         fn CFRunLoopGetCurrent() -> *mut std::ffi::c_void;
                         fn CFRunLoopRun();
                         fn CFRunLoopStop(rl: *mut std::ffi::c_void);
-                        
-                        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> core_graphics::geometry::CGPoint;
-                        
+
+                        fn CGEventGetLocation(
+                            event: *mut std::ffi::c_void,
+                        ) -> core_graphics::geometry::CGPoint;
+
                         static kCFRunLoopCommonModes: *mut std::ffi::c_void;
                     }
-                    
+
                     // Event tap callback - called on mouse down events
                     extern "C" fn event_callback(
                         _proxy: *mut std::ffi::c_void,
@@ -272,41 +283,45 @@ pub mod input {
                         unsafe {
                             // Get event location (in points, bottom-left origin)
                             extern "C" {
-                                fn CGEventGetLocation(event: *mut std::ffi::c_void) -> core_graphics::geometry::CGPoint;
+                                fn CGEventGetLocation(
+                                    event: *mut std::ffi::c_void,
+                                ) -> core_graphics::geometry::CGPoint;
                             }
                             let location = CGEventGetLocation(event);
-                            
+
                             // Use centralized display_info for coordinate conversion
                             // This ensures consistency across the entire application
                             let display_info = crate::display_info::get();
-                            let (x_pixels, y_pixels) = display_info.macos_event_to_screen_pixels(location.x, location.y);
-                            
+                            let (x_pixels, y_pixels) =
+                                display_info.macos_event_to_screen_pixels(location.x, location.y);
+
                             // Determine button type from event type
                             let button = match event_type {
-                                1 => Some(MouseButton::Left),   // kCGEventLeftMouseDown
-                                2 => Some(MouseButton::Right),  // kCGEventRightMouseDown
+                                1 => Some(MouseButton::Left),    // kCGEventLeftMouseDown
+                                2 => Some(MouseButton::Right),   // kCGEventRightMouseDown
                                 25 => Some(MouseButton::Middle), // kCGEventOtherMouseDown
                                 _ => None,
                             };
-                            
+
                             if let Some(btn) = button {
                                 log::debug!("[MACOS_CLICK] CGEvent: ({:.1}pt, {:.1}pt) -> ({}, {})px @ {:.1}x, button: {:?}",
                                     location.x, location.y, x_pixels, y_pixels, display_info.scale_factor, btn);
                                 log_click(x_pixels, y_pixels, btn);
                             }
                         }
-                        
+
                         // Pass event through (don't block it)
                         event
                     }
-                    
+
                     // Create event mask for mouse down events
                     let event_mask = (
                         1 << 1 |  // kCGEventLeftMouseDown
                         1 << 2 |  // kCGEventRightMouseDown
-                        1 << 25   // kCGEventOtherMouseDown
+                        1 << 25
+                        // kCGEventOtherMouseDown
                     );
-                    
+
                     // Create event tap
                     let event_tap = CGEventTapCreate(
                         1, // kCGSessionEventTap
@@ -316,40 +331,41 @@ pub mod input {
                         event_callback,
                         std::ptr::null_mut(),
                     );
-                    
+
                     if event_tap.is_null() {
                         log::error!("[MACOS_CLICK] Failed to create CGEventTap! Check Accessibility permissions.");
                         log::error!("[MACOS_CLICK] Go to: System Settings > Privacy & Security > Accessibility");
                         return;
                     }
-                    
+
                     log::info!("[MACOS_CLICK] CGEventTap created successfully");
-                    
+
                     // Add to run loop
-                    let run_loop_source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), event_tap, 0);
+                    let run_loop_source =
+                        CFMachPortCreateRunLoopSource(std::ptr::null_mut(), event_tap, 0);
                     let run_loop = CFRunLoopGetCurrent();
                     CFRunLoopAddSource(run_loop, run_loop_source, kCFRunLoopCommonModes);
-                    
+
                     log::info!("[MACOS_CLICK] Starting run loop (event-driven, 0Hz when idle, ~10% CPU reduction)");
-                    
+
                     // Run loop - blocks until stopped
                     while MOUSE_HOOK_INSTALLED.load(Ordering::SeqCst) {
                         CFRunLoopRun();
-                        
+
                         // Check if we should stop
                         if !MOUSE_HOOK_INSTALLED.load(Ordering::SeqCst) {
                             CFRunLoopStop(run_loop);
                             break;
                         }
                     }
-                    
+
                     log::info!("[MACOS_CLICK] Event tap stopped");
                 }
             });
-            
+
             Ok(())
         }
-        
+
         #[cfg(not(target_os = "macos"))]
         {
             // Stub for Linux
@@ -357,9 +373,9 @@ pub mod input {
             Ok(())
         }
     }
-    
+
     static CLICK_COUNTER: AtomicU64 = AtomicU64::new(0);
-    
+
     #[cfg(target_os = "macos")]
     fn log_click(x: i32, y: i32, button: MouseButton) {
         let click = ClickEvent {
@@ -368,14 +384,24 @@ pub mod input {
             button,
             timestamp: std::time::Instant::now(),
         };
-        
-        log::debug!("[MACOS_CLICK] Click detected: ({}, {}) button {:?}", x, y, button);
-        
+
+        log::debug!(
+            "[MACOS_CLICK] Click detected: ({}, {}) button {:?}",
+            x,
+            y,
+            button
+        );
+
         if let Ok(mut clicks) = CLICK_POSITIONS.lock() {
             clicks.push(click);
             tracing::debug!(x, y, total = clicks.len(), "Click stored in buffer");
-            log::info!("[CLICK_STORED] Position ({}, {}), total stored: {}", x, y, clicks.len());
-            
+            log::info!(
+                "[CLICK_STORED] Position ({}, {}), total stored: {}",
+                x,
+                y,
+                clicks.len()
+            );
+
             // Lazy cleanup: only every 100 clicks instead of per-click (performance optimization)
             let count = CLICK_COUNTER.fetch_add(1, Ordering::Relaxed);
             if count % 100 == 0 {
@@ -384,7 +410,11 @@ pub mod input {
                 clicks.retain(|c| c.timestamp >= cutoff);
                 let removed = before - clicks.len();
                 if removed > 0 {
-                    log::debug!("[CLICK_CLEANUP] Removed {} old clicks, {} remaining", removed, clicks.len());
+                    log::debug!(
+                        "[CLICK_CLEANUP] Removed {} old clicks, {} remaining",
+                        removed,
+                        clicks.len()
+                    );
                 }
             }
         }
@@ -431,7 +461,7 @@ pub mod input {
         if crate::display_info::is_initialized() {
             return crate::display_info::scale_factor();
         }
-        
+
         // Fallback to atomic cache for backward compatibility
         use std::sync::atomic::Ordering;
         let bits = SCREEN_SCALE_FACTOR.load(Ordering::Relaxed);

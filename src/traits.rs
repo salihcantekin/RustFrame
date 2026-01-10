@@ -106,4 +106,3 @@ pub trait PreviewWindow: Send + Sync {
     /// Move window to new position
     fn set_pos(&mut self, x: i32, y: i32);
 }
-

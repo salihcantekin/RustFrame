@@ -1,4 +1,4 @@
-﻿//! Pure WinAPI Destination Window
+//! Pure WinAPI Destination Window
 //!
 //! Runs in its own thread with dedicated message loop.
 //! This is necessary because Tauri's WebView2 message loop doesn't pump
@@ -22,15 +22,14 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    GetDC, InvalidateRect, ReleaseDC, SelectObject, ValidateRect, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, 
-    DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
+    GetDC, InvalidateRect, ReleaseDC, SelectObject, ValidateRect, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-    GetMessageW, GetSystemMetrics, GetWindowRect, PostMessageW, 
-    PostQuitMessage, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, 
-    SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
+    GetMessageW, GetSystemMetrics, GetWindowRect, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_VISIBLE,
 };
 
@@ -154,7 +153,7 @@ impl DestinationWindow {
         // Scale dimensions for DPI (input is in logical points)
         let width_pixels = points_to_pixels(width);
         let height_pixels = points_to_pixels(height);
-        
+
         info!(
             "Creating WinAPI destination window {}x{} points ({}x{} pixels) in dedicated thread",
             width, height, width_pixels, height_pixels
@@ -188,7 +187,7 @@ impl DestinationWindow {
     /// This just updates the buffer - window thread will paint on next timer tick
     pub fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
         info!("update_frame: {}x{}, {} bytes", width, height, data.len());
-        
+
         // Update the global buffer
         if let Ok(mut buffer) = FRAME_BUFFER.lock() {
             *buffer = Some(FrameData {
@@ -221,9 +220,11 @@ impl DestinationWindow {
         crop_width: u32,
         crop_height: u32,
     ) {
-        debug!("update_frame_from_texture: {}x{} at ({}, {}), ptr=0x{:X}", 
-            crop_width, crop_height, crop_x, crop_y, texture_ptr);
-        
+        debug!(
+            "update_frame_from_texture: {}x{} at ({}, {}), ptr=0x{:X}",
+            crop_width, crop_height, crop_x, crop_y, texture_ptr
+        );
+
         // Store GPU texture data
         if let Ok(mut data) = GPU_TEXTURE_DATA.lock() {
             *data = Some(GpuTextureData {
@@ -372,7 +373,11 @@ fn run_window_thread(
 
         #[cfg(debug_assertions)]
         let ex_style = {
-            let mut style = if noactivate { WS_EX_NOACTIVATE } else { Default::default() };
+            let mut style = if noactivate {
+                WS_EX_NOACTIVATE
+            } else {
+                Default::default()
+            };
             if topmost {
                 style |= WS_EX_TOPMOST;
             }
@@ -385,7 +390,11 @@ fn run_window_thread(
             let toolwindow = config.toolwindow.unwrap_or(true);
             let appwindow = config.appwindow.unwrap_or(false);
 
-            let mut style = if noactivate { WS_EX_NOACTIVATE } else { Default::default() };
+            let mut style = if noactivate {
+                WS_EX_NOACTIVATE
+            } else {
+                Default::default()
+            };
             if layered {
                 style |= WS_EX_LAYERED;
             }
@@ -544,8 +553,10 @@ unsafe extern "system" fn window_proc(
                     if let Ok(renderer) = D3D11_RENDERER.try_lock() {
                         debug!("WM_PAINT: D3D11 renderer lock acquired");
                         if let Some(ref r) = *renderer {
-                            debug!("WM_PAINT: Calling render_texture with crop {}x{} at ({}, {})",
-                                data.crop_width, data.crop_height, data.crop_x, data.crop_y);
+                            debug!(
+                                "WM_PAINT: Calling render_texture with crop {}x{} at ({}, {})",
+                                data.crop_width, data.crop_height, data.crop_x, data.crop_y
+                            );
                             match r.render_texture(
                                 data.texture_ptr,
                                 data.crop_x,
@@ -676,30 +687,33 @@ unsafe fn paint_frame_gdi(hdc: HDC, data: &[u8], width: u32, height: u32) {
 
 impl PreviewWindow for DestinationWindow {
     type Config = DestinationWindowConfig;
-    
-    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self> where Self: Sized {
+
+    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self>
+    where
+        Self: Sized,
+    {
         DestinationWindow::new(width, height, config)
     }
-    
+
     fn hwnd_value(&self) -> isize {
         DEST_HWND.lock().map(|h| *h).unwrap_or(0)
     }
-    
+
     fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
         DestinationWindow::update_frame(self, data, width, height);
     }
-    
+
     fn render(&mut self, _pixels: &[u8], _width: u32, _height: u32) {
         // Windows implementation uses update_frame() + timer-based rendering
         // This method is not used in the Windows implementation
         // Kept for trait compatibility
     }
-    
+
     fn resize(&mut self, width: u32, height: u32) {
         // Scale dimensions for DPI (input is in logical points)
         let width_pixels = points_to_pixels(width);
         let height_pixels = points_to_pixels(height);
-        
+
         // Resize the destination window
         if let Ok(hwnd_lock) = DEST_HWND.lock() {
             let hwnd_val = *hwnd_lock;
@@ -719,19 +733,19 @@ impl PreviewWindow for DestinationWindow {
             }
         }
     }
-    
+
     fn set_pos(&mut self, x: i32, y: i32) {
         // Scale coordinates for DPI (input is in logical points)
         let display = display_info::get();
         let (x_pixels, y_pixels) = if display.initialized {
             (
                 display.points_to_pixels(x as f64),
-                display.points_to_pixels(y as f64)
+                display.points_to_pixels(y as f64),
             )
         } else {
             (x, y)
         };
-        
+
         // Move the destination window
         if let Ok(hwnd_lock) = DEST_HWND.lock() {
             let hwnd_val = *hwnd_lock;

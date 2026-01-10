@@ -122,8 +122,11 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
     let level: Option<Level> = log_level.into();
     let filter = if let Some(lvl) = level {
         // Create filter with the specified level
-        EnvFilter::new(format!("rustframe={}", lvl.as_str()))
-            .add_directive(format!("rustframe_capture={}", lvl.as_str()).parse().unwrap())
+        EnvFilter::new(format!("rustframe={}", lvl.as_str())).add_directive(
+            format!("rustframe_capture={}", lvl.as_str())
+                .parse()
+                .unwrap(),
+        )
     } else {
         // Should not happen (Off is handled above), but default to ERROR
         EnvFilter::new("rustframe=error")
@@ -134,7 +137,7 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
     if log_to_file {
         // File logging enabled
         let logs_dir = get_logs_dir()?;
-        
+
         // Create a daily rolling file appender with date in filename
         let file_appender = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
@@ -142,10 +145,10 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
             .filename_suffix("log")
             .build(logs_dir)
             .context("Failed to create rolling file appender")?;
-        
+
         // Create non-blocking writer for async file I/O
         let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-        
+
         // File layer with structured format
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
@@ -168,7 +171,7 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
 
         // Combine layers (both file and console)
         let registry = registry.with(file_layer).with(console_layer);
-        
+
         registry.init();
 
         // Store the guard to prevent file handle from being dropped
@@ -202,20 +205,20 @@ pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
 pub fn cleanup_old_logs(logs_dir: &Path, keep_days: u32) -> Result<usize> {
     let now = std::time::SystemTime::now();
     let keep_duration = std::time::Duration::from_secs(keep_days as u64 * 24 * 60 * 60);
-    
+
     let mut deleted_count = 0;
-    
+
     for entry in fs::read_dir(logs_dir)
         .with_context(|| format!("Failed to read logs directory: {:?}", logs_dir))?
     {
         let entry = entry?;
         let path = entry.path();
-        
+
         // Only process .log files
         if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("log") {
             continue;
         }
-        
+
         // Get file metadata
         let metadata = entry.metadata()?;
         if let Ok(modified) = metadata.modified() {
@@ -230,7 +233,7 @@ pub fn cleanup_old_logs(logs_dir: &Path, keep_days: u32) -> Result<usize> {
             }
         }
     }
-    
+
     Ok(deleted_count)
 }
 

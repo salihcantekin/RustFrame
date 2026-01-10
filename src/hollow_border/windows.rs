@@ -1,12 +1,12 @@
-﻿//! Hollow Border Window - WinAPI Implementation
+//! Hollow Border Window - WinAPI Implementation
 //!
 //! Creates a resizable border window for capture region selection.
 //! Interior is draggable, borders are resizable from edges and corners.
 //! Runs in its own thread with dedicated message loop.
 
 use crate::traits::BorderWindow;
-use rustframe_capture::config::window::*;
 use rustframe_capture::config::timing::*;
+use rustframe_capture::config::window::*;
 use rustframe_capture::display_info;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,9 +19,9 @@ use log::info;
 use windows::Win32::{
     Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::{
-        BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, EndPaint,
-        FillRect, GetStockObject, InvalidateRect, Rectangle, SelectObject, SetBkMode, SetWindowRgn,
-        HBRUSH, HDC, HGDIOBJ, HOLLOW_BRUSH, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
+        BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetStockObject,
+        InvalidateRect, Rectangle, SelectObject, SetBkMode, SetWindowRgn, HBRUSH, HDC, HGDIOBJ,
+        HOLLOW_BRUSH, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
     },
     UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
     UI::WindowsAndMessaging::*,
@@ -310,21 +310,24 @@ impl HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA, ShowWindow, SW_HIDE, SW_SHOW};
-                    
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetWindowRect, SetLayeredWindowAttributes, ShowWindow, LWA_ALPHA, SW_HIDE,
+                        SW_SHOW,
+                    };
+
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                    
+
                     // Preview mode: use alpha transparency (15% opaque = 38/255)
                     // This makes interior visible but semi-transparent, and NOT click-through
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
-                    
+
                     let mut win_rect = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut win_rect);
                     let w = win_rect.right - win_rect.left;
                     let h = win_rect.bottom - win_rect.top;
                     let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
                     apply_hollow_region(hwnd, w, h, border);
-                    
+
                     // Force window refresh to apply transparency changes
                     let _ = ShowWindow(hwnd, SW_HIDE);
                     let _ = ShowWindow(hwnd, SW_SHOW);
@@ -344,20 +347,23 @@ impl HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY, ShowWindow, SW_HIDE, SW_SHOW};
-                    
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetWindowRect, SetLayeredWindowAttributes, ShowWindow, LWA_COLORKEY,
+                        SW_HIDE, SW_SHOW,
+                    };
+
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-                    
+
                     // Capture mode: use color key for transparency (green = click-through)
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
-                    
+
                     let mut win_rect = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut win_rect);
                     let w = win_rect.right - win_rect.left;
                     let h = win_rect.bottom - win_rect.top;
                     let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
                     apply_hollow_region(hwnd, w, h, border);
-                    
+
                     // Force window refresh to apply transparency changes
                     let _ = ShowWindow(hwnd, SW_HIDE);
                     let _ = ShowWindow(hwnd, SW_SHOW);
@@ -370,7 +376,14 @@ impl HollowBorder {
 
 // Implement cross-platform BorderWindow trait
 impl BorderWindow for HollowBorder {
-    fn new(x: i32, y: i32, width: i32, height: i32, border_width: i32, border_color: u32) -> Option<Self> {
+    fn new(
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        border_width: i32,
+        border_color: u32,
+    ) -> Option<Self> {
         HollowBorder::new(x, y, width, height, border_width, border_color)
     }
 
@@ -415,11 +428,13 @@ impl BorderWindow for HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY};
-                    
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetWindowRect, SetLayeredWindowAttributes, LWA_COLORKEY,
+                    };
+
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
-                    
+
                     let mut win_rect = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut win_rect);
                     let w = win_rect.right - win_rect.left;
@@ -441,11 +456,13 @@ impl BorderWindow for HollowBorder {
                 unsafe {
                     use windows::Win32::Foundation::RECT;
                     use windows::Win32::Graphics::Gdi::InvalidateRect;
-                    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA};
-                    
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetWindowRect, SetLayeredWindowAttributes, LWA_ALPHA,
+                    };
+
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
-                    
+
                     let mut win_rect = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut win_rect);
                     let w = win_rect.right - win_rect.left;
@@ -457,7 +474,6 @@ impl BorderWindow for HollowBorder {
             }
         }
     }
-
 
     fn stop(&mut self) {
         // Stop flag already set in Drop, nothing extra needed
@@ -626,8 +642,8 @@ fn run_window_thread(
 /// Capture mode: hollow region (interior is click-through)
 #[cfg(windows)]
 unsafe fn apply_hollow_region(hwnd: HWND, width: i32, height: i32, border: i32) {
-    use windows::Win32::Graphics::Gdi::{CreateRectRgn, CombineRgn, RGN_DIFF};
-    
+    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, RGN_DIFF};
+
     if PREVIEW_MODE.load(Ordering::SeqCst) {
         // Preview mode: remove region, entire window is interactive
         SetWindowRgn(hwnd, None, true);
@@ -667,7 +683,11 @@ unsafe extern "system" fn window_proc(
             // Fill background based on mode
             // Preview mode: dark gray overlay to show it's not click-through
             // Capture mode: green (color key) for transparency/click-through
-            let bg_color = if is_preview { PREVIEW_BG_COLOR } else { CAPTURE_BG_COLOR }; // Dark gray vs green
+            let bg_color = if is_preview {
+                PREVIEW_BG_COLOR
+            } else {
+                CAPTURE_BG_COLOR
+            }; // Dark gray vs green
             let bg_brush = CreateSolidBrush(COLORREF(bg_color));
             let _ = FillRect(hdc, &rect, bg_brush);
             let _ = DeleteObject(bg_brush.into());
@@ -688,35 +708,75 @@ unsafe extern "system" fn window_proc(
 
             // Draw thicker corner lines (L-shaped at each corner)
             let corner_brush = CreateSolidBrush(COLORREF(border_color));
-            
+
             // Top-left corner - horizontal line
-            let tl_h = RECT { left: 0, top: 0, right: corner_length, bottom: corner_thickness };
+            let tl_h = RECT {
+                left: 0,
+                top: 0,
+                right: corner_length,
+                bottom: corner_thickness,
+            };
             let _ = FillRect(hdc, &tl_h, corner_brush);
             // Top-left corner - vertical line
-            let tl_v = RECT { left: 0, top: 0, right: corner_thickness, bottom: corner_length };
+            let tl_v = RECT {
+                left: 0,
+                top: 0,
+                right: corner_thickness,
+                bottom: corner_length,
+            };
             let _ = FillRect(hdc, &tl_v, corner_brush);
-            
+
             // Top-right corner - horizontal line
-            let tr_h = RECT { left: rect.right - corner_length, top: 0, right: rect.right, bottom: corner_thickness };
+            let tr_h = RECT {
+                left: rect.right - corner_length,
+                top: 0,
+                right: rect.right,
+                bottom: corner_thickness,
+            };
             let _ = FillRect(hdc, &tr_h, corner_brush);
             // Top-right corner - vertical line
-            let tr_v = RECT { left: rect.right - corner_thickness, top: 0, right: rect.right, bottom: corner_length };
+            let tr_v = RECT {
+                left: rect.right - corner_thickness,
+                top: 0,
+                right: rect.right,
+                bottom: corner_length,
+            };
             let _ = FillRect(hdc, &tr_v, corner_brush);
-            
+
             // Bottom-left corner - horizontal line
-            let bl_h = RECT { left: 0, top: rect.bottom - corner_thickness, right: corner_length, bottom: rect.bottom };
+            let bl_h = RECT {
+                left: 0,
+                top: rect.bottom - corner_thickness,
+                right: corner_length,
+                bottom: rect.bottom,
+            };
             let _ = FillRect(hdc, &bl_h, corner_brush);
             // Bottom-left corner - vertical line
-            let bl_v = RECT { left: 0, top: rect.bottom - corner_length, right: corner_thickness, bottom: rect.bottom };
+            let bl_v = RECT {
+                left: 0,
+                top: rect.bottom - corner_length,
+                right: corner_thickness,
+                bottom: rect.bottom,
+            };
             let _ = FillRect(hdc, &bl_v, corner_brush);
-            
+
             // Bottom-right corner - horizontal line
-            let br_h = RECT { left: rect.right - corner_length, top: rect.bottom - corner_thickness, right: rect.right, bottom: rect.bottom };
+            let br_h = RECT {
+                left: rect.right - corner_length,
+                top: rect.bottom - corner_thickness,
+                right: rect.right,
+                bottom: rect.bottom,
+            };
             let _ = FillRect(hdc, &br_h, corner_brush);
             // Bottom-right corner - vertical line
-            let br_v = RECT { left: rect.right - corner_thickness, top: rect.bottom - corner_length, right: rect.right, bottom: rect.bottom };
+            let br_v = RECT {
+                left: rect.right - corner_thickness,
+                top: rect.bottom - corner_length,
+                right: rect.right,
+                bottom: rect.bottom,
+            };
             let _ = FillRect(hdc, &br_v, corner_brush);
-            
+
             let _ = DeleteObject(corner_brush.into());
 
             let _ = EndPaint(hwnd, &ps);
@@ -825,12 +885,18 @@ unsafe extern "system" fn subclass_proc(
         let is_preview = PREVIEW_MODE.load(Ordering::SeqCst);
 
         let cursor_id = match hit_test {
-            x if x == HTCAPTION => Some(IDC_SIZEALL),  // Move cursor
+            x if x == HTCAPTION => Some(IDC_SIZEALL), // Move cursor
             x if x == HTTOPLEFT || x == HTBOTTOMRIGHT => Some(IDC_SIZENWSE),
             x if x == HTTOPRIGHT || x == HTBOTTOMLEFT => Some(IDC_SIZENESW),
             x if x == HTLEFT || x == HTRIGHT => Some(IDC_SIZEWE),
             x if x == HTTOP || x == HTBOTTOM => Some(IDC_SIZENS),
-            _ => if is_preview { Some(IDC_SIZEALL) } else { None },
+            _ => {
+                if is_preview {
+                    Some(IDC_SIZEALL)
+                } else {
+                    None
+                }
+            }
         };
 
         if let Some(id) = cursor_id {
@@ -849,14 +915,14 @@ unsafe extern "system" fn subclass_proc(
         if new_width > 0 && new_height > 0 {
             let border = BORDER_WIDTH.lock().map(|b| *b).unwrap_or(4);
             apply_hollow_region(hwnd, new_width, new_height, border);
-            
+
             // Update global rect with new size
             let mut win_rect = RECT::default();
             let _ = GetWindowRect(hwnd, &mut win_rect);
             if let Ok(mut rect) = HOLLOW_RECT.lock() {
                 *rect = (win_rect.left, win_rect.top, new_width, new_height);
             }
-            
+
             // Call live move callback for REC indicator
             if BORDER_INTERACTING.load(Ordering::SeqCst) {
                 if let Ok(cb_lock) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {
@@ -874,7 +940,7 @@ unsafe extern "system" fn subclass_proc(
         // Use GetWindowRect for consistency with other handlers
         let mut win_rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut win_rect);
-        
+
         let width = win_rect.right - win_rect.left;
         let height = win_rect.bottom - win_rect.top;
 
@@ -885,7 +951,7 @@ unsafe extern "system" fn subclass_proc(
             rect.2 = width;
             rect.3 = height;
         }
-        
+
         // Call live move callback for REC indicator during drag
         if BORDER_INTERACTING.load(Ordering::SeqCst) {
             if let Ok(cb_lock) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {
@@ -894,7 +960,7 @@ unsafe extern "system" fn subclass_proc(
                 }
             }
         }
-        
+
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 
@@ -908,7 +974,7 @@ unsafe extern "system" fn subclass_proc(
     // Handle resize completion - update global rect and call callback
     if msg == WM_EXITSIZEMOVE {
         BORDER_INTERACTING.store(false, Ordering::SeqCst);
-        
+
         let mut win_rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut win_rect);
 
@@ -926,14 +992,14 @@ unsafe extern "system" fn subclass_proc(
 
         let _ = InvalidateRect(Some(hwnd), None, true);
         tracing::debug!(rect = ?win_rect, "Hollow border resize complete");
-        
+
         // Call the interaction complete callback to update capture region, destination window, etc.
         if let Ok(cb_lock) = BORDER_INTERACTION_COMPLETE_CALLBACK.lock() {
             if let Some(ref callback) = *cb_lock {
                 callback(x, y, width, height);
             }
         }
-        
+
         return DefSubclassProc(hwnd, msg, wparam, lparam);
     }
 

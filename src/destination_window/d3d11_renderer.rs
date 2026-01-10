@@ -10,7 +10,7 @@
 
 use log::info;
 use windows::core::Interface;
-use windows::Win32::Foundation::{HWND, HMODULE};
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDeviceAndSwapChain, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
@@ -22,8 +22,8 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    IDXGISwapChain, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG, 
-    DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH, DXGI_SWAP_EFFECT_DISCARD, 
+    IDXGISwapChain, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH, DXGI_SWAP_EFFECT_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
@@ -89,7 +89,7 @@ impl D3D11Renderer {
                 D3D_DRIVER_TYPE_HARDWARE,
                 HMODULE(std::ptr::null_mut()), // No software rasterizer
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, // Required for BGRA format
-                None, // Use default feature levels
+                None,                          // Use default feature levels
                 D3D11_SDK_VERSION,
                 Some(&swap_chain_desc),
                 Some(&mut swapchain),
@@ -100,7 +100,10 @@ impl D3D11Renderer {
         };
 
         if let Err(e) = result {
-            return Err(format!("Failed to create D3D11 device and swapchain: {:?}", e));
+            return Err(format!(
+                "Failed to create D3D11 device and swapchain: {:?}",
+                e
+            ));
         }
 
         let device = device.ok_or("Device creation returned null")?;
@@ -171,7 +174,10 @@ impl D3D11Renderer {
     ) -> Result<(), String> {
         // Validate crop coordinates
         if crop_x < 0 || crop_y < 0 {
-            return Err(format!("Invalid crop coordinates: ({}, {})", crop_x, crop_y));
+            return Err(format!(
+                "Invalid crop coordinates: ({}, {})",
+                crop_x, crop_y
+            ));
         }
 
         // Get render target view
@@ -195,7 +201,8 @@ impl D3D11Renderer {
 
         // Set render target (required for DirectX to know where to render)
         unsafe {
-            self.context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+            self.context
+                .OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
         }
 
         // Set viewport (required for rasterizer stage)
@@ -223,30 +230,30 @@ impl D3D11Renderer {
         if texture_ptr == 0 {
             return Err("Invalid texture pointer (null)".to_string());
         }
-        
-        let source_texture: &ID3D11Texture2D = unsafe { 
-            &*(texture_ptr as *const ID3D11Texture2D)
-        };
+
+        let source_texture: &ID3D11Texture2D = unsafe { &*(texture_ptr as *const ID3D11Texture2D) };
 
         // Get source texture descriptor for debugging and validation
         let mut src_desc = Default::default();
         unsafe {
             source_texture.GetDesc(&mut src_desc);
         }
-        
+
         // Validate crop region is within source texture bounds
         if crop_x < 0 || crop_y < 0 {
-            return Err(format!("Crop coordinates out of bounds: ({}, {})", crop_x, crop_y));
+            return Err(format!(
+                "Crop coordinates out of bounds: ({}, {})",
+                crop_x, crop_y
+            ));
         }
-        
+
         let crop_right = crop_x as u32 + crop_width;
         let crop_bottom = crop_y as u32 + crop_height;
-        
+
         if crop_right > src_desc.Width || crop_bottom > src_desc.Height {
             return Err(format!(
                 "Crop region ({}+{}, {}+{}) exceeds source texture bounds ({}x{})",
-                crop_x, crop_width, crop_y, crop_height,
-                src_desc.Width, src_desc.Height
+                crop_x, crop_width, crop_y, crop_height, src_desc.Width, src_desc.Height
             ));
         }
 
@@ -255,8 +262,12 @@ impl D3D11Renderer {
         if LOG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 60 == 0 {
             info!(
                 "Texture info - Source: {}x{} format={:?}, BackBuffer: {}x{} format={:?}",
-                src_desc.Width, src_desc.Height, src_desc.Format,
-                back_buffer_desc.Width, back_buffer_desc.Height, back_buffer_desc.Format
+                src_desc.Width,
+                src_desc.Height,
+                src_desc.Format,
+                back_buffer_desc.Width,
+                back_buffer_desc.Height,
+                back_buffer_desc.Format
             );
         }
 
@@ -273,12 +284,12 @@ impl D3D11Renderer {
         unsafe {
             self.context.CopySubresourceRegion(
                 &back_buffer,
-                0,     // Subresource
-                0,     // Dest X
-                0,     // Dest Y
-                0,     // Dest Z
+                0, // Subresource
+                0, // Dest X
+                0, // Dest Y
+                0, // Dest Z
                 source_texture,
-                0,     // Source subresource
+                0, // Source subresource
                 Some(&src_box),
             );
         }
@@ -313,7 +324,13 @@ impl D3D11Renderer {
         // Resize buffers
         unsafe {
             self.swapchain
-                .ResizeBuffers(0, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SWAP_CHAIN_FLAG(0))
+                .ResizeBuffers(
+                    0,
+                    width,
+                    height,
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_SWAP_CHAIN_FLAG(0),
+                )
                 .map_err(|e| format!("Failed to resize buffers: {:?}", e))?;
         }
 
