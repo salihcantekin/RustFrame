@@ -55,13 +55,22 @@ jobs:
           echo "Updating version to: $version"
           
           # Update Cargo.toml - only the [package] section version
-          # Use sed with more precise pattern matching
-          sed -i.bak '0,/^version = ".*"/s//version = "'"$version"'"/' Cargo.toml
+          # Use awk to find [package] section and update first version line
+          awk -v ver="$version" '
+          /^\[package\]/ { in_package=1 }
+          /^\[/ && !/^\[package\]/ { in_package=0 }
+          in_package && /^version = / && !updated { 
+              print "version = \"" ver "\""
+              updated=1
+              next
+          }
+          { print }
+          ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
           echo "[OK] Updated Cargo.toml"
           
           # Verify the change
           echo "Verifying Cargo.toml version..."
-          if grep -q "^version = \"$version\"" Cargo.toml; then
+          if awk '/^\[package\]/,/^\[/ { if (/^version = "'"$version"'"/) found=1 } END { exit !found }' Cargo.toml; then
               echo "✓ Version verified in Cargo.toml: $version"
           else
               echo "✗ ERROR: Version not found in Cargo.toml!"

@@ -78,15 +78,29 @@ jobs:
           $version = "$env:VERSION_TRIM"
           Write-Host "Setting version to: $version"
           
-          # Read Cargo.toml
-          $content = Get-Content "Cargo.toml" -Raw
+          # Read Cargo.toml line by line and update version in [package] section only
+          $lines = Get-Content "Cargo.toml"
+          $inPackageSection = $false
+          $versionUpdated = $false
           
-          # Update only the top-level package version line (not rust-version)
-          # Use multiline regex anchored to line start to avoid matching 'rust-version'
-          $content = $content -replace '(?m)^\s*version\s*=\s*"[^"]*"', "version = `"$version`""
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match '^\[package\]') {
+                  $inPackageSection = $true
+                  Write-Host "Found [package] section at line $($i+1)"
+              }
+              elseif ($lines[$i] -match '^\[') {
+                  $inPackageSection = $false
+              }
+              elseif ($inPackageSection -and $lines[$i] -match '^version\s*=\s*"[^"]*"' -and -not $versionUpdated) {
+                  Write-Host "Found version line at line $($i+1): $($lines[$i])"
+                  $lines[$i] = "version = `"$version`""
+                  Write-Host "Updated to: $($lines[$i])"
+                  $versionUpdated = $true
+              }
+          }
           
           # Write back
-          Set-Content "Cargo.toml" -Value $content -NoNewline
+          $lines | Set-Content "Cargo.toml"
           
           Write-Host "✅ Cargo.toml version updated to $version"
           # Show the updated lines for verification
