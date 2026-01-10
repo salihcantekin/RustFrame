@@ -167,21 +167,37 @@ Yes, at any time in **System Settings** → **Privacy & Security**. The app will
 
 ## Version-Specific Notes
 
-### macOS 14 Sonoma and later
+### macOS 15 Sequoia (2024)
+
+**"Bypass private window picker" warning:**
+- macOS 15 introduced stricter screen capture policies
+- Apps must either use SCContentSharingPicker (system picker) OR show this warning
+- RustFrame **cannot use the picker** because it captures custom regions, not single windows
+- **This warning is expected and unavoidable**
+- After granting Screen Recording + Accessibility permissions, the app works normally
+- The warning may appear on first few launches, then macOS remembers your choice
+
+### macOS 14 Sonoma (2023)
 
 Screen Recording permission is **mandatory** and strictly enforced. The app cannot function without it.
+No "bypass picker" warning - works smoothly.
 
-### macOS 13 Ventura
+### macOS 13 Ventura (2022)
 
-Same as Sonoma.
+Same as Sonoma. Permission prompts work correctly.
 
-### macOS 12 Monterey
+### macOS 12 Monterey (2021)
 
 Screen Recording permission works the same, but uses legacy ScreenCaptureKit API.
 
-### macOS 11 Big Sur and earlier
+### macOS 11 Big Sur and earlier (2020)
 
-**Not officially supported.** ScreenCaptureKit requires macOS 12.3+. The app may fall back to older APIs but functionality is limited.
+Uses CGWindowListCreateImage API. Permission handling is the same.
+
+### macOS 10.15 Catalina (2019)
+
+**Minimum supported version.** Screen Recording permission was introduced in Catalina.
+All permission descriptions (NSScreenCaptureUsageDescription) work correctly.
 
 ---
 
@@ -197,6 +213,10 @@ When running via `cargo run`:
 ### Bundle Identifier
 
 Production app uses: `com.salihcantekin.rustframe` (from `tauri.conf.json`)
+
+### Why Can't We Use SCContentSharingPicker?
+
+RustFrame's core feature is **arbitrary region selection** - users draw a region anywhere on screen, not limited to window boundaries. SCContentSharingPicker only allows selecting entire windows or displays, which defeats the purpose of RustFrame. Therefore, the macOS 15 "bypass picker" warning is an unavoidable trade-off for this functionality.
 
 This identifier is used for:
 - Permission storage in TCC database
