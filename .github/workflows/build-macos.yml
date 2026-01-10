@@ -68,12 +68,15 @@ jobs:
           ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
           echo "[OK] Updated Cargo.toml"
           
-          # Verify the change
+          # Verify the change - simply check if we can find the version line in [package] section
           echo "Verifying Cargo.toml version..."
-          if awk '/^\[package\]/,/^\[/ { if (/^version = "'"$version"'"/) found=1 } END { exit !found }' Cargo.toml; then
+          found_version=$(awk '/^\[package\]/ { in_pkg=1; next } /^\[/ && in_pkg { exit } in_pkg && /^version = / { gsub(/"/, "", $3); print $3 }' Cargo.toml)
+          if [ "$found_version" = "$version" ]; then
               echo "✓ Version verified in Cargo.toml: $version"
           else
-              echo "✗ ERROR: Version not found in Cargo.toml!"
+              echo "✗ ERROR: Version verification failed!"
+              echo "Expected: $version"
+              echo "Found: $found_version"
               grep "^version =" Cargo.toml
               exit 1
           fi
