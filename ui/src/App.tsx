@@ -410,7 +410,7 @@ function App() {
           
            {/* Help Button */}
            <button
-            onClick={() => open("https://github.com/MainSilent/RustFrame/blob/main/README.md")}
+            onClick={() => open(AppConfig.links.documentation)}
             className="px-2 py-1 text-sm text-gray-400 hover:text-white hover:bg-gray-700/50 rounded transition-colors flex items-center gap-1"
             title="Help / Documentation"
           >

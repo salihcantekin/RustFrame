@@ -21,7 +21,7 @@ export const AppConfig = {
   // Links
   links: {
     github: "https://github.com/salihcantekin/RustFrameApp",
-    documentation: "https://github.com/salihcantekin/RustFrameApp",
+    documentation: "https://github.com/salihcantekin/RustFrameApp/blob/master/README.md",
   },
   
   // UI Settings
