@@ -23,7 +23,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type TabType = "general" | "region" | "capture" | "advanced";
+type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about";
 
 function SettingsDialog({ 
   settings,
@@ -36,17 +36,29 @@ function SettingsDialog({
   onMonitorChange, 
   onClose 
 }: SettingsDialogProps) {
-  const [activeTab, setActiveTab] = useState<TabType>("general");
+  const [activeTab, setActiveTab] = useState<TabType>("capture");
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
   const [localRegion, setLocalRegion] = useState<CaptureRegion>(captureRegion);
   const [localMonitor, setLocalMonitor] = useState<number>(selectedMonitor);
   const [previewEnabled, setPreviewEnabled] = useState(false);
   const [positionPreset, setPositionPreset] = useState<string>("center");
-  const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false); // Flag to prevent update loops
+  const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false);
   const [devMode, setDevMode] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Auto-hide toast after 3 seconds
+  // Helper for color conversion
+  const rgbaToHex = (rgba: [number, number, number, number]): string => {
+    return `#${rgba[0].toString(16).padStart(2, '0')}${rgba[1].toString(16).padStart(2, '0')}${rgba[2].toString(16).padStart(2, '0')}`;
+  };
+
+  const hexToRgba = (hex: string): [number, number, number, number] => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return [r, g, b, 255];
+  };
+
+  // Auto-hide toast
   useEffect(() => {
     if (toastMessage) {
       const timer = setTimeout(() => setToastMessage(null), 3000);
@@ -54,16 +66,14 @@ function SettingsDialog({
     }
   }, [toastMessage]);
 
-  // Load dev mode status
+  // Load dev mode
   useEffect(() => {
     invoke<boolean>("is_dev_mode").then(setDevMode).catch(() => setDevMode(false));
   }, []);
 
-  // Get max FPS based on selected monitor
-  // Round to nearest standard refresh rate (handles 119.9Hz -> 120Hz)
+  // Performance calculation
   const roundToStandardRefreshRate = (rate: number): number => {
     const standardRates = [24, 25, 30, 50, 60, 75, 90, 120, 144, 165, 240, 360];
-    // Allow 10% tolerance for matching
     for (const standard of standardRates) {
       if (Math.abs(rate - standard) <= standard * 0.1) {
         return standard;
@@ -75,9 +85,9 @@ function SettingsDialog({
   const monitorRefreshRate = monitors[localMonitor] 
     ? roundToStandardRefreshRate(monitors[localMonitor].refresh_rate)
     : 60;
-  const maxFps = monitorRefreshRate * 2; // Allow up to 2x refresh rate for high-fps capture
+  const maxFps = monitorRefreshRate * 2;
 
-  // Prevent background scroll when modal is open
+  // Prevent background scroll
   useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -85,10 +95,9 @@ function SettingsDialog({
     };
   }, []);
 
-  // Preview border management
+  // Preview border management (Same logic as original)
   useEffect(() => {
     if (previewEnabled) {
-      // COLORREF format is 0x00BBGGRR
       const borderColor = (localSettings.border_color[0]) 
         | (localSettings.border_color[1] << 8) 
         | (localSettings.border_color[2] << 16);
@@ -110,13 +119,10 @@ function SettingsDialog({
     };
   }, [previewEnabled]);
 
-  // Update preview border when region changes (only from UI, not from sync)
-  // Use a ref to track last sent values to avoid redundant updates
   const lastSentRegion = useRef({ x: 0, y: 0, width: 0, height: 0 });
   
   useEffect(() => {
     if (previewEnabled && !isSyncingFromBackend) {
-      // Only send update if values actually changed from what we last sent
       if (localRegion.x !== lastSentRegion.current.x ||
           localRegion.y !== lastSentRegion.current.y ||
           localRegion.width !== lastSentRegion.current.width ||
@@ -133,10 +139,8 @@ function SettingsDialog({
     }
   }, [localRegion, previewEnabled, isSyncingFromBackend]);
 
-  // Update preview border when border settings change (color/width only - no recreate)
   useEffect(() => {
     if (previewEnabled) {
-      // COLORREF format is 0x00BBGGRR
       const borderColor = (localSettings.border_color[0]) 
         | (localSettings.border_color[1] << 8) 
         | (localSettings.border_color[2] << 16);
@@ -148,11 +152,10 @@ function SettingsDialog({
     }
   }, [localSettings.border_color, localSettings.border_width, previewEnabled]);
 
-  // Sync border changes back to settings when user drags/resizes the preview border
+  // Sync back from border movement
   useEffect(() => {
     if (!previewEnabled) return;
 
-    // Use a ref to track the last known rect to avoid dependency issues
     let lastKnownRect = { x: localRegion.x, y: localRegion.y, width: localRegion.width, height: localRegion.height };
 
     const syncInterval = setInterval(async () => {
@@ -161,28 +164,20 @@ function SettingsDialog({
         if (rect) {
           const [x, y, width, height] = rect;
           
-          // Check if the rect actually changed from what we know
           if (x !== lastKnownRect.x || y !== lastKnownRect.y || 
               width !== lastKnownRect.width || height !== lastKnownRect.height) {
             
-            // Update our tracking
             lastKnownRect = { x, y, width, height };
-            
-            // Also update lastSentRegion to prevent echo back
             lastSentRegion.current = { x, y, width, height };
             
-            // Set flag to prevent update_preview_border from being called
             setIsSyncingFromBackend(true);
             setLocalRegion({ x, y, width, height });
-            setPositionPreset("custom"); // Switch to custom since user manually moved it
+            setPositionPreset("custom");
             
-            // Reset flag after state update is processed
             setTimeout(() => setIsSyncingFromBackend(false), 100);
             
-            // Check if border moved to a different monitor
             for (let i = 0; i < monitors.length; i++) {
               const mon = monitors[i];
-              // Check if center of border is within this monitor
               const centerX = x + width / 2;
               const centerY = y + height / 2;
               
@@ -194,19 +189,17 @@ function SettingsDialog({
             }
           }
         }
-      } catch (e) {
-        // Ignore errors during polling
-      }
-    }, 300); // Poll every 300ms (slightly slower to reduce contention)
+      } catch (e) {}
+    }, 300);
 
     return () => clearInterval(syncInterval);
-  }, [previewEnabled, monitors]); // Remove localRegion from dependencies
+  }, [previewEnabled, monitors]);
 
   const handleSave = () => {
     onSave(localSettings);
     onRegionChange(localRegion);
     onMonitorChange(localMonitor);
-    onClose(); // Close dialog after saving
+    onClose();
   };
 
   const handleExportSettings = async () => {
@@ -217,9 +210,11 @@ function SettingsDialog({
       });
       if (filePath) {
         await invoke("export_settings", { path: filePath });
+        setToastMessage("Settings exported successfully");
       }
     } catch (error) {
-      console.error("Failed to export settings:", error);
+      console.error(error);
+      setToastMessage("Failed to export settings");
     }
   };
 
@@ -232,55 +227,52 @@ function SettingsDialog({
       if (filePath) {
         const imported = await invoke<Settings>("import_settings", { path: filePath });
         setLocalSettings(imported);
-        onSave(imported); // Also update parent
+        onSave(imported);
+        setToastMessage("Settings imported successfully");
       }
     } catch (error) {
-      console.error("Failed to import settings:", error);
+      console.error(error);
+      setToastMessage("Failed to import settings");
     }
   };
 
-  const handleOpenSettingsFolder = async () => {
-    try {
-      await invoke("open_settings_folder");
-    } catch (error) {
-      console.error("Failed to open settings folder:", error);
-    }
-  };
-
-  const rgbaToHex = (rgba: [number, number, number, number]): string => {
-    return `#${rgba[0].toString(16).padStart(2, '0')}${rgba[1].toString(16).padStart(2, '0')}${rgba[2].toString(16).padStart(2, '0')}`;
-  };
-
-  const hexToRgba = (hex: string): [number, number, number, number] => {
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return [r, g, b, 255];
-  };
-
-  const tabs: { id: TabType; label: string }[] = [
-    { id: "general", label: "General" },
-    { id: "region", label: "Capture Region" },
-    { id: "capture", label: "Capture" },
-    { id: "advanced", label: "Advanced" },
+  const tabs: { id: TabType; label: string; icon: string }[] = [
+    { id: "capture", label: "Capture", icon: "🎯" },
+    { id: "mouse", label: "Mouse", icon: "🖱️" },
+    { id: "visual", label: "Visual", icon: "🎨" },
+    { id: "region", label: "Region", icon: "📐" },
+    { id: "performance", label: "Perf", icon: "🚀" },
+    { id: "advanced", label: "Advanced", icon: "🔧" },
+    { id: "about", label: "About", icon: "ℹ️" },
   ];
 
+  const SectionCard = ({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) => (
+    <div className={`bg-gray-800/50 rounded-xl p-5 border border-gray-700 shadow-sm ${className}`}>
+      <h3 className="text-lg font-bold text-gray-200 mb-4">{title}</h3>
+      {children}
+    </div>
+  );
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      {/* Toast Notification */}
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn">
+      {/* Toast */}
       {toastMessage && (
-        <div className="fixed top-4 right-4 z-[60] bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 shadow-xl max-w-md animate-slide-in">
-          <p className="text-white text-sm">{toastMessage}</p>
+        <div className="fixed top-6 right-6 z-[70] bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 shadow-2xl animate-slide-in flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-green-500"></div>
+          <p className="text-white text-sm font-medium">{toastMessage}</p>
         </div>
       )}
       
-      <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+      <div className="bg-gray-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col border border-gray-700 overflow-hidden">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
-          <h2 className="text-2xl font-bold">Settings</h2>
+        <div className="px-6 py-5 border-b border-gray-800 bg-gradient-to-r from-gray-900 to-gray-800 flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">Settings</h2>
+            <p className="text-gray-400 text-sm mt-1">Configure capture behavior and appearance</p>
+          </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -288,271 +280,350 @@ function SettingsDialog({
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="px-6 pt-4 border-b border-gray-700">
-          <div className="flex space-x-1">
+        {/* Tabs Bar */}
+        <div className="px-2 pt-2 border-b border-gray-800 bg-gray-900 overflow-x-auto">
+          <div className="flex space-x-1 min-w-max p-2">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2 rounded-t-lg transition-colors ${
+                className={`flex items-center gap-2 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm ${
                   activeTab === tab.id
-                    ? "bg-gray-700 text-white"
-                    : "text-gray-400 hover:text-white hover:bg-gray-750"
+                    ? "bg-gray-800 text-white shadow-lg border border-gray-700 transform scale-[1.02]"
+                    : "text-gray-400 hover:text-white hover:bg-gray-800/50 border border-transparent"
                 }`}
               >
+                <span className="text-lg">{tab.icon}</span>
                 {tab.label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
-          {activeTab === "general" && (
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Display Options</h3>
-                <div className="space-y-4">
-                  <label className="flex items-center space-x-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={localSettings.show_cursor}
-                      onChange={(e) =>
-                        setLocalSettings({ ...localSettings, show_cursor: e.target.checked })
-                      }
-                      className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span>Show Cursor</span>
-                  </label>
-                  <label className="flex items-center space-x-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={localSettings.capture_clicks}
-                      onChange={(e) =>
-                        setLocalSettings({ ...localSettings, capture_clicks: e.target.checked })
-                      }
-                      className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span>Capture Clicks</span>
-                  </label>
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-6 bg-gray-900/50">
+          
+          {/* TAB: CAPTURE */}
+          {activeTab === "capture" && (
+            <div className="space-y-6 animate-fadeIn">
+              {/* Platform Info */}
+              <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-4 flex items-center gap-4">
+                <div className="p-3 bg-blue-500/20 rounded-lg">
+                  <svg className="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
                 </div>
-              </div>
-
-              <div className="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
-                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <span>💡</span>
-                  <span>Click Highlight</span>
-                </h3>
-                <div className="space-y-4">
-                  <div className="flex items-center space-x-4">
-                    <span className="text-sm text-gray-400 min-w-[60px]">Color:</span>
-                    <input
-                      type="color"
-                      value={rgbaToHex(localSettings.click_highlight_color)}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          click_highlight_color: hexToRgba(e.target.value),
-                        })
-                      }
-                      className="w-12 h-8 rounded cursor-pointer"
-                      disabled={!localSettings.capture_clicks}
-                    />
-                    <span className="text-gray-400 text-sm">
-                      RGB({localSettings.click_highlight_color[0]}, {localSettings.click_highlight_color[1]}, {localSettings.click_highlight_color[2]})
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">
-                        Duration: {localSettings.click_dissolve_ms}ms
-                      </label>
-                      <input
-                        type="range"
-                        min="100"
-                        max="10000"
-                        step="100"
-                        value={localSettings.click_dissolve_ms}
-                        onChange={(e) =>
-                          setLocalSettings({
-                            ...localSettings,
-                            click_dissolve_ms: parseInt(e.target.value),
-                          })
-                        }
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        disabled={!localSettings.capture_clicks}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">
-                        Size: {localSettings.click_highlight_radius}px
-                      </label>
-                      <input
-                        type="range"
-                        min="10"
-                        max="60"
-                        step="2"
-                        value={localSettings.click_highlight_radius}
-                        onChange={(e) =>
-                          setLocalSettings({
-                            ...localSettings,
-                            click_highlight_radius: parseInt(e.target.value),
-                          })
-                        }
-                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                        disabled={!localSettings.capture_clicks}
-                      />
-                    </div>
+                <div>
+                  <div className="font-bold text-gray-200">{platformInfo.os_name} {platformInfo.os_version}</div>
+                  <div className="text-sm text-gray-400">
+                    {platformInfo.capabilities.supports_hardware_acceleration ? "✓ Hardware Acceleration Active" : "Hardware Acceleration Unavailable"}
                   </div>
                 </div>
               </div>
 
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Border Settings</h3>
-                <div className="space-y-4">
-                  <label className="flex items-center space-x-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={localSettings.show_border}
-                      onChange={(e) =>
-                        setLocalSettings({ ...localSettings, show_border: e.target.checked })
-                      }
-                      className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div>
-                      <span>Show Capture Border</span>
-                      <p className="text-sm text-gray-400">Display the hollow border around capture region</p>
-                    </div>
-                  </label>
-                  <div className="flex items-center space-x-4 pl-8">
-                    <span className="text-sm text-gray-400">Color:</span>
-                    <input
-                      type="color"
-                      value={rgbaToHex(localSettings.border_color)}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          border_color: hexToRgba(e.target.value),
-                        })
-                      }
-                      className="w-12 h-8 rounded cursor-pointer"
-                      disabled={!localSettings.show_border}
-                    />
-                    <span className="text-gray-400 text-sm">
-                      RGB({localSettings.border_color[0]}, {localSettings.border_color[1]}, {localSettings.border_color[2]})
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-4 pl-8">
-                    <span className="text-sm text-gray-400 w-16">Width:</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="20"
-                      value={localSettings.border_width}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          border_width: parseInt(e.target.value),
-                        })
-                      }
-                      className="flex-1 h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                      disabled={!localSettings.show_border}
-                    />
-                    <span className="text-gray-400 text-sm w-12 text-right">
-                      {localSettings.border_width}px
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* REC Indicator */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">REC Indicator</h3>
-                <div className="space-y-4">
-                  <label className="flex items-center space-x-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={localSettings.show_rec_indicator}
-                      onChange={(e) =>
-                        setLocalSettings({ ...localSettings, show_rec_indicator: e.target.checked })
-                      }
-                      className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div>
-                      <span>Show REC Indicator</span>
-                      <p className="text-sm text-gray-400">Display a "● REC" indicator in capture region during recording</p>
-                    </div>
-                  </label>
-                  <div className="flex items-center space-x-4 pl-8">
-                    <span className="text-sm text-gray-400">Size:</span>
-                    <select
-                      value={localSettings.rec_indicator_size}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          rec_indicator_size: e.target.value as "small" | "medium" | "large",
-                        })
-                      }
-                      className="bg-gray-700 border border-gray-600 rounded px-3 py-1 focus:ring-blue-500 focus:border-blue-500"
-                      disabled={!localSettings.show_rec_indicator}
+              <SectionCard title="Capture Method">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {platformInfo.available_capture_methods.map((method) => (
+                    <label 
+                      key={method.id}
+                      className={`relative flex flex-col p-4 rounded-xl border-2 transition-all cursor-pointer hover:bg-gray-700/50 ${
+                        localSettings.capture_method === method.id 
+                          ? 'bg-blue-600/10 border-blue-500' 
+                          : 'bg-gray-900 border-gray-700'
+                      }`}
                     >
-                      <option value="small">Small</option>
-                      <option value="medium">Medium</option>
-                      <option value="large">Large</option>
-                    </select>
-                  </div>
+                      <input
+                        type="radio"
+                        name="capture_method"
+                        checked={localSettings.capture_method === method.id}
+                        onChange={() => setLocalSettings({ ...localSettings, capture_method: method.id as any })}
+                        className="absolute top-4 right-4 w-5 h-5 text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500 focus:ring-offset-gray-900"
+                      />
+                      <span className="font-bold text-white mb-1">{method.name}</span>
+                      <p className="text-xs text-gray-400 mb-3">{method.description}</p>
+                      
+                      <div className="flex flex-wrap gap-2 mt-auto">
+                        {method.recommended && (
+                          <span className="px-2 py-1 bg-green-500/10 text-green-400 text-xs rounded-lg font-medium border border-green-500/20">
+                            Recommended
+                          </span>
+                        )}
+                        {method.hardware_accelerated && (
+                          <span className="px-2 py-1 bg-purple-500/10 text-purple-400 text-xs rounded-lg font-medium border border-purple-500/20">
+                            GPU Accelerated
+                          </span>
+                        )}
+                      </div>
+                    </label>
+                  ))}
                 </div>
-              </div>
+              </SectionCard>
 
-              {/* Remember Last Region */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Region Memory</h3>
-                <label className="flex items-center space-x-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={localSettings.remember_last_region}
-                    onChange={(e) =>
-                      setLocalSettings({ ...localSettings, remember_last_region: e.target.checked })
-                    }
-                    className="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div>
-                    <span>Remember Last Capture Region</span>
-                    <p className="text-sm text-gray-400">Restore position and size on next app start</p>
-                  </div>
-                </label>
+              <SectionCard title="Window Preview Mode">
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-400 mb-2">Controls how the shareable output window is rendered.</p>
+                  
+                  {platformInfo.os_type === "windows" && (
+                     <label className={`flex items-center p-4 rounded-xl border transition-all cursor-pointer ${
+                       localSettings.preview_mode === "WinApiGdi" ? 'bg-blue-600/10 border-blue-500' : 'bg-gray-900 border-gray-700 hover:bg-gray-700/50'
+                     }`}>
+                       <input
+                         type="radio"
+                         name="preview_mode"
+                         checked={localSettings.preview_mode === "WinApiGdi"}
+                         onChange={() => setLocalSettings({ ...localSettings, preview_mode: "WinApiGdi" })}
+                         className="w-5 h-5 text-blue-600 mr-4"
+                       />
+                       <div>
+                         <div className="font-bold text-gray-200">WinAPI GDI</div>
+                         <div className="text-xs text-gray-500">Native Windows API. Best performance for Meet, Teams, and Zoom.</div>
+                       </div>
+                     </label>
+                  )}
+
+                  <label className={`flex items-center p-4 rounded-xl border transition-all cursor-pointer ${
+                    localSettings.preview_mode === "TauriCanvas" ? 'bg-blue-600/10 border-blue-500' : 'bg-gray-900 border-gray-700 hover:bg-gray-700/50'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="preview_mode"
+                      checked={localSettings.preview_mode === "TauriCanvas"}
+                      onChange={() => setLocalSettings({ ...localSettings, preview_mode: "TauriCanvas" })}
+                      className="w-5 h-5 text-blue-600 mr-4"
+                    />
+                    <div>
+                      <div className="font-bold text-gray-200">Tauri Canvas</div>
+                      <div className="text-xs text-gray-500">Cross-platform webview rendering.</div>
+                    </div>
+                  </label>
+                </div>
+              </SectionCard>
+            </div>
+          )}
+
+          {/* TAB: MOUSE */}
+          {activeTab === "mouse" && (
+            <div className="space-y-6 animate-fadeIn">
+              <SectionCard title="Cursor Visibility">
+                <div className="flex flex-col gap-4">
+                  <label className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700 cursor-pointer hover:bg-gray-800 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-blue-500/20 rounded text-blue-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                        </svg>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-200 block">Show Cursor</span>
+                        <span className="text-xs text-gray-500">Include mouse cursor in capture</span>
+                      </div>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full p-1 transition-colors ${localSettings.show_cursor ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                      <input 
+                        type="checkbox" 
+                        className="hidden" 
+                        checked={localSettings.show_cursor}
+                        onChange={(e) => setLocalSettings({ ...localSettings, show_cursor: e.target.checked })}
+                      />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.show_cursor ? 'translate-x-6' : ''}`}></div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center justify-between p-4 bg-gray-900 rounded-lg border border-gray-700 cursor-pointer hover:bg-gray-800 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-purple-500/20 rounded text-purple-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <span className="font-medium text-gray-200 block">Highlight Clicks</span>
+                        <span className="text-xs text-gray-500">Show visual ripples when clicking</span>
+                      </div>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full p-1 transition-colors ${localSettings.capture_clicks ? 'bg-purple-600' : 'bg-gray-600'}`}>
+                      <input 
+                        type="checkbox" 
+                        className="hidden" 
+                        checked={localSettings.capture_clicks}
+                        onChange={(e) => setLocalSettings({ ...localSettings, capture_clicks: e.target.checked })}
+                      />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.capture_clicks ? 'translate-x-6' : ''}`}></div>
+                    </div>
+                  </label>
+                </div>
+              </SectionCard>
+
+              {/* Click Customization - Only if enabled */}
+              <div className={`transition-all duration-300 ${localSettings.capture_clicks ? 'opacity-100 max-h-[500px]' : 'opacity-40 max-h-0 overflow-hidden select-none grayscale'}`}>
+                 <SectionCard title="Click Highlight Style">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">Color</label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={rgbaToHex(localSettings.click_highlight_color)}
+                             onChange={(e) => setLocalSettings({ ...localSettings, click_highlight_color: hexToRgba(e.target.value) })}
+                            className="w-12 h-12 rounded-lg bg-transparent cursor-pointer"
+                          />
+                          <div className="text-xs text-gray-500 font-mono">
+                            {rgbaToHex(localSettings.click_highlight_color)}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                         <div>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-gray-400">Radius</span>
+                              <span className="text-gray-200">{localSettings.click_highlight_radius}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="10"
+                              max="100"
+                              value={localSettings.click_highlight_radius}
+                              onChange={(e) => setLocalSettings({ ...localSettings, click_highlight_radius: parseInt(e.target.value) })}
+                              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                         </div>
+                         <div>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span className="text-gray-400">Fade Duration</span>
+                              <span className="text-gray-200">{localSettings.click_dissolve_ms}ms</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="100"
+                              max="2000"
+                              step="100"
+                              value={localSettings.click_dissolve_ms}
+                              onChange={(e) => setLocalSettings({ ...localSettings, click_dissolve_ms: parseInt(e.target.value) })}
+                              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                         </div>
+                      </div>
+                    </div>
+                 </SectionCard>
               </div>
             </div>
           )}
 
-          {activeTab === "region" && (
-            <div className="space-y-6">
-              {/* Enable Preview */}
-              <div className="bg-gray-700 p-4 rounded-lg">
-                <label className="flex items-center space-x-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={previewEnabled}
-                    onChange={(e) => setPreviewEnabled(e.target.checked)}
-                    className="w-5 h-5 rounded bg-gray-600 border-gray-500 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div>
-                    <span className="font-medium">Enable Preview</span>
-                    <p className="text-sm text-gray-400">Show capture border on screen while adjusting</p>
+          {/* TAB: VISUAL */}
+          {activeTab === "visual" && (
+            <div className="space-y-6 animate-fadeIn">
+              <SectionCard title="Capture Border">
+                <div className="space-y-6">
+                  <label className="flex items-center justify-between">
+                    <div>
+                      <span className="font-medium text-gray-200 block">Show Border</span>
+                      <span className="text-xs text-gray-500">Visible outline around capture region</span>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full p-1 transition-colors ${localSettings.show_border ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                      <input 
+                        type="checkbox" 
+                        className="hidden" 
+                        checked={localSettings.show_border}
+                        onChange={(e) => setLocalSettings({ ...localSettings, show_border: e.target.checked })}
+                      />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.show_border ? 'translate-x-6' : ''}`}></div>
+                    </div>
+                  </label>
+
+                  <div className={`grid grid-cols-2 gap-6 transition-opacity ${localSettings.show_border ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Border Color</label>
+                      <input
+                        type="color"
+                        value={rgbaToHex(localSettings.border_color)}
+                        onChange={(e) => setLocalSettings({ ...localSettings, border_color: hexToRgba(e.target.value) })}
+                        className="w-full h-10 rounded-lg cursor-pointer bg-gray-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">Border Width: {localSettings.border_width}px</label>
+                       <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        value={localSettings.border_width}
+                        onChange={(e) => setLocalSettings({ ...localSettings, border_width: parseInt(e.target.value) })}
+                        className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer mt-2"
+                      />
+                    </div>
                   </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard title="REC Indicator">
+                <div className="space-y-6">
+                   <label className="flex items-center justify-between">
+                    <div>
+                      <span className="font-medium text-gray-200 block">Show Indicator</span>
+                      <span className="text-xs text-gray-500">Red "● REC" badge inside capture area</span>
+                    </div>
+                    <div className={`w-12 h-6 rounded-full p-1 transition-colors ${localSettings.show_rec_indicator ? 'bg-red-600' : 'bg-gray-600'}`}>
+                      <input 
+                        type="checkbox" 
+                        className="hidden" 
+                        checked={localSettings.show_rec_indicator}
+                        onChange={(e) => setLocalSettings({ ...localSettings, show_rec_indicator: e.target.checked })}
+                      />
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.show_rec_indicator ? 'translate-x-6' : ''}`}></div>
+                    </div>
+                  </label>
+                   
+                   <div className={`transition-opacity ${localSettings.show_rec_indicator ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                      <label className="block text-sm text-gray-400 mb-2">Size</label>
+                      <div className="flex gap-2">
+                        {['small', 'medium', 'large'].map((size) => (
+                          <button
+                            key={size}
+                            onClick={() => setLocalSettings({ ...localSettings, rec_indicator_size: size as any })}
+                            className={`flex-1 py-2 rounded-lg border text-sm capitalize transition-colors ${
+                              localSettings.rec_indicator_size === size
+                                ? 'bg-red-500/20 border-red-500 text-red-300'
+                                : 'bg-gray-900 border-gray-700 text-gray-400 hover:bg-gray-800'
+                            }`}
+                          >
+                            {size}
+                          </button>
+                        ))}
+                      </div>
+                   </div>
+                </div>
+              </SectionCard>
+            </div>
+          )}
+
+          {/* TAB: REGION */}
+          {activeTab === "region" && (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <svg className="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  <div>
+                    <div className="font-bold text-gray-200">Live Preview</div>
+                    <div className="text-xs text-gray-400">Show borders while adjusting</div>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" className="sr-only peer" checked={previewEnabled} onChange={(e) => setPreviewEnabled(e.target.checked)} />
+                  <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500"></div>
                 </label>
               </div>
 
-              {/* Monitor Selection */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Monitor</h3>
+              <SectionCard title="Active Monitor">
                 <select
                   value={localMonitor}
                   onChange={(e) => {
                     const idx = parseInt(e.target.value);
                     setLocalMonitor(idx);
-                    // Center region on new monitor
                     if (monitors[idx]) {
                       const mon = monitors[idx];
                       setLocalRegion({
@@ -563,738 +634,232 @@ function SettingsDialog({
                       });
                     }
                   }}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500"
+                  className="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none text-white text-lg"
                 >
                   {monitors.map((mon, idx) => (
                     <option key={mon.id} value={idx}>
-                      {mon.name} ({mon.width}x{mon.height} @ {mon.refresh_rate}Hz){mon.is_primary ? " - Primary" : ""}
+                      {mon.name} ({mon.width}x{mon.height}) {mon.is_primary ? "⭐ Primary" : ""}
                     </option>
                   ))}
                 </select>
-              </div>
+              </SectionCard>
 
-              {/* Region Size */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Region Size</h3>
+              <SectionCard title="Dimensions">
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
-                    <label className="block text-sm text-gray-400 mb-2">Width</label>
+                    <label className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1 block">Width</label>
                     <input
                       type="number"
                       value={localRegion.width}
-                      onChange={(e) =>
-                        setLocalRegion({
-                          ...localRegion,
-                          width: parseInt(e.target.value) || 800,
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500"
+                      onChange={(e) => setLocalRegion({ ...localRegion, width: parseInt(e.target.value) || 800 })}
+                      className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-blue-500 focus:outline-none"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-2">Height</label>
+                   <div>
+                    <label className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1 block">Height</label>
                     <input
                       type="number"
                       value={localRegion.height}
-                      onChange={(e) =>
-                        setLocalRegion({
-                          ...localRegion,
-                          height: parseInt(e.target.value) || 600,
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500"
+                      onChange={(e) => setLocalRegion({ ...localRegion, height: parseInt(e.target.value) || 600 })}
+                      className="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-blue-500 focus:outline-none"
                     />
                   </div>
                 </div>
-                {/* Size Presets */}
+                
+                <p className="text-xs text-gray-500 mb-2 font-bold">PRESETS</p>
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { label: "720p", w: 1280, h: 720 },
                     { label: "1080p", w: 1920, h: 1080 },
                     { label: "1440p", w: 2560, h: 1440 },
                     { label: "4K", w: 3840, h: 2160 },
-                    { label: "Square", w: 1080, h: 1080 },
-                    { label: "800x600", w: 800, h: 600 },
+                    { label: "Squares", w: 1080, h: 1080 },
+                    { label: "Small", w: 800, h: 600 },
                   ].map((preset) => (
                     <button
                       key={preset.label}
                       onClick={() => {
                         const mon = monitors[localMonitor];
                         if (mon) {
-                          setLocalRegion({
+                           setLocalRegion({
                             x: mon.x + Math.floor((mon.width - preset.w) / 2),
                             y: mon.y + Math.floor((mon.height - preset.h) / 2),
                             width: preset.w,
                             height: preset.h,
                           });
                         } else {
-                          setLocalRegion({ ...localRegion, width: preset.w, height: preset.h });
+                           setLocalRegion({ ...localRegion, width: preset.w, height: preset.h });
                         }
                       }}
-                      className={`px-3 py-2 rounded-lg transition-colors ${
-                        localRegion.width === preset.w && localRegion.height === preset.h
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-700 hover:bg-gray-600"
-                      }`}
+                      className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors"
                     >
                       {preset.label}
                     </button>
                   ))}
                 </div>
-              </div>
-
-              {/* Region Position */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Region Position</h3>
-                {/* Position Presets */}
-                <div className="grid grid-cols-3 gap-2 mb-4">
-                  {[
-                    { id: "center", label: "Center" },
-                    { id: "top-left", label: "Top-Left" },
-                    { id: "top-right", label: "Top-Right" },
-                    { id: "bottom-left", label: "Bottom-Left" },
-                    { id: "bottom-right", label: "Bottom-Right" },
-                    { id: "custom", label: "Custom" },
-                  ].map((preset) => (
-                    <button
-                      key={preset.id}
-                      onClick={() => {
-                        setPositionPreset(preset.id);
-                        if (preset.id !== "custom") {
-                          const mon = monitors[localMonitor];
-                          if (mon) {
-                            let newPos = { x: localRegion.x, y: localRegion.y };
-                            switch (preset.id) {
-                              case "center":
-                                newPos = { 
-                                  x: mon.x + Math.floor((mon.width - localRegion.width) / 2), 
-                                  y: mon.y + Math.floor((mon.height - localRegion.height) / 2) 
-                                };
-                                break;
-                              case "top-left":
-                                newPos = { x: mon.x, y: mon.y };
-                                break;
-                              case "top-right":
-                                newPos = { x: mon.x + mon.width - localRegion.width, y: mon.y };
-                                break;
-                              case "bottom-left":
-                                newPos = { x: mon.x, y: mon.y + mon.height - localRegion.height };
-                                break;
-                              case "bottom-right":
-                                newPos = { x: mon.x + mon.width - localRegion.width, y: mon.y + mon.height - localRegion.height };
-                                break;
-                            }
-                            setLocalRegion({ ...localRegion, ...newPos });
-                          }
-                        }
-                      }}
-                      className={`px-3 py-2 rounded-lg transition-colors ${
-                        positionPreset === preset.id
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-700 hover:bg-gray-600"
-                      }`}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-                
-                {/* Custom X/Y inputs - only visible when Custom is selected */}
-                {positionPreset === "custom" && (
-                  <div className="grid grid-cols-2 gap-4 p-4 bg-gray-700 rounded-lg">
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">X</label>
-                      <input
-                        type="number"
-                        value={localRegion.x}
-                        onChange={(e) =>
-                          setLocalRegion({
-                            ...localRegion,
-                            x: parseInt(e.target.value) || 0,
-                          })
-                        }
-                        className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">Y</label>
-                      <input
-                        type="number"
-                        value={localRegion.y}
-                        onChange={(e) =>
-                          setLocalRegion({
-                            ...localRegion,
-                            y: parseInt(e.target.value) || 0,
-                          })
-                        }
-                        className="w-full px-3 py-2 bg-gray-600 border border-gray-500 rounded-lg focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                  </div>
-                )}
-                
-                {/* Current position display */}
-                {positionPreset !== "custom" && (
-                  <div className="text-sm text-gray-400 p-3 bg-gray-700 rounded-lg">
-                    Position: {localRegion.x}, {localRegion.y}
-                  </div>
-                )}
-              </div>
+              </SectionCard>
             </div>
           )}
 
-          {activeTab === "capture" && (
-            <div className="space-y-6">
-              {/* Platform Info Banner */}
-              <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-lg p-4">
-                <div className="flex items-center gap-3 mb-2">
-                  <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                  <div>
-                    <div className="font-semibold text-white">{platformInfo.os_name} {platformInfo.os_version}</div>
-                    <div className="text-xs text-gray-400">
-                      {platformInfo.capabilities.supports_hardware_acceleration && "Hardware Acceleration Supported"}
+           {/* TAB: PERFORMANCE */}
+          {activeTab === "performance" && (
+            <div className="space-y-6 animate-fadeIn">
+               <SectionCard title="Target Framerate" className="border-l-4 border-l-green-500">
+                  <div className="mb-6">
+                    <div className="flex justify-between items-end mb-4">
+                      <div className="text-4xl font-bold text-white">{localSettings.target_fps} <span className="text-lg text-gray-500 font-normal">FPS</span></div>
+                       <div className="text-right">
+                         <div className="text-sm font-medium text-gray-400">Monitor Refresh</div>
+                         <div className="text-white font-mono">{monitorRefreshRate} Hz</div>
+                       </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Capture Method</h3>
-                <div className="space-y-3">
-                  {platformInfo.available_capture_methods.map((method) => (
-                    <label 
-                      key={method.id}
-                      className={`flex items-center space-x-3 cursor-pointer p-3 rounded-lg transition-colors ${
-                        localSettings.capture_method === method.id 
-                          ? 'bg-blue-600/20 border-2 border-blue-500' 
-                          : 'bg-gray-700 border-2 border-transparent hover:bg-gray-650'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="capture_method"
-                        checked={localSettings.capture_method === method.id}
-                        onChange={() =>
-                          setLocalSettings({
-                            ...localSettings,
-                            capture_method: method.id as any,
-                          })
-                        }
-                        className="w-4 h-4 text-blue-600"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{method.name}</span>
-                          {method.recommended && (
-                            <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
-                              Recommended
-                            </span>
-                          )}
-                          {method.hardware_accelerated && (
-                            <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-medium">
-                              GPU
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm text-gray-400 mt-1">{method.description}</div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Dev Mode: Show all platforms' methods */}
-              {devMode && platformInfo.all_platforms_capture_methods.length > 0 && (
-                <div className="border-t border-gray-700 pt-6">
-                  <div className="flex items-center gap-2 mb-4">
-                    <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                    </svg>
-                    <h3 className="text-lg font-semibold text-yellow-400">Dev Mode: All Platforms Preview</h3>
-                  </div>
-                  <p className="text-sm text-gray-400 mb-4">
-                    Below are capture methods from all supported platforms (read-only). You can only use methods available for {platformInfo.os_name}.
-                  </p>
-                  
-                  {["Windows", "macOS", "Linux"].map((platformName) => {
-                    const methods = platformInfo.all_platforms_capture_methods.filter(
-                      (m) => m.platform_name === platformName
-                    );
-                    if (methods.length === 0) return null;
-
-                    const isCurrentPlatform = platformInfo.os_name === platformName;
-
-                    return (
-                      <div key={platformName} className="mb-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <h4 className="font-medium text-gray-300">{platformName}</h4>
-                          {isCurrentPlatform && (
-                            <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-medium">
-                              Current
-                            </span>
-                          )}
-                        </div>
-                        <div className="space-y-2">
-                          {methods.map((method) => (
-                            <div
-                              key={`${platformName}-${method.id}`}
-                              className={`flex items-center space-x-3 p-3 rounded-lg border-2 ${
-                                isCurrentPlatform
-                                  ? 'bg-gray-700/50 border-gray-600'
-                                  : 'bg-gray-800/50 border-gray-700 opacity-60'
-                              }`}
-                            >
-                              <div className="w-4 h-4 rounded-full border-2 border-gray-500 flex items-center justify-center">
-                                {isCurrentPlatform && localSettings.capture_method === method.id && (
-                                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                                )}
-                              </div>
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium text-gray-300">{method.name}</span>
-                                  {method.recommended && (
-                                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full font-medium">
-                                      Recommended
-                                    </span>
-                                  )}
-                                  {method.hardware_accelerated && (
-                                    <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded-full font-medium">
-                                      GPU
-                                    </span>
-                                  )}
-                                  {!isCurrentPlatform && (
-                                    <span className="text-xs bg-gray-600/50 text-gray-400 px-2 py-0.5 rounded-full font-medium">
-                                      Not Available
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-xs text-gray-500 mt-1">{method.description}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Performance</h3>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-2">
-                    Target FPS: {localSettings.target_fps} (Monitor: {monitorRefreshRate}Hz, Max: {maxFps})
-                  </label>
-                  <input
-                    type="range"
-                    min="15"
-                    max={maxFps}
-                    step="1"
-                    value={Math.min(localSettings.target_fps, maxFps)}
-                    onChange={(e) =>
-                      setLocalSettings({
-                        ...localSettings,
-                        target_fps: parseInt(e.target.value),
-                      })
-                    }
-                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <div className="flex justify-between text-xs text-gray-400 mt-1">
-                    <span>15</span>
-                    <span>{maxFps}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Preview Mode</h3>
-                <p className="text-sm text-gray-400 mb-4">
-                  Controls how the shareable output window is rendered. Platform-specific options may vary.
-                </p>
-                <div className="space-y-3">
-                  {/* WinAPI GDI - Windows Only */}
-                  {platformInfo.os_type === "windows" && (
-                    <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
-                      <input
-                        type="radio"
-                        name="preview_mode"
-                        checked={localSettings.preview_mode === "WinApiGdi"}
-                        onChange={() =>
-                          setLocalSettings({
-                            ...localSettings,
-                            preview_mode: "WinApiGdi",
-                          })
-                        }
-                        className="w-4 h-4 text-blue-600"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">WinAPI GDI</span>
-                          <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 text-xs rounded-full font-medium">
-                            Recommended
-                          </span>
-                        </div>
-                        <div className="text-sm text-gray-400">Lightweight, Windows-only, best performance</div>
-                      </div>
-                    </label>
-                  )}
-
-                  {/* Tauri Canvas - Cross-platform */}
-                  <label className="flex items-center space-x-3 cursor-pointer p-3 bg-gray-700 rounded-lg hover:bg-gray-650 transition-colors">
+                    
                     <input
-                      type="radio"
-                      name="preview_mode"
-                      checked={localSettings.preview_mode === "TauriCanvas"}
-                      onChange={() =>
-                        setLocalSettings({
-                          ...localSettings,
-                          preview_mode: "TauriCanvas",
-                        })
-                      }
-                      className="w-4 h-4 text-blue-600"
+                      type="range"
+                      min="15"
+                      max={maxFps}
+                      step="5"
+                      value={Math.min(localSettings.target_fps, maxFps)}
+                      onChange={(e) => setLocalSettings({ ...localSettings, target_fps: parseInt(e.target.value) })}
+                      className="w-full h-3 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-500 hover:accent-green-400"
                     />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">Tauri Canvas</span>
-                        <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 text-xs rounded-full font-medium">
-                          Cross-platform
-                        </span>
-                        {platformInfo.os_type !== "windows" && (
-                          <span className="px-2 py-0.5 bg-green-500/20 text-green-300 text-xs rounded-full font-medium">
-                            Default
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-sm text-gray-400">
-                        {platformInfo.os_type === "windows" 
-                          ? "WebView2 based, slower than WinAPI"
-                          : "WebView based, cross-platform support"}
-                      </div>
+                    <div className="flex justify-between text-xs text-gray-500 mt-2 font-mono">
+                      <span>15 FPS</span>
+                      <span>MAX {maxFps} FPS</span>
                     </div>
-                  </label>
-
-                  {/* Dev Mode Preview for Preview Mode */}
-                  {devMode && platformInfo.os_type !== "windows" && (
-                    <div className="mt-4 pt-4 border-t border-gray-700">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                        </svg>
-                        <span className="text-sm font-medium text-yellow-400">Dev Mode: Windows-Only Option</span>
-                      </div>
-                      <div className="space-y-2 opacity-60 pointer-events-none">
-                        <label className="flex items-center space-x-3 p-3 bg-gray-700/50 rounded-lg">
-                          <input
-                            type="radio"
-                            disabled
-                            className="w-4 h-4 text-blue-600"
-                          />
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">WinAPI GDI</span>
-                              <span className="px-2 py-0.5 bg-red-500/20 text-red-300 text-xs rounded-full font-medium">
-                                Not Available on {platformInfo.os_type === "macos" ? "macOS" : "Linux"}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-400">Lightweight, Windows-only, best performance</div>
-                          </div>
-                        </label>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+                  </div>
+                  
+                  <div className="bg-gray-700/30 rounded p-3 text-sm text-gray-400">
+                    <span className="text-green-400 font-bold">Tip:</span> Higher FPS requires more CPU/GPU. matching your monitor's refresh rate (e.g. 60Hz) is usually optimal.
+                  </div>
+               </SectionCard>
             </div>
           )}
 
+          {/* TAB: ADVANCED */}
           {activeTab === "advanced" && (
-            <div className="space-y-6">
-              {/* Platform-Specific Features */}
-              {platformInfo.capabilities.has_winapi_options && (
-                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
-                  <div className="flex items-start gap-3">
-                    <svg className="w-5 h-5 text-yellow-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+            <div className="space-y-6 animate-fadeIn">
+              <SectionCard title="Startup Behavior">
+                 <label className="flex items-center justify-between cursor-pointer">
                     <div>
-                      <h4 className="font-semibold text-yellow-400 mb-2">Windows Advanced Options</h4>
-                      <p className="text-sm text-gray-300 mb-2">
-                        This platform supports advanced WinAPI customization options for the destination window.
-                      </p>
-                      <p className="text-xs text-gray-400">
-                        You can manually edit <span className="font-mono bg-gray-800 px-1 rounded">settings.json</span> to add 
-                        keys like <span className="font-mono bg-gray-800 px-1 rounded">winapi_destination_alpha</span>, 
-                        <span className="font-mono bg-gray-800 px-1 rounded ml-1">winapi_destination_topmost</span>, etc. 
-                        for advanced troubleshooting.
-                      </p>
+                      <span className="font-medium text-gray-200 block">Remember Last Region</span>
+                      <span className="text-xs text-gray-500">Restore size and position on launch</span>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Logging */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Logging</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">Log Level</label>
-                    <select
-                      value={localSettings.log_level}
-                      onChange={(e) => setLocalSettings({ ...localSettings, log_level: e.target.value })}
-                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    >
-                      <option value="Off">Off - No logging</option>
-                      <option value="Error">Error - Only critical failures (recommended)</option>
-                      <option value="Warn">Warn - Errors + warnings</option>
-                      <option value="Info">Info - Lifecycle events + errors</option>
-                      <option value="Debug">Debug - Detailed diagnostics</option>
-                      <option value="Trace">Trace - Verbose (frame-by-frame)</option>
-                    </select>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Controls how much information is logged. Error level is recommended for normal use.
-                    </p>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Save Logs to File</label>
-                      <p className="text-xs text-gray-400">Enable file logging for troubleshooting</p>
-                    </div>
-                    <button
-                      onClick={() => setLocalSettings({ ...localSettings, log_to_file: !localSettings.log_to_file })}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        localSettings.log_to_file ? "bg-blue-600" : "bg-gray-600"
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          localSettings.log_to_file ? "translate-x-6" : "translate-x-1"
-                        }`}
+                    <div className={`w-12 h-6 rounded-full p-1 transition-colors ${localSettings.remember_last_region ? 'bg-blue-600' : 'bg-gray-600'}`}>
+                      <input 
+                        type="checkbox" 
+                        className="hidden" 
+                        checked={localSettings.remember_last_region}
+                        onChange={(e) => setLocalSettings({ ...localSettings, remember_last_region: e.target.checked })}
                       />
-                    </button>
-                  </div>
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${localSettings.remember_last_region ? 'translate-x-6' : ''}`}></div>
+                    </div>
+                  </label>
+              </SectionCard>
 
-                  {localSettings.log_to_file && (
-                    <div>
-                      <label className="block text-sm font-medium mb-2">Log Retention (days)</label>
+              <SectionCard title="Logging & Troubleshooting">
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                   <div>
+                     <label className="block text-sm text-gray-400 mb-2">Log Level</label>
+                     <select
+                        value={localSettings.log_level}
+                        onChange={(e) => setLocalSettings({ ...localSettings, log_level: e.target.value })}
+                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
+                      >
+                        <option value="Off">Off</option>
+                        <option value="Error">Error (Recommended)</option>
+                        <option value="Warn">Warn</option>
+                        <option value="Info">Info</option>
+                        <option value="Debug">Debug</option>
+                      </select>
+                   </div>
+                   
+                   <div>
+                      <label className="block text-sm text-gray-400 mb-2 cursor-pointer flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={localSettings.log_to_file}
+                          onChange={(e) => setLocalSettings({ ...localSettings, log_to_file: e.target.checked })}
+                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600"
+                        />
+                        Save to File
+                      </label>
                       <input
                         type="number"
+                        placeholder="Days"
                         min="1"
-                        max="365"
+                        disabled={!localSettings.log_to_file}
                         value={localSettings.log_retention_days}
-                        onChange={(e) => setLocalSettings({ ...localSettings, log_retention_days: parseInt(e.target.value) || 30 })}
-                        className="w-32 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        onChange={(e) => setLocalSettings({ ...localSettings, log_retention_days: parseInt(e.target.value) })}
+                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white disabled:opacity-50"
                       />
-                      <p className="text-xs text-gray-400 mt-1">
-                        Logs older than this will be automatically deleted. Default is 30 days.
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={async () => {
-                        try {
-                          await invoke("open_logs_folder");
-                        } catch (err) {
-                          console.error("Failed to open logs folder:", err);
-                        }
-                      }}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                      Open Logs Folder
+                   </div>
+                </div>
+                
+                <div className="flex gap-3 mt-4">
+                    <button onClick={() => invoke("open_logs_folder")} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm text-white transition-colors">
+                      Open Log Folder
                     </button>
-                    <button
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        
-                        // Use Tauri's native dialog (independent of React state)
-                        const confirmed = await ask(
-                          `Delete logs older than ${localSettings.log_retention_days} days?`,
-                          { title: 'Clear Old Logs', kind: 'warning' }
-                        );
-                        
-                        if (!confirmed) {
-                          return; // User cancelled, do nothing
-                        }
-                        
-                        // User confirmed, proceed with deletion
-                        try {
-                          const deleted = await invoke<number>("clear_old_logs", { keepDays: localSettings.log_retention_days });
-                          // Show toast notification after deletion completes
-                          setToastMessage(`✅ Deleted ${deleted} old log file(s)`);
-                        } catch (err) {
-                          console.error("Failed to clear logs:", err);
-                          setToastMessage(`❌ Failed to clear logs: ${err}`);
-                        }
-                      }}
-                      className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded-lg transition-colors flex items-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
+                    <button onClick={async () => {
+                         const confirmed = await ask(`Delete logs older than ${localSettings.log_retention_days} days?`, { title: 'Clear Old Logs', kind: 'warning' });
+                         if (confirmed) {
+                           const count = await invoke("clear_old_logs", { keepDays: localSettings.log_retention_days });
+                           setToastMessage(`Deleted ${count} logs`);
+                         }
+                    }} className="px-4 py-2 bg-red-900/50 hover:bg-red-900/80 text-red-100 rounded-lg text-sm transition-colors border border-red-800">
                       Clear Old Logs
                     </button>
-                  </div>
                 </div>
-              </div>
-
-              {/* Settings Management */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Settings Management</h3>
-                <div className="space-y-3">
-                  <div className="flex flex-wrap gap-3">
-                    <button
-                      onClick={handleExportSettings}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                      </svg>
-                      Export Settings
-                    </button>
-                    <button
-                      onClick={handleImportSettings}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
-                      Import Settings
-                    </button>
-                    <button
-                      onClick={handleOpenSettingsFolder}
-                      className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                      Open Settings Folder
-                    </button>
-                  </div>
-                  <p className="text-sm text-gray-400">
-                    Export your settings to share or backup, import from a file, or open the settings folder.
-                  </p>
-                </div>
-              </div>
-
-              {/* Help / Troubleshooting */}
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Help</h3>
-                <div className="space-y-3">
-                  <div className="text-sm text-gray-300 p-4 bg-gray-700 rounded-lg space-y-2">
-                    {platformInfo.os_type === "windows" && (
-                      <>
-                        <p>
-                          <span className="font-medium">Preview Mode</span> controls how the shareable output window is rendered.
-                          For Google Meet / Teams / Zoom on Windows, <span className="font-medium">WinAPI GDI</span> is the most compatible.
-                        </p>
-                        <p>
-                          <span className="font-medium">Capture Method</span> controls how pixels are captured from the screen.
-                          <span className="font-medium"> WGC</span> is the modern Windows API; <span className="font-medium">GDI Screen Copy</span> is a compatibility option similar to RegionToShare.
-                        </p>
-                      </>
-                    )}
-                    {platformInfo.os_type === "macos" && (
-                      <>
-                        <p>
-                          <span className="font-medium">Capture Method</span>: RustFrame uses ScreenCaptureKit on macOS 12.3+, 
-                          providing hardware-accelerated screen capture with minimal performance impact.
-                        </p>
-                        <p className="text-gray-400">
-                          Make sure you've granted screen recording permissions in System Preferences → Security & Privacy → Screen Recording.
-                        </p>
-                      </>
-                    )}
-                    {platformInfo.os_type === "linux" && (
-                      <>
-                        <p>
-                          <span className="font-medium">Capture Method</span>: RustFrame automatically detects your compositor (Wayland/X11) 
-                          and uses the appropriate capture method.
-                        </p>
-                        <p className="text-gray-400">
-                          For Wayland: Requires PipeWire support. For X11: Uses standard X11 capture APIs.
-                        </p>
-                      </>
-                    )}
-                    {platformInfo.capabilities.has_winapi_options && (
-                      <>
-                        <p className="text-gray-400">
-                          Advanced troubleshooting (hidden): you can add these keys to <span className="font-medium">settings.json</span> to override
-                          the WinAPI destination window behavior.
-                        </p>
-                        <ul className="list-disc list-inside text-gray-400 space-y-1">
-                          <li>
-                            <span className="font-medium">winapi_destination_alpha</span>: number 0..255 (default: 0 in release builds)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_topmost</span>: true/false (default: true)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_toolwindow</span>: true/false (default: true)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_click_through</span>: true/false (default: true)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_layered</span>: true/false (default: true)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_appwindow</span>: true/false (default: false; only used when toolwindow=false)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_noactivate</span>: true/false (default: true)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_overlapped</span>: true/false (default: false; uses a normal overlapped window style)
-                          </li>
-                          <li>
-                            <span className="font-medium">winapi_destination_hide_taskbar_after_ms</span>: number (ms). If set, RustFrame will add TOOLWINDOW after this delay to hide from taskbar/Alt-Tab.
-                          </li>
-                        </ul>
-                      </>
-                    )}
-                    <p className="text-gray-400">
-                      Tip: If a meeting app shows black or stops updating, try setting <span className="font-medium">winapi_destination_alpha</span> to 1
-                      or 255 for diagnostics.
-                    </p>
-                    <p className="text-gray-400">
-                      Tip (Discord window list): Discord may hide “tool windows” and click-through/layered windows from its Applications picker.
-                      Try setting <span className="font-medium">winapi_destination_toolwindow</span> to false and <span className="font-medium">winapi_destination_appwindow</span> to true.
-                      If it still doesn’t appear, also try <span className="font-medium">winapi_destination_click_through</span> false.
-                    </p>
-                    <p className="text-gray-400">
-                      If Discord still doesn’t list it, try making it more like a normal app window:
-                      set <span className="font-medium">winapi_destination_overlapped</span> to true and <span className="font-medium">winapi_destination_noactivate</span> to false.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-
+              </SectionCard>
             </div>
           )}
+
+           {/* TAB: ABOUT */}
+          {activeTab === "about" && (
+             <div className="space-y-6 animate-fadeIn">
+                <div className="text-center py-8">
+                   <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-4">
+                      <span className="text-4xl">🌫️</span>
+                   </div>
+                   <h2 className="text-3xl font-bold text-white mb-2">RustFrame</h2>
+                   <p className="text-gray-400">Modern High-Performance Screen Capture</p>
+                   <p className="text-gray-500 text-sm mt-2">v{platformInfo.os_version} • {platformInfo.os_type}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                   <button onClick={handleExportSettings} className="p-4 bg-gray-800 hover:bg-gray-700 rounded-xl border border-gray-600 transition-colors flex flex-col items-center gap-2">
+                      <span className="text-2xl">📤</span>
+                      <span className="font-medium text-white">Export Settings</span>
+                   </button>
+                   <button onClick={handleImportSettings} className="p-4 bg-gray-800 hover:bg-gray-700 rounded-xl border border-gray-600 transition-colors flex flex-col items-center gap-2">
+                       <span className="text-2xl">📥</span>
+                      <span className="font-medium text-white">Import Settings</span>
+                   </button>
+                </div>
+
+                <div className="bg-gray-800/50 rounded-xl p-4 text-center">
+                   <button onClick={() => invoke("open_settings_folder")} className="text-blue-400 hover:text-blue-300 hover:underline text-sm">
+                      Open Configuration Folder
+                   </button>
+                </div>
+             </div>
+          )}
+
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-700 flex justify-end space-x-3">
+        {/* Footer Actions */}
+        <div className="px-6 py-5 border-t border-gray-800 bg-gray-900 flex justify-end gap-3 z-10">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+            className="px-6 py-2.5 rounded-xl text-gray-400 hover:text-white hover:bg-gray-800 transition-colors font-medium border border-transparent hover:border-gray-700"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+            className="px-8 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold shadow-lg shadow-blue-500/20 transform transition-all hover:scale-[1.02] active:scale-[0.98]"
           >
-            Save Changes
+            Apply Changes
           </button>
         </div>
       </div>
