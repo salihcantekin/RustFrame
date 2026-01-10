@@ -2105,6 +2105,7 @@ pub struct MonitorInfo {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub scale_factor: f64,
     pub is_primary: bool,
     pub refresh_rate: u32,
 }
@@ -2120,6 +2121,7 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
         EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, DEVMODEW,
         ENUM_CURRENT_SETTINGS, HDC, HMONITOR, MONITORINFOEXW,
     };
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 
     let mut monitors = Vec::new();
 
@@ -2139,6 +2141,12 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
             let name = String::from_utf16_lossy(&info.szDevice);
             let device_name = windows::core::PCWSTR::from_raw(info.szDevice.as_ptr());
 
+            // Get DPI
+            let mut dpi_x = 96;
+            let mut dpi_y = 96;
+            let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+            let scale_factor = dpi_x as f64 / 96.0;
+
             // Get refresh rate from display settings
             let mut devmode: DEVMODEW = mem::zeroed();
             devmode.dmSize = mem::size_of::<DEVMODEW>() as u16;
@@ -2157,6 +2165,7 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
                 y: rect.top,
                 width: (rect.right - rect.left) as u32,
                 height: (rect.bottom - rect.top) as u32,
+                scale_factor,
                 is_primary: info.monitorInfo.dwFlags == 1,
                 refresh_rate,
             });
@@ -2178,21 +2187,35 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
     Ok(monitors)
 }
 
-// Non-Windows stub
+// Non-Windows implementation using Tauri API
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
-    // TODO: Implement for macOS and Linux
-    Ok(vec![MonitorInfo {
-        id: 0,
-        name: "Primary Display".to_string(),
-        x: 0,
-        y: 0,
-        width: 1920,
-        height: 1080,
-        is_primary: true,
-        refresh_rate: 60,
-    }])
+async fn get_monitors(window: tauri::Window) -> Result<Vec<MonitorInfo>, String> {
+    match window.available_monitors() {
+        Ok(monitors) => {
+            let mut result = Vec::new();
+            for (idx, m) in monitors.into_iter().enumerate() {
+                let scale_factor = m.scale_factor();
+                let size = m.size().to_logical::<u32>(scale_factor);
+                let position = m.position().to_logical::<i32>(scale_factor);
+                let name = m.name().map(|s| s.to_string()).unwrap_or_else(|| format!("Display {}", idx + 1));
+                
+                result.push(MonitorInfo {
+                    id: idx,
+                    name,
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                    scale_factor,
+                    is_primary: position.x == 0 && position.y == 0, // Heuristic: (0,0) is usually primary
+                    refresh_rate: 60, // Tauri doesn't always provide this, default to 60
+                });
+            }
+            Ok(result)
+        },
+        Err(e) => Err(format!("Failed to list monitors: {}", e))
+    }
 }
 
 // Windows implementation
@@ -2257,29 +2280,39 @@ fn get_display_scale_factor() -> f64 {
     display_info.scale_factor
 }
 
+/// Get the application version from Cargo.toml
+#[tauri::command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Get recommended window size based on display scale
 /// Returns (width, height) in logical pixels that accounts for DPI/scaling
 #[tauri::command]
 fn get_recommended_window_size() -> (u32, u32) {
     let display_info = display_info::get();
     
-    // Base size in logical pixels (for 1.0 scale)
-    let base_width = 900.0;
-    let base_height = 820.0;
+    // Instead of fixed pixels, let's target 60% of screen height (max 900px width)
+    // This scales better across different screen sizes
+    let screen_height = if display_info.height_points > 0.0 {
+        display_info.height_points
+    } else {
+        900.0
+    };
     
-    // Adjust based on scale factor to maintain consistent physical size
-    // Higher DPI = smaller logical size to keep same physical dimensions
-    let logical_width = (base_width / display_info.scale_factor).round() as u32;
-    let logical_height = (base_height / display_info.scale_factor).round() as u32;
+    let target_height = (screen_height * 0.7).min(900.0).max(700.0);
+    let target_width = (target_height * 1.1).min(1100.0).max(900.0);
     
-    // Ensure minimum size
-    let min_width = 600;
-    let min_height = 500;
+    // Convert to logical if the OS doesn't handle it automatically (display_info returns physical usually)
+    // But Tauri usually expects logical.
     
-    (
-        logical_width.max(min_width),
-        logical_height.max(min_height)
-    )
+    // If we assume display_info.height is physical, and we want logical size for Tauri:
+    // logical = physical / scale
+    
+    let logical_width = (target_width / display_info.scale_factor).round() as u32;
+    let logical_height = (target_height / display_info.scale_factor).round() as u32;
+    
+    (logical_width, logical_height)
 }
 
 // ============================================================================
@@ -2443,6 +2476,7 @@ fn main() {
             get_platform_info,
             get_display_scale_factor,
             get_recommended_window_size,
+            get_app_version,
             get_settings,
             get_border_rect,
             get_capture_profiles,

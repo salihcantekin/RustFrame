@@ -12,6 +12,7 @@ interface CaptureRegion {
 }
 
 interface SettingsDialogProps {
+  initialTab?: TabType;
   settings: Settings;
   platformInfo: PlatformInfo;
   captureRegion: CaptureRegion;
@@ -26,6 +27,7 @@ interface SettingsDialogProps {
 type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about";
 
 function SettingsDialog({ 
+  initialTab = "capture",
   settings,
   platformInfo,
   captureRegion, 
@@ -36,7 +38,7 @@ function SettingsDialog({
   onMonitorChange, 
   onClose 
 }: SettingsDialogProps) {
-  const [activeTab, setActiveTab] = useState<TabType>("capture");
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
   const [localRegion, setLocalRegion] = useState<CaptureRegion>(captureRegion);
   const [localMonitor, setLocalMonitor] = useState<number>(selectedMonitor);
@@ -44,10 +46,17 @@ function SettingsDialog({
   const [positionPreset, setPositionPreset] = useState<string>("center");
   const [isSyncingFromBackend, setIsSyncingFromBackend] = useState(false);
   const [devMode, setDevMode] = useState(false);
+  const [appVersion, setAppVersion] = useState("Unknown");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<string>("get_app_version").then(setAppVersion).catch(e => console.error(e));
+  }, []);
 
   // Helper for color conversion
   const rgbaToHex = (rgba: [number, number, number, number]): string => {
+    // Input: [r, g, b, a]
+    // Output: #RRGGBB
     return `#${rgba[0].toString(16).padStart(2, '0')}${rgba[1].toString(16).padStart(2, '0')}${rgba[2].toString(16).padStart(2, '0')}`;
   };
 
@@ -98,9 +107,10 @@ function SettingsDialog({
   // Preview border management (Same logic as original)
   useEffect(() => {
     if (previewEnabled) {
-      const borderColor = (localSettings.border_color[0]) 
+      // Backend expects 0xRRGGBB, so we shift Red to MSB
+      const borderColor = (localSettings.border_color[2]) 
         | (localSettings.border_color[1] << 8) 
-        | (localSettings.border_color[2] << 16);
+        | (localSettings.border_color[0] << 16);
       
       invoke("show_preview_border", {
         x: localRegion.x,
@@ -141,9 +151,9 @@ function SettingsDialog({
 
   useEffect(() => {
     if (previewEnabled) {
-      const borderColor = (localSettings.border_color[0]) 
+      const borderColor = (localSettings.border_color[2]) 
         | (localSettings.border_color[1] << 8) 
-        | (localSettings.border_color[2] << 16);
+        | (localSettings.border_color[0] << 16);
       
       invoke("update_preview_border_style", {
         borderWidth: localSettings.border_width,
@@ -281,13 +291,13 @@ function SettingsDialog({
         </div>
 
         {/* Tabs Bar */}
-        <div className="px-2 pt-2 border-b border-gray-800 bg-gray-900 overflow-x-auto">
-          <div className="flex space-x-1 min-w-max p-2">
+        <div className="px-2 pt-2 border-b border-gray-800 bg-gray-900">
+          <div className="flex flex-wrap gap-1 p-2">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm ${
+                className={`flex items-center gap-2 px-4 py-3 rounded-xl transition-all duration-200 font-medium text-sm flex-shrink-0 ${
                   activeTab === tab.id
                     ? "bg-gray-800 text-white shadow-lg border border-gray-700 transform scale-[1.02]"
                     : "text-gray-400 hover:text-white hover:bg-gray-800/50 border border-transparent"
@@ -322,7 +332,7 @@ function SettingsDialog({
               </div>
 
               <SectionCard title="Capture Method">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className={`grid grid-cols-1 ${platformInfo.available_capture_methods.length > 1 ? 'md:grid-cols-2' : ''} gap-4`}>
                   {platformInfo.available_capture_methods.map((method) => (
                     <label 
                       key={method.id}
@@ -638,7 +648,7 @@ function SettingsDialog({
                 >
                   {monitors.map((mon, idx) => (
                     <option key={mon.id} value={idx}>
-                      {mon.name} ({mon.width}x{mon.height}) {mon.is_primary ? "⭐ Primary" : ""}
+                      {mon.name} ({mon.width}x{mon.height}{mon.scale_factor ? ` @ ${(mon.scale_factor * 100).toFixed(0)}%` : ""}) {mon.is_primary ? "⭐ Primary" : ""}
                     </option>
                   ))}
                 </select>
@@ -764,7 +774,7 @@ function SettingsDialog({
                      <select
                         value={localSettings.log_level}
                         onChange={(e) => setLocalSettings({ ...localSettings, log_level: e.target.value })}
-                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
+                        className="w-full h-10 bg-gray-900 border border-gray-700 rounded-lg px-3 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="Off">Off</option>
                         <option value="Error">Error (Recommended)</option>
@@ -775,24 +785,29 @@ function SettingsDialog({
                    </div>
                    
                    <div>
-                      <label className="block text-sm text-gray-400 mb-2 cursor-pointer flex items-center gap-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm text-gray-400">Retention</label>
+                        <label className="flex items-center gap-2 cursor-pointer text-xs text-blue-400 hover:text-blue-300">
+                           <input
+                            type="checkbox"
+                            checked={localSettings.log_to_file}
+                            onChange={(e) => setLocalSettings({ ...localSettings, log_to_file: e.target.checked })}
+                            className="rounded bg-gray-700 border-gray-600 text-blue-600 focus:ring-offset-gray-900"
+                           />
+                           Save to File
+                        </label>
+                      </div>
+                      <div className="relative">
                         <input
-                          type="checkbox"
-                          checked={localSettings.log_to_file}
-                          onChange={(e) => setLocalSettings({ ...localSettings, log_to_file: e.target.checked })}
-                          className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-600"
+                          type="number"
+                          min="1"
+                          disabled={!localSettings.log_to_file}
+                          value={localSettings.log_retention_days}
+                          onChange={(e) => setLocalSettings({ ...localSettings, log_retention_days: parseInt(e.target.value) })}
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         />
-                        Save to File
-                      </label>
-                      <input
-                        type="number"
-                        placeholder="Days"
-                        min="1"
-                        disabled={!localSettings.log_to_file}
-                        value={localSettings.log_retention_days}
-                        onChange={(e) => setLocalSettings({ ...localSettings, log_retention_days: parseInt(e.target.value) })}
-                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white disabled:opacity-50"
-                      />
+                         <span className="absolute right-3 top-2 text-gray-500 text-sm pointer-events-none">Days</span>
+                      </div>
                    </div>
                 </div>
                 
@@ -819,11 +834,11 @@ function SettingsDialog({
              <div className="space-y-6 animate-fadeIn">
                 <div className="text-center py-8">
                    <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center shadow-lg mb-4">
-                      <span className="text-4xl">🌫️</span>
+                      <img src="/icon.png" className="w-12 h-12 drop-shadow-md" alt="Logo" />
                    </div>
                    <h2 className="text-3xl font-bold text-white mb-2">RustFrame</h2>
                    <p className="text-gray-400">Modern High-Performance Screen Capture</p>
-                   <p className="text-gray-500 text-sm mt-2">v{platformInfo.os_version} • {platformInfo.os_type}</p>
+                   <p className="text-gray-500 text-sm mt-2">v{appVersion} • {platformInfo.os_type} {platformInfo.os_version !== "Unknown" ? platformInfo.os_version : ""}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
