@@ -23,6 +23,16 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "exceptionDomain": "",
+      "frameworks": [],
+      "infoPlist": {
+        "NSScreenCaptureUsageDescription": "RustFrame needs screen recording permission to capture and display your selected screen region in video conferencing apps.",
+        "NSAccessibilityUsageDescription": "RustFrame needs accessibility permission to track cursor position and detect mouse clicks for visual feedback during screen capture.",
+        "NSCameraUsageDescription": "RustFrame does not access your camera."
+      }
+    },
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",

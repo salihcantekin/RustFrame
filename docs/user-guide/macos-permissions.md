@@ -4,6 +4,20 @@ RustFrame requires specific system permissions to function properly on macOS. Th
 
 ---
 
+## ⚠️ IMPORTANT: First Launch
+
+**On first launch, macOS will automatically ask for Screen Recording permission.** You MUST approve this for RustFrame to work.
+
+**Signs that permissions are missing:**
+- Start Capture button doesn't change to Stop
+- Black/empty preview window
+- Error messages or warnings about access
+- macOS shows: "RustFrame is requesting to bypass the system private window picker"
+
+**Solution:** Grant Screen Recording and Accessibility permissions (see below).
+
+---
+
 ## Required Permissions
 
 ### 1. Screen Recording Permission ⚠️ **CRITICAL**
@@ -11,23 +25,29 @@ RustFrame requires specific system permissions to function properly on macOS. Th
 **Why it's needed:** RustFrame captures your screen region to display it in the preview window.
 
 **How to grant:**
-1. macOS will prompt you automatically on first launch
+1. macOS will prompt you automatically on first launch - **Click "Allow"**
 2. Or manually: **System Settings** → **Privacy & Security** → **Screen Recording**
 3. Enable checkbox for **RustFrame** (or **Terminal/VS Code** if running via `cargo`)
+4. **Restart RustFrame** after granting permission
 
 **What happens without it:**
 - Preview window shows black screen
+- Start button doesn't change to Stop
 - Application logs: "Screen capture permission denied"
+- macOS shows "bypass system private window picker" warning
 
 ---
 
-### 2. Accessibility Permission (Optional)
+### 2. Accessibility Permission ⚠️ **RECOMMENDED**
 
-**Why it's needed:** For advanced mouse tracking and click highlighting features.
+**Why it's needed:** For mouse tracking and click highlighting features. Also helps with proper cursor capture.
 
 **How to grant:**
 1. **System Settings** → **Privacy & Security** → **Accessibility**
-2. Enable checkbox for **RustFrame**
+2. Click the **🔒 lock** icon and enter your password
+3. Click **+** button and add **RustFrame**
+4. Enable checkbox for **RustFrame**
+5. **Restart RustFrame** after granting permission
 
 **What happens without it:**
 - Basic features work fine
