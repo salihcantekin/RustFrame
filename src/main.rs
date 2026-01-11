@@ -23,6 +23,7 @@ mod platform_info;
 mod rec_indicator;
 mod single_instance;
 mod traits; // Cross-platform trait definitions
+mod window_enumeration; // Window enumeration for exclusion settings
 
 use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
@@ -913,6 +914,12 @@ async fn set_active_capture_profile(
         write_active_profile_to_settings_json(&dir, profile)?;
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn get_available_windows() -> Result<Vec<window_enumeration::AvailableApp>, String> {
+    window_enumeration::get_available_windows()
+        .map_err(|e| format!("Failed to enumerate windows: {}", e))
 }
 
 #[tauri::command]
@@ -2647,6 +2654,7 @@ fn main() {
             get_active_capture_profile,
             get_capture_profile_hints,
             set_active_capture_profile,
+            get_available_windows,
             save_settings,
             get_settings_path,
             open_settings_folder,

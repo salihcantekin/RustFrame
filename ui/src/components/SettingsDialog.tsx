@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { Settings, MonitorInfo } from "../App";
 import { PlatformInfo } from "../config";
+import { WindowExclusionTab } from "./WindowExclusionTab";
 
 interface CaptureRegion {
   x: number;
@@ -24,7 +25,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about";
+type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "exclusion" | "advanced" | "about";
 
 function SettingsDialog({ 
   initialTab = "capture",
@@ -252,6 +253,7 @@ function SettingsDialog({
     { id: "visual", label: "Visual", icon: "🎨" },
     { id: "region", label: "Region", icon: "📐" },
     { id: "performance", label: "Perf", icon: "🚀" },
+    { id: "exclusion", label: "Exclusion", icon: "🚫" },
     { id: "advanced", label: "Advanced", icon: "🔧" },
     { id: "about", label: "About", icon: "ℹ️" },
   ];
@@ -744,6 +746,11 @@ function SettingsDialog({
                   </div>
                </SectionCard>
             </div>
+          )}
+
+          {/* TAB: EXCLUSION */}
+          {activeTab === "exclusion" && (
+            <WindowExclusionTab settings={localSettings} onSettingsChange={setLocalSettings} />
           )}
 
           {/* TAB: ADVANCED */}
