@@ -3,6 +3,7 @@
 // TODO: Implement using PipeWire (modern) or X11/XComposite (legacy)
 
 use super::{CaptureEngine, CaptureFrame, CaptureRect};
+use crate::window_filter::WindowIdentifier;
 use anyhow::{anyhow, Result};
 
 /// Linux capture engine (stub)
@@ -21,7 +22,7 @@ impl LinuxCaptureEngine {
 }
 
 impl CaptureEngine for LinuxCaptureEngine {
-    fn start(&mut self, region: CaptureRect, _show_cursor: bool) -> Result<()> {
+    fn start(&mut self, region: CaptureRect, _show_cursor: bool, _excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
         // TODO: Implement using:
         // - PipeWire Portal API (for Wayland and modern Gnome/KDE)
         // - X11 XShm extension (for X11 systems)

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { Settings, MonitorInfo } from "../App";
 import { PlatformInfo } from "../config";
+import { WindowExclusionTab } from "./WindowExclusionTab";
 
 interface CaptureRegion {
   x: number;
@@ -24,7 +25,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "profiles" | "advanced" | "about";
+type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "share_content" | "profiles" | "advanced" | "about";
 
 const SectionCard = ({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) => (
   <div className={`bg-gray-800/50 rounded-xl p-5 border border-gray-700 shadow-sm ${className}`}>
@@ -310,6 +311,7 @@ function SettingsDialog({
     { id: "visual", label: "Visual", icon: "🎨" },
     { id: "region", label: "Region", icon: "📐" },
     { id: "performance", label: "Perf", icon: "🚀" },
+    { id: "share_content", label: "Share Content", icon: "📺" },
     { id: "profiles", label: "Profiles", icon: "📦" },
     { id: "advanced", label: "Advanced", icon: "🔧" },
     { id: "about", label: "About", icon: "ℹ️" },
@@ -1076,6 +1078,11 @@ function SettingsDialog({
                   </div>
                </SectionCard>
             </div>
+          )}
+
+          {/* TAB: SHARE CONTENT */}
+          {activeTab === "share_content" && (
+            <WindowExclusionTab settings={localSettings} onSettingsChange={setLocalSettings} />
           )}
 
           {/* TAB: ADVANCED */}

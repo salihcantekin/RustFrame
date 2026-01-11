@@ -15,6 +15,7 @@ Complete reference for all RustFrame features.
 - [Recording Indicator](#recording-indicator)
 - [Capture Profiles](#capture-profiles)
 - [Advanced Settings](#advanced-settings)
+ - [Share Content Filters](#share-content-filters)
 
 ---
 
@@ -57,6 +58,40 @@ Control which part of your screen is captured.
 ✅ **Partial Window**: Exclude toolbars, hide personal info  
 ✅ **Multi-Window**: Capture parts of multiple applications  
 ✅ **Custom Aspect Ratio**: Any width/height combination  
+
+---
+
+## Share Content Filters
+
+Control which apps/windows are visible in your capture output.
+
+### Path
+**Settings → Share Content** (tab)
+
+### Modes
+| Mode | Behavior | Use Case |
+|------|-----------|----------|
+| **Capture All** | No filtering | Default/simple sharing |
+| **Exclude** | Hide selected apps/windows | Hide chat, control center, or sensitive popups |
+| **Include Only** | Capture only the selected set | Lock to your demo apps; everything else hidden |
+
+### Workflow
+1. Click **Load Applications & Windows** (manual refresh, no auto polling)
+2. Choose view: **Applications** or **Windows**
+3. Filter with search (matches app name, bundle/exe, or window title)
+4. Select items → **Add Selected**
+5. Current selection appears at the top (chips); remove individually or **Clear All**
+6. Optional: **Auto-exclude Preview Window** to avoid mirror effects
+
+### Platform Notes
+- **macOS**: Enumerates visible, shareable CG windows (layer 0, titled, non-system bundles like Dock/Control Center/Spotlight are skipped).
+- **Windows**: Enumerates visible, non-cloaked, non-tool windows via EnumWindows; groups by process image (exe name). Titles are required.
+- **Linux**: UI supported; platform enumeration coming later.
+
+### Tips
+- Use **Include Only** when presenting to guarantee no stray popups.
+- Refresh the list after opening new apps/windows.
+- If you don’t see a window, ensure it’s visible and not minimized/cloaked.
 
 ---
 

@@ -791,6 +791,57 @@ impl DestinationWindow {
             let _: () = msg_send![self.window, setFrameOrigin: origin];
         }
     }
+
+    /// Get the macOS CGWindowID for this window (used for filtering in capture engine)
+    pub fn get_window_id(&self) -> u32 {
+        extern "C" fn get_window_id_on_main_thread(ctx_ptr: *mut std::ffi::c_void) -> u32 {
+            let window = ctx_ptr as id;
+            unsafe {
+                let window_number: u32 = msg_send![window, windowNumber];
+                window_number
+            }
+        }
+
+        unsafe {
+            let is_main = pthread_main_np() != 0;
+
+            if !is_main {
+                // Can't directly get window ID from background thread
+                // Must dispatch to main thread synchronously
+                let mut result: u32 = 0;
+
+                struct IdContext {
+                    window: id,
+                    result: *mut u32,
+                }
+
+                extern "C" fn get_id_on_main(ctx_ptr: *mut std::ffi::c_void) {
+                    let ctx = ctx_ptr as *const IdContext;
+                    let ctx = unsafe { &*ctx };
+                    let window_number: u32 = unsafe { msg_send![ctx.window, windowNumber] };
+                    unsafe {
+                        *ctx.result = window_number;
+                    }
+                }
+
+                let ctx = IdContext {
+                    window: self.window,
+                    result: &mut result,
+                };
+
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    &ctx as *const _ as *mut std::ffi::c_void,
+                    get_id_on_main,
+                );
+
+                result
+            } else {
+                let window_number: u32 = msg_send![self.window, windowNumber];
+                window_number
+            }
+        }
+    }
 }
 
 impl Drop for DestinationWindow {

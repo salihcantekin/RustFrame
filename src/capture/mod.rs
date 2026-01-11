@@ -112,7 +112,17 @@ pub enum GpuTextureHandle {
 /// Trait for platform-specific capture engines
 pub trait CaptureEngine: Send {
     /// Start capturing the specified region
-    fn start(&mut self, region: CaptureRect, show_cursor: bool) -> anyhow::Result<()>;
+    /// 
+    /// # Parameters
+    /// - `region`: Screen region to capture
+    /// - `show_cursor`: Include cursor in capture
+    /// - `excluded_windows`: Windows to exclude from capture (platform-specific)
+    fn start(
+        &mut self, 
+        region: CaptureRect, 
+        show_cursor: bool,
+        excluded_windows: Option<Vec<crate::window_filter::WindowIdentifier>>,
+    ) -> anyhow::Result<()>;
 
     /// Stop the capture session
     fn stop(&mut self);

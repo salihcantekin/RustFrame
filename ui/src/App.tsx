@@ -47,6 +47,17 @@ export interface Settings {
   show_rec_indicator: boolean;
   rec_indicator_size: "small" | "medium" | "large";
   
+  // Window Exclusion
+  window_filter: {
+    mode: "None" | "Include" | "Exclude";
+    excluded_windows: Array<{
+      app_id: string;
+      window_name: string;
+    }>;
+    auto_exclude_preview: boolean;
+    dev_mode: boolean;
+  };
+  
   // Logging
   log_level: string;
   log_to_file: boolean;
@@ -79,7 +90,7 @@ function App() {
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "profiles" | "advanced" | "about">("capture");
+  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "share_content" | "profiles" | "advanced" | "about">("capture");
   const [showDonate, setShowDonate] = useState(false);
   const [showDonateReminder, setShowDonateReminder] = useState(false);
   const [captureRegion, setCaptureRegion] = useState({ x: 0, y: 0, width: 800, height: 600 });
@@ -327,8 +338,7 @@ function App() {
         }
       } else if (platformInfo?.os === "windows") {
         if (errorMsg.toLowerCase().includes("permission") || errorMsg.toLowerCase().includes("access")) {
-          userMessage += "Check Windows permissions or try running as Administrator. See logs for details.";
-        } else {
+          userMessage += "Check Windows permissions or try running as Administrator. See logs for details."; } else {
           userMessage += "Try restarting the application. See logs for details.";
         }
       } else {

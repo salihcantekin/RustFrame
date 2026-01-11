@@ -7,6 +7,7 @@
 // ALL CoreGraphics operations must happen on main thread to avoid ObjC exceptions
 
 use super::{CaptureEngine, CaptureFrame, CaptureRect};
+use crate::window_filter::WindowIdentifier;
 use anyhow::{anyhow, Result};
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use core_graphics::image::CGImage;
@@ -672,11 +673,12 @@ impl MacOSCaptureEngine {
 }
 
 impl CaptureEngine for MacOSCaptureEngine {
-    fn start(&mut self, region: CaptureRect, show_cursor: bool) -> Result<()> {
+    fn start(&mut self, region: CaptureRect, show_cursor: bool, excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
         log::info!(
-            "[MACOS_ENGINE] start() called with region: {:?}, cursor: {}",
+            "[MACOS_ENGINE] start() called with region: {:?}, cursor: {}, excluded: {:?}",
             region,
-            show_cursor
+            show_cursor,
+            excluded_windows
         );
 
         // IMPORTANT: If Screen Recording permission is not granted, calling into
@@ -731,7 +733,7 @@ impl CaptureEngine for MacOSCaptureEngine {
             log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
             if supports_screen_capture_kit() {
                 log::info!("[MACOS_ENGINE] SCK is supported, calling sck.start()...");
-                match sck.start(region.x, region.y, region.width, region.height, show_cursor) {
+                match sck.start(region.x, region.y, region.width, region.height, show_cursor, excluded_windows.clone()) {
                     Ok(()) => {
                         log::info!("[MACOS_ENGINE] SCK start succeeded!");
                         self.using_sck = true;
