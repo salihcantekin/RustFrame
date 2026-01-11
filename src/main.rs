@@ -12,6 +12,7 @@ use tauri::State;
 use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRect};
 use rustframe_capture::config;
 use rustframe_capture::display_info;
+use rustframe_capture::window_filter;
 
 // Import modules
 mod destination_window;
@@ -311,6 +312,10 @@ pub struct Settings {
     pub show_rec_indicator: bool,
     pub rec_indicator_size: String, // "small", "medium", "large"
 
+    // Window Filtering (Exclusion/Inclusion)
+    #[serde(default)]
+    pub window_filter: rustframe_capture::window_filter::WindowFilterSettings,
+
     // Logging
     #[serde(default = "default_log_level")]
     pub log_level: String, // "Off", "Error", "Warn", "Info", "Debug", "Trace"
@@ -381,6 +386,7 @@ impl Default for Settings {
             last_region: Some([100, 100, 600, 400]),
             show_rec_indicator: true,
             rec_indicator_size: config::rec_indicator::DEFAULT_SIZE.to_string(),
+            window_filter: rustframe_capture::window_filter::WindowFilterSettings::default(),
             log_level: "Error".to_string(),
             log_to_file: true,
             log_retention_days: config::capture::LOG_RETENTION_DAYS as u32,
@@ -1529,8 +1535,28 @@ async fn start_capture(
             width: (width as i32 - border_offset * 2).max(1) as u32,
             height: (height as i32 - border_offset * 2).max(1) as u32,
         };
-        log::info!("[MAIN] Calling engine.start() with region: {:?}", region);
-        engine.start(region, settings.show_cursor).map_err(|e| {
+        
+        // Get preview window ID for smart exclusion (macOS only)
+        #[cfg(target_os = "macos")]
+        let preview_window_id = {
+            use window_filter::WindowIdentifier;
+            DESTINATION_WINDOW.lock().unwrap().as_ref().map(|dw| {
+                let window_id = dw.get_window_id();
+                WindowIdentifier {
+                    app_id: "com.rustframe.app".to_string(),
+                    window_name: format!("RustFrame Preview {}", window_id),
+                }
+            })
+        };
+        
+        #[cfg(not(target_os = "macos"))]
+        let preview_window_id: Option<window_filter::WindowIdentifier> = None;
+        
+        // Get exclusion list from window_filter settings
+        let excluded_windows = settings.window_filter.get_exclusions(preview_window_id.as_ref());
+        
+        log::info!("[MAIN] Calling engine.start() with region: {:?}, excluded: {:?}", region, excluded_windows);
+        engine.start(region, settings.show_cursor, Some(excluded_windows)).map_err(|e| {
             tracing::error!(error = %e, "Capture engine start failed");
             e.to_string()
         })?;
@@ -1801,7 +1827,7 @@ async fn start_capture(
                                 "Restarting capture on new monitor with region: {:?}",
                                 new_region
                             );
-                            if let Err(e) = eng.start(new_region, true) {
+                            if let Err(e) = eng.start(new_region, true, None) {
                                 log::error!("Failed to restart capture: {}", e);
                             } else {
                                 log::info!("✅ Capture restarted on new monitor");

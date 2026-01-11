@@ -23,5 +23,11 @@
   "winapi_destination_appwindow": true,
   "winapi_destination_noactivate": true,
   "winapi_destination_overlapped": false,
-  "winapi_destination_hide_taskbar_after_ms": null
+  "winapi_destination_hide_taskbar_after_ms": null,
+  "window_filter": {
+    "mode": "None",
+    "excluded_windows": [],
+    "auto_exclude_preview": true,
+    "dev_mode": false
+  }
 }

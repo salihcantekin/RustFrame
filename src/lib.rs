@@ -5,6 +5,9 @@
 // Configuration constants
 pub mod config;
 
+// Window filtering (exclusion/inclusion logic)
+pub mod window_filter;
+
 // Platform-agnostic utilities
 pub mod platform_utils;
 

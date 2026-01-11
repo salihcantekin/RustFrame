@@ -36,6 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::{CaptureEngine, CaptureFrame};
 use crate::capture::CaptureRect;
+use crate::window_filter::WindowIdentifier;
 
 /// Windows GDI-based capture engine (RegionToShare-style)
 ///
@@ -132,7 +133,7 @@ impl WindowsGdiCopyCaptureEngine {
 }
 
 impl CaptureEngine for WindowsGdiCopyCaptureEngine {
-    fn start(&mut self, region: CaptureRect, show_cursor: bool) -> Result<()> {
+    fn start(&mut self, region: CaptureRect, show_cursor: bool, _excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
         self.capture_region = Some(region);
         self.is_active = true;
         self.show_cursor = show_cursor;
@@ -629,7 +630,7 @@ impl WindowsCaptureEngine {
 }
 
 impl CaptureEngine for WindowsCaptureEngine {
-    fn start(&mut self, region: CaptureRect, show_cursor: bool) -> Result<()> {
+    fn start(&mut self, region: CaptureRect, show_cursor: bool, _excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
         info!("Starting capture for region: {:?}", region);
 
         // Create D3D11 device
