@@ -4,6 +4,7 @@
 //! Provides list of running applications and their open windows.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Information about a running window
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,20 @@ pub fn get_available_windows() -> anyhow::Result<Vec<AvailableApp>> {
     use objc::msg_send;
     use objc::sel;
     use objc::sel_impl;
+
+    // First, get all windows from CGWindowList
+    let all_windows = get_all_windows_cg()?;
+    
+    // Group windows by PID
+    let mut windows_by_pid: HashMap<i32, Vec<AvailableWindow>> = HashMap::new();
+    for window in all_windows {
+        windows_by_pid.entry(window.owning_pid)
+            .or_insert_with(Vec::new)
+            .push(AvailableWindow {
+                id: window.window_id,
+                title: window.title,
+            });
+    }
 
     let mut apps = Vec::new();
 
@@ -76,18 +91,118 @@ pub fn get_available_windows() -> anyhow::Result<Vec<AvailableApp>> {
                 bundle_id_str.clone()
             };
 
-            // For now, return app with empty windows list
-            // In production, we would enumerate windows for this app using CGWindowListCopyWindowInfo
-            log::debug!("[WinEnum] App: {} ({})", app_name_str, bundle_id_str);
-            apps.push(AvailableApp {
-                bundle_id: bundle_id_str,
-                app_name: app_name_str,
-                windows: Vec::new(), // TODO: Enumerate windows for this app
-            });
+            // Get PID and lookup windows
+            let pid: i32 = msg_send![app, processIdentifier];
+            let windows = windows_by_pid.remove(&pid).unwrap_or_default();
+
+            if !windows.is_empty() {
+                log::debug!("[WinEnum] App: {} ({}), Windows: {}", app_name_str, bundle_id_str, windows.len());
+                apps.push(AvailableApp {
+                    bundle_id: bundle_id_str,
+                    app_name: app_name_str,
+                    windows,
+                });
+            }
         }
     }
 
     Ok(apps)
+}
+
+#[cfg(target_os = "macos")]
+struct WindowInfoInternal {
+    window_id: u32,
+    title: String,
+    owning_pid: i32,
+}
+
+#[cfg(target_os = "macos")]
+fn get_all_windows_cg() -> anyhow::Result<Vec<WindowInfoInternal>> {
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relativeToWindow: u32) -> CFArrayRef;
+    }
+
+    const kCGWindowListExcludeDesktopElements: u32 = 1 << 4;
+    const kCGWindowListOptionOnScreenOnly: u32 = 1 << 0;
+
+    let mut windows = Vec::new();
+
+    unsafe {
+        let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+        let window_list_ref = CGWindowListCopyWindowInfo(options, 0);
+        
+        if window_list_ref.is_null() {
+            return Ok(windows);
+        }
+
+        let window_list = CFArray::<CFDictionary>::wrap_under_create_rule(window_list_ref);
+        let count = window_list.len();
+        
+        log::debug!("[WinEnum] CGWindowList returned {} windows", count);
+
+        for i in 0..count {
+            let dict = window_list.get(i as isize);
+            if dict.is_none() {
+                continue;
+            }
+            let dict = dict.unwrap();
+
+            // Get window ID (kCGWindowNumber)
+            let window_id_key = CFString::from_static_string("kCGWindowNumber");
+            let window_id = dict.find(window_id_key.as_CFTypeRef() as *const _)
+                .and_then(|val_ref| unsafe {
+                    let cf_num = CFNumber::wrap_under_get_rule(val_ref.cast());
+                    cf_num.to_i64()
+                })
+                .unwrap_or(0) as u32;
+
+            if window_id == 0 {
+                continue;
+            }
+
+            // Get window name (kCGWindowName)
+            let name_key = CFString::from_static_string("kCGWindowName");
+            let title = dict.find(name_key.as_CFTypeRef() as *const _)
+                .and_then(|val_ref| unsafe {
+                    let cf_str = CFString::wrap_under_get_rule(val_ref.cast());
+                    Some(cf_str.to_string())
+                })
+                .unwrap_or_else(String::new);
+
+            // Skip windows without titles (usually system windows)
+            if title.is_empty() {
+                continue;
+            }
+
+            // Get owning PID (kCGWindowOwnerPID)
+            let pid_key = CFString::from_static_string("kCGWindowOwnerPID");
+            let owning_pid = dict.find(pid_key.as_CFTypeRef() as *const _)
+                .and_then(|val_ref| unsafe {
+                    let cf_num = CFNumber::wrap_under_get_rule(val_ref.cast());
+                    cf_num.to_i64()
+                })
+                .unwrap_or(0) as i32;
+
+            if owning_pid == 0 {
+                continue;
+            }
+
+            windows.push(WindowInfoInternal {
+                window_id,
+                title,
+                owning_pid,
+            });
+        }
+    }
+
+    log::debug!("[WinEnum] Filtered to {} windows with titles", windows.len());
+    Ok(windows)
 }
 
 #[cfg(target_os = "windows")]

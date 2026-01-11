@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings } from "../App";
 
@@ -13,6 +13,8 @@ interface AvailableApp {
   windows: AvailableWindow[];
 }
 
+type FilterMode = "apps" | "windows";
+
 interface WindowExclusionTabProps {
   settings: Settings;
   onSettingsChange: (settings: Settings) => void;
@@ -20,62 +22,92 @@ interface WindowExclusionTabProps {
 
 export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusionTabProps) {
   const [availableApps, setAvailableApps] = useState<AvailableApp[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [filterMode, setFilterMode] = useState<FilterMode>("apps");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
-  // Load available windows on mount
-  useEffect(() => {
-    const loadWindows = async () => {
-      try {
-        setLoading(true);
-        const apps = await invoke<AvailableApp[]>("get_available_windows");
-        setAvailableApps(apps);
-      } catch (error) {
-        console.error("Failed to load available windows:", error);
-        setAvailableApps([]);
-      } finally {
-        setLoading(false);
-      }
+  const handleLoadWindows = async () => {
+    try {
+      setLoading(true);
+      const apps = await invoke<AvailableApp[]>("get_available_windows");
+      setAvailableApps(apps);
+      setSelectedItems(new Set());
+    } catch (error) {
+      console.error("Failed to load available windows:", error);
+      setAvailableApps([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleModeChange = (mode: "None" | "Include" | "Exclude") => {
+    const newSettings = {
+      ...settings,
+      window_filter: {
+        ...settings.window_filter,
+        mode,
+      },
     };
+    onSettingsChange(newSettings);
+  };
 
-    loadWindows();
-  }, []);
-
-  const toggleAppExpanded = (bundleId: string) => {
-    setExpandedApps(prev => {
+  const toggleSelection = (id: string) => {
+    setSelectedItems(prev => {
       const next = new Set(prev);
-      if (next.has(bundleId)) {
-        next.delete(bundleId);
+      if (next.has(id)) {
+        next.delete(id);
       } else {
-        next.add(bundleId);
+        next.add(id);
       }
       return next;
     });
   };
 
-  const isWindowExcluded = (bundleId: string, windowId: number): boolean => {
-    return settings.window_filter.excluded_windows.some(
-      w => w.app_id === bundleId && w.window_name.includes(windowId.toString())
-    );
+  const handleAddSelected = () => {
+    const excluded_windows = [...settings.window_filter.excluded_windows];
+    
+    selectedItems.forEach(id => {
+      if (filterMode === "apps") {
+        // Add all windows from this app
+        const app = availableApps.find(a => a.bundle_id === id);
+        if (app) {
+          app.windows.forEach(window => {
+            if (!excluded_windows.some(w => w.app_id === app.bundle_id && w.window_name === window.title)) {
+              excluded_windows.push({
+                app_id: app.bundle_id,
+                window_name: window.title,
+              });
+            }
+          });
+        }
+      } else {
+        // Add specific window
+        const [bundleId, windowTitle] = id.split(":::");
+        if (!excluded_windows.some(w => w.app_id === bundleId && w.window_name === windowTitle)) {
+          excluded_windows.push({
+            app_id: bundleId,
+            window_name: windowTitle,
+          });
+        }
+      }
+    });
+
+    const newSettings = {
+      ...settings,
+      window_filter: {
+        ...settings.window_filter,
+        excluded_windows,
+      },
+    };
+    onSettingsChange(newSettings);
+    setSelectedItems(new Set());
   };
 
-  const toggleWindowExclusion = (bundleId: string, windowId: number, windowTitle: string) => {
+  const handleRemoveItem = (index: number) => {
     const excluded_windows = [...settings.window_filter.excluded_windows];
-    const index = excluded_windows.findIndex(
-      w => w.app_id === bundleId && w.window_name.includes(windowId.toString())
-    );
-
-    if (index >= 0) {
-      // Remove exclusion
-      excluded_windows.splice(index, 1);
-    } else {
-      // Add exclusion
-      excluded_windows.push({
-        app_id: bundleId,
-        window_name: windowTitle,
-      });
-    }
-
+    excluded_windows.splice(index, 1);
+    
     const newSettings = {
       ...settings,
       window_filter: {
@@ -86,136 +118,278 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
     onSettingsChange(newSettings);
   };
 
+  const filteredApps = availableApps.filter(app =>
+    app.app_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    app.bundle_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredWindows = availableApps.flatMap(app =>
+    app.windows
+      .filter(window =>
+        window.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        app.app_name.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+      .map(window => ({ app, window }))
+  );
+
   return (
-    <div className="space-y-4 animate-fadeIn">
+    <div className="space-y-6 animate-fadeIn">
       {/* Header */}
       <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-4">
-        <h3 className="text-lg font-bold text-blue-300 mb-2">Window Exclusion</h3>
+        <h3 className="text-lg font-bold text-blue-300 mb-2">Share Content Settings</h3>
         <p className="text-gray-300 text-sm">
-          Exclude windows from being captured. This prevents the "Infinity Mirror" effect when a preview window overlaps with the capture region.
+          Control which applications and windows can be captured during screen sharing.
         </p>
       </div>
 
-      {/* Auto-exclude preview option */}
-      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700 shadow-sm">
-        <h3 className="text-lg font-bold text-gray-200 mb-4">Auto-Exclusion</h3>
-        <div className="flex items-center justify-between">
-          <label className="flex items-center gap-3 cursor-pointer flex-1">
-            <input
-              type="checkbox"
-              checked={settings.window_filter.auto_exclude_preview}
-              onChange={(e) => {
+      {/* Mode Selection */}
+      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+        <h4 className="text-md font-semibold text-gray-200 mb-3">Capture Mode</h4>
+        <div className="flex gap-3">
+          <button
+            onClick={() => handleModeChange("None")}
+            className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
+              settings.window_filter.mode === "None"
+                ? "bg-blue-600 border-blue-500 text-white shadow-lg"
+                : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            <div className="font-semibold">Capture All</div>
+            <div className="text-xs opacity-80">No restrictions</div>
+          </button>
+          <button
+            onClick={() => handleModeChange("Exclude")}
+            className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
+              settings.window_filter.mode === "Exclude"
+                ? "bg-red-600 border-red-500 text-white shadow-lg"
+                : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            <div className="font-semibold">Exclude Windows</div>
+            <div className="text-xs opacity-80">Hide specific windows</div>
+          </button>
+          <button
+            onClick={() => handleModeChange("Include")}
+            className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
+              settings.window_filter.mode === "Include"
+                ? "bg-green-600 border-green-500 text-white shadow-lg"
+                : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
+            }`}
+          >
+            <div className="font-semibold">Include Only</div>
+            <div className="text-xs opacity-80">Show only selected</div>
+          </button>
+        </div>
+      </div>
+
+      {/* Auto-exclude preview */}
+      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.window_filter.auto_exclude_preview}
+            onChange={(e) => {
+              const newSettings = {
+                ...settings,
+                window_filter: {
+                  ...settings.window_filter,
+                  auto_exclude_preview: e.target.checked,
+                },
+              };
+              onSettingsChange(newSettings);
+            }}
+            className="w-5 h-5 accent-blue-500"
+          />
+          <div>
+            <div className="font-semibold text-gray-200">Auto-exclude Preview Window</div>
+            <div className="text-sm text-gray-400">Prevents "Infinity Mirror" effect during capture</div>
+          </div>
+        </label>
+      </div>
+
+      {/* Load & Filter Section */}
+      {settings.window_filter.mode !== "None" && (
+        <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700 space-y-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleLoadWindows}
+              disabled={loading}
+              className="px-6 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold text-white transition-colors flex items-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  Loading...
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Load Applications & Windows
+                </>
+              )}
+            </button>
+
+            {availableApps.length > 0 && (
+              <div className="flex-1 flex items-center gap-3">
+                <div className="flex bg-gray-700 rounded-lg p-1 gap-1">
+                  <button
+                    onClick={() => setFilterMode("apps")}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      filterMode === "apps"
+                        ? "bg-gray-600 text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    📱 Applications ({availableApps.length})
+                  </button>
+                  <button
+                    onClick={() => setFilterMode("windows")}
+                    className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                      filterMode === "windows"
+                        ? "bg-gray-600 text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    🪟 Windows ({availableApps.reduce((sum, app) => sum + app.windows.length, 0)})
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  placeholder={`Search ${filterMode}...`}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Selection Area */}
+          {availableApps.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-400">
+                  {selectedItems.size} selected
+                </div>
+                <button
+                  onClick={handleAddSelected}
+                  disabled={selectedItems.size === 0}
+                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg text-sm font-semibold text-white transition-colors"
+                >
+                  Add Selected ({selectedItems.size})
+                </button>
+              </div>
+
+              <div className="max-h-80 overflow-y-auto bg-gray-900/50 rounded-lg border border-gray-700">
+                {filterMode === "apps" ? (
+                  /* Application List */
+                  filteredApps.length === 0 ? (
+                    <div className="text-center py-8 text-gray-400">No applications match your search</div>
+                  ) : (
+                    filteredApps.map((app) => (
+                      <label
+                        key={app.bundle_id}
+                        className="flex items-start gap-3 p-4 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedItems.has(app.bundle_id)}
+                          onChange={() => toggleSelection(app.bundle_id)}
+                          className="w-5 h-5 mt-1 accent-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-gray-200">{app.app_name}</div>
+                          <div className="text-xs text-gray-400 truncate">{app.bundle_id}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {app.windows.length} window{app.windows.length !== 1 ? "s" : ""}
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  )
+                ) : (
+                  /* Window List */
+                  filteredWindows.length === 0 ? (
+                    <div className="text-center py-8 text-gray-400">No windows match your search</div>
+                  ) : (
+                    filteredWindows.map(({ app, window }) => {
+                      const id = `${app.bundle_id}:::${window.title}`;
+                      return (
+                        <label
+                          key={id}
+                          className="flex items-start gap-3 p-4 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedItems.has(id)}
+                            onChange={() => toggleSelection(id)}
+                            className="w-5 h-5 mt-1 accent-blue-500"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-gray-200 truncate">{window.title}</div>
+                            <div className="text-xs text-gray-400">{app.app_name}</div>
+                            <div className="text-xs text-gray-500">ID: {window.id}</div>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Current Exclusions List */}
+      {settings.window_filter.excluded_windows.length > 0 && (
+        <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-md font-semibold text-gray-200">
+              Current List ({settings.window_filter.excluded_windows.length})
+            </h4>
+            <button
+              onClick={() => {
                 const newSettings = {
                   ...settings,
                   window_filter: {
                     ...settings.window_filter,
-                    auto_exclude_preview: e.target.checked,
+                    excluded_windows: [],
                   },
                 };
                 onSettingsChange(newSettings);
               }}
-              className="w-4 h-4 accent-blue-500"
-            />
-            <span className="text-gray-300">Automatically exclude preview window during capture</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Available windows list */}
-      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700 shadow-sm">
-        <h3 className="text-lg font-bold text-gray-200 mb-4">Manual Exclusions</h3>
-        
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <div className="text-gray-400">Loading available windows...</div>
+              className="text-sm text-red-400 hover:text-red-300 font-medium"
+            >
+              Clear All
+            </button>
           </div>
-        ) : availableApps.length === 0 ? (
-          <div className="text-gray-400 text-center py-8">
-            No running applications found. Please run some apps to see windows here.
-          </div>
-        ) : (
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {availableApps.map((app) => (
-              <div key={app.bundle_id} className="border border-gray-700 rounded-lg overflow-hidden bg-gray-900/50">
-                {/* App header */}
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {settings.window_filter.excluded_windows.map((item, index) => (
+              <div
+                key={index}
+                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-gray-200 truncate">{item.window_name}</div>
+                  <div className="text-xs text-gray-400 truncate">{item.app_id}</div>
+                </div>
                 <button
-                  onClick={() => toggleAppExpanded(app.bundle_id)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-800/50 transition-colors text-left"
+                  onClick={() => handleRemoveItem(index)}
+                  className="ml-3 p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded transition-colors"
                 >
-                  <div className="flex items-center gap-3 flex-1">
-                    <div className="text-lg">📱</div>
-                    <div>
-                      <div className="font-semibold text-gray-200">{app.app_name}</div>
-                      <div className="text-xs text-gray-400">{app.bundle_id}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs bg-gray-700 px-2 py-1 rounded text-gray-300">
-                      {app.windows.length} window{app.windows.length !== 1 ? "s" : ""}
-                    </span>
-                    <svg
-                      className={`w-4 h-4 text-gray-400 transition-transform ${
-                        expandedApps.has(app.bundle_id) ? "rotate-180" : ""
-                      }`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                    </svg>
-                  </div>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
-
-                {/* Windows list */}
-                {expandedApps.has(app.bundle_id) && app.windows.length > 0 && (
-                  <div className="border-t border-gray-700 bg-gray-900/30 py-2">
-                    {app.windows.map((window) => (
-                      <label
-                        key={`${app.bundle_id}-${window.id}`}
-                        className="flex items-center gap-3 px-4 py-2 hover:bg-gray-800/30 cursor-pointer transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isWindowExcluded(app.bundle_id, window.id)}
-                          onChange={() =>
-                            toggleWindowExclusion(app.bundle_id, window.id, window.title)
-                          }
-                          className="w-4 h-4 accent-blue-500"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-gray-300 text-sm truncate">{window.title}</div>
-                          <div className="text-xs text-gray-500">ID: {window.id}</div>
-                        </div>
-                      </label>
-                    ))}
-                  </div>
-                )}
-
-                {/* Empty windows state */}
-                {expandedApps.has(app.bundle_id) && app.windows.length === 0 && (
-                  <div className="border-t border-gray-700 bg-gray-900/30 px-4 py-3 text-sm text-gray-400">
-                    No windows found for this application
-                  </div>
-                )}
               </div>
             ))}
-          </div>
-        )}
-      </div>
-
-      {/* Currently excluded summary */}
-      {settings.window_filter.excluded_windows.length > 0 && (
-        <div className="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4">
-          <h4 className="text-sm font-semibold text-amber-300 mb-2">
-            Currently Excluding {settings.window_filter.excluded_windows.length} window{settings.window_filter.excluded_windows.length !== 1 ? "s" : ""}
-          </h4>
-          <div className="space-y-1 text-xs text-amber-200/80">
-            {settings.window_filter.excluded_windows.slice(0, 5).map((w, i) => (
-              <div key={i}>• {w.window_name}</div>
-            ))}
-            {settings.window_filter.excluded_windows.length > 5 && (
-              <div>• +{settings.window_filter.excluded_windows.length - 5} more...</div>
-            )}
           </div>
         </div>
       )}

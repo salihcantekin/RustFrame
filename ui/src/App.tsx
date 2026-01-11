@@ -90,7 +90,7 @@ function App() {
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "exclusion" | "advanced" | "about">("capture");
+  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "share_content" | "advanced" | "about">("capture");
   const [showDonate, setShowDonate] = useState(false);
   const [showDonateReminder, setShowDonateReminder] = useState(false);
   const [captureRegion, setCaptureRegion] = useState({ x: 0, y: 0, width: 800, height: 600 });

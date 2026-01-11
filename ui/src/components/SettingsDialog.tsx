@@ -25,7 +25,7 @@ interface SettingsDialogProps {
   onClose: () => void;
 }
 
-type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "exclusion" | "advanced" | "about";
+type TabType = "capture" | "mouse" | "visual" | "region" | "performance" | "share_content" | "advanced" | "about";
 
 function SettingsDialog({ 
   initialTab = "capture",
@@ -253,7 +253,7 @@ function SettingsDialog({
     { id: "visual", label: "Visual", icon: "🎨" },
     { id: "region", label: "Region", icon: "📐" },
     { id: "performance", label: "Perf", icon: "🚀" },
-    { id: "exclusion", label: "Exclusion", icon: "🚫" },
+    { id: "share_content", label: "Share Content", icon: "📺" },
     { id: "advanced", label: "Advanced", icon: "🔧" },
     { id: "about", label: "About", icon: "ℹ️" },
   ];
@@ -748,8 +748,8 @@ function SettingsDialog({
             </div>
           )}
 
-          {/* TAB: EXCLUSION */}
-          {activeTab === "exclusion" && (
+          {/* TAB: SHARE CONTENT */}
+          {activeTab === "share_content" && (
             <WindowExclusionTab settings={localSettings} onSettingsChange={setLocalSettings} />
           )}
 
