@@ -23,10 +23,10 @@ mod platform_info;
 mod rec_indicator;
 mod single_instance;
 mod traits; // Cross-platform trait definitions
-mod window_enumeration; // Window enumeration for exclusion settings
 
 use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
+use platform::window_enumerator::{self, AvailableApp};
 use rec_indicator::RecIndicator;
 use traits::PreviewWindow;
 
@@ -917,8 +917,8 @@ async fn set_active_capture_profile(
 }
 
 #[tauri::command]
-async fn get_available_windows() -> Result<Vec<window_enumeration::AvailableApp>, String> {
-    window_enumeration::get_available_windows()
+async fn get_available_windows() -> Result<Vec<AvailableApp>, String> {
+    window_enumerator::enumerate_windows()
         .map_err(|e| format!("Failed to enumerate windows: {}", e))
 }
 

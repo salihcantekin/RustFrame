@@ -3,6 +3,8 @@
 //! This module provides cross-platform abstractions for platform-specific functionality.
 //! Each platform has its own implementation behind cfg attributes.
 
+pub mod window_enumerator;
+
 /// Platform-specific window utilities
 pub mod window {
     /// Show or hide a window

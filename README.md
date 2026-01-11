@@ -15,6 +15,7 @@ RustFrame lets you capture and share a specific region of your screen in video c
 
 - 🎯 **Precise Region Capture** - Select any screen area with pixel-perfect control
 - 🖥️ **Multi-Monitor Support** - Capture from any display, auto-detects when you drag between monitors
+- 🔍 **Share Content Filters** - Include or exclude specific apps/windows, with search, app/window views, and manual refresh
 - ⚡ **GPU-Accelerated** - High-performance capture with minimal CPU usage (~8-10%)
 - 🎨 **Customizable** - Click highlights, cursor visibility, border styling, FPS tuning
 - 🔧 **Cross-Platform** - Windows, macOS, and Linux (experimental)
@@ -68,6 +69,14 @@ RustFrame lets you capture and share a specific region of your screen in video c
 - **Cursor Control**: Show/hide your cursor in capture
 - **Click Highlights**: Visual feedback with customizable colors and dissolve effects
 - **Recording Indicator**: "REC" badge shows when capturing is active
+
+### Share Content (Include/Exclude)
+- **Modes**: Capture All, Exclude (hide selected windows/apps), Include Only (capture only selected)
+- **Manual Refresh**: Load running apps/windows on demand; no auto-polling
+- **Search & View**: Filter by text; switch between application or window list views
+- **Selection UX**: Multi-select and add/remove; current picks visible at the top; clear-all control
+- **Preview Safety**: Auto-exclude preview window toggle to avoid mirror loops
+- **Platform Coverage**: macOS (CG + NSWorkspace) and Windows (EnumWindows, visible/non-cloaked, non-tool windows); Linux planned
 
 ### Customization
 - **Border Styling**: Adjustable width, color, and visibility

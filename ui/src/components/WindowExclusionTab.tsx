@@ -143,7 +143,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
       </div>
 
       {/* Mode Selection */}
-      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+      <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
         <h4 className="text-md font-semibold text-gray-200 mb-3">Capture Mode</h4>
         <div className="flex gap-3">
           <button
@@ -183,7 +183,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
       </div>
 
       {/* Auto-exclude preview */}
-      <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+      <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
         <label className="flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
@@ -207,9 +207,57 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
         </label>
       </div>
 
+      {/* Current List (moved up for visibility) */}
+      {settings.window_filter.excluded_windows.length > 0 && (
+        <div className="bg-gray-800/60 rounded-xl p-4 border border-gray-700 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-200">Current Selection</h4>
+              <p className="text-xs text-gray-400">
+                {settings.window_filter.excluded_windows.length} item{settings.window_filter.excluded_windows.length !== 1 ? "s" : ""} selected
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const newSettings = {
+                  ...settings,
+                  window_filter: {
+                    ...settings.window_filter,
+                    excluded_windows: [],
+                  },
+                };
+                onSettingsChange(newSettings);
+              }}
+              className="text-xs text-red-400 hover:text-red-300 font-medium px-2 py-1 rounded hover:bg-red-900/20"
+            >
+              Clear All
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+            {settings.window_filter.excluded_windows.map((item, index) => (
+              <span
+                key={index}
+                className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-900/70 border border-gray-700 text-xs text-gray-200"
+              >
+                <span className="truncate max-w-[180px]" title={`${item.window_name} • ${item.app_id}`}>
+                  {item.window_name}
+                </span>
+                <button
+                  onClick={() => handleRemoveItem(index)}
+                  className="text-red-400 hover:text-red-300"
+                  aria-label="Remove"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Load & Filter Section */}
       {settings.window_filter.mode !== "None" && (
-        <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700 space-y-4">
+        <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700 space-y-3">
           <div className="flex items-center gap-3">
             <button
               onClick={handleLoadWindows}
@@ -286,7 +334,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
                 </button>
               </div>
 
-              <div className="max-h-80 overflow-y-auto bg-gray-900/50 rounded-lg border border-gray-700">
+              <div className="max-h-72 overflow-y-auto bg-gray-900/50 rounded-lg border border-gray-700">
                 {filterMode === "apps" ? (
                   /* Application List */
                   filteredApps.length === 0 ? (
@@ -295,7 +343,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
                     filteredApps.map((app) => (
                       <label
                         key={app.bundle_id}
-                        className="flex items-start gap-3 p-4 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
+                        className="flex items-start gap-3 p-3 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
                       >
                         <input
                           type="checkbox"
@@ -304,7 +352,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
                           className="w-5 h-5 mt-1 accent-blue-500"
                         />
                         <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-gray-200">{app.app_name}</div>
+                          <div className="font-semibold text-gray-200 text-sm">{app.app_name}</div>
                           <div className="text-xs text-gray-400 truncate">{app.bundle_id}</div>
                           <div className="text-xs text-gray-500 mt-1">
                             {app.windows.length} window{app.windows.length !== 1 ? "s" : ""}
@@ -323,7 +371,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
                       return (
                         <label
                           key={id}
-                          className="flex items-start gap-3 p-4 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
+                          className="flex items-start gap-3 p-3 hover:bg-gray-800/50 cursor-pointer transition-colors border-b border-gray-700 last:border-0"
                         >
                           <input
                             type="checkbox"
@@ -332,8 +380,8 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
                             className="w-5 h-5 mt-1 accent-blue-500"
                           />
                           <div className="flex-1 min-w-0">
-                            <div className="font-semibold text-gray-200 truncate">{window.title}</div>
-                            <div className="text-xs text-gray-400">{app.app_name}</div>
+                            <div className="font-semibold text-gray-200 truncate text-sm">{window.title}</div>
+                            <div className="text-xs text-gray-400 truncate">{app.app_name}</div>
                             <div className="text-xs text-gray-500">ID: {window.id}</div>
                           </div>
                         </label>
@@ -344,53 +392,6 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Current Exclusions List */}
-      {settings.window_filter.excluded_windows.length > 0 && (
-        <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-md font-semibold text-gray-200">
-              Current List ({settings.window_filter.excluded_windows.length})
-            </h4>
-            <button
-              onClick={() => {
-                const newSettings = {
-                  ...settings,
-                  window_filter: {
-                    ...settings.window_filter,
-                    excluded_windows: [],
-                  },
-                };
-                onSettingsChange(newSettings);
-              }}
-              className="text-sm text-red-400 hover:text-red-300 font-medium"
-            >
-              Clear All
-            </button>
-          </div>
-          <div className="space-y-2 max-h-60 overflow-y-auto">
-            {settings.window_filter.excluded_windows.map((item, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-gray-200 truncate">{item.window_name}</div>
-                  <div className="text-xs text-gray-400 truncate">{item.app_id}</div>
-                </div>
-                <button
-                  onClick={() => handleRemoveItem(index)}
-                  className="ml-3 p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>
