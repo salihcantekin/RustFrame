@@ -238,6 +238,8 @@ impl HollowBorder {
                     );
                     // Update hollow region with new dimensions
                     apply_hollow_region(hwnd, width, height, bw);
+                    // Force complete redraw with erase to prevent ghost trails during drag/resize
+                    // Using erase=true clears the background before repaint
                     let _ = InvalidateRect(Some(hwnd), None, true);
                 }
             }

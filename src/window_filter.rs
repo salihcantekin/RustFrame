@@ -109,7 +109,8 @@ pub struct WindowFilterSettings {
 impl Default for WindowFilterSettings {
     fn default() -> Self {
         Self {
-            mode: WindowFilterMode::ExcludeList,
+            // Default to capture everything (no manual filters), but still exclude preview internally.
+            mode: WindowFilterMode::None,
             excluded_windows: Vec::new(),
             included_windows: Vec::new(),
             auto_exclude_preview: true,
@@ -124,9 +125,7 @@ impl WindowFilterSettings {
     pub fn get_exclusions(&self, preview_window_id: Option<&WindowIdentifier>) -> Vec<WindowIdentifier> {
         let mut exclusions = self.excluded_windows.clone();
 
-        // Add preview window to exclusions if:
-        // - auto_exclude_preview is enabled (default)
-        // - AND dev_mode is disabled (dev can override)
+        // Always exclude preview window unless explicitly disabled via dev_mode.
         if self.auto_exclude_preview && !self.dev_mode {
             if let Some(preview_id) = preview_window_id {
                 if !exclusions.contains(preview_id) {
@@ -140,6 +139,18 @@ impl WindowFilterSettings {
 
     /// Check if a window should be captured
     pub fn should_capture(&self, window_id: &WindowIdentifier, preview_window_id: Option<&WindowIdentifier>) -> bool {
+        // Never capture the preview window when auto-exclude is enabled
+        if self.auto_exclude_preview && !self.dev_mode {
+            if let Some(preview) = preview_window_id {
+                if window_id == preview || window_id.is_preview_window() {
+                    return false;
+                }
+            }
+            if window_id.is_preview_window() {
+                return false;
+            }
+        }
+
         match self.mode {
             WindowFilterMode::None => true,
             WindowFilterMode::ExcludeList => {
@@ -147,7 +158,7 @@ impl WindowFilterSettings {
                 !exclusions.contains(window_id)
             }
             WindowFilterMode::IncludeOnly => {
-                // Future: check against included_windows
+                // Only capture whitelisted windows; preview is already filtered above.
                 !self.included_windows.is_empty() && self.included_windows.contains(window_id)
             }
         }

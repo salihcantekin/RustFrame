@@ -38,12 +38,28 @@ use super::{CaptureEngine, CaptureFrame};
 use crate::capture::CaptureRect;
 use crate::window_filter::WindowIdentifier;
 
-// Global state for cursor filtering
+// Global state for cursor filtering and include-only masking
 lazy_static::lazy_static! {
     // Only set once at capture start: true if preview overlaps with capture region
     static ref SHOULD_FILTER_CURSOR: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     // Preview window bounds (for overlap detection)
     static ref PREVIEW_WINDOW_RECT: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
+    // Included windows used to prevent black-masking over selected windows in include-only mode
+    static ref INCLUDED_WINDOWS_FOR_MASK: std::sync::Mutex<Vec<WindowIdentifier>> = std::sync::Mutex::new(Vec::new());
+}
+
+/// Provide included windows to the masking layer (include-only mode)
+pub fn set_included_windows_for_mask(list: Vec<WindowIdentifier>) {
+    if let Ok(mut guard) = INCLUDED_WINDOWS_FOR_MASK.lock() {
+        *guard = list;
+    }
+}
+
+/// Clear included windows (on capture stop)
+pub fn clear_included_windows_for_mask() {
+    if let Ok(mut guard) = INCLUDED_WINDOWS_FOR_MASK.lock() {
+        guard.clear();
+    }
 }
 
 /// Set preview window bounds and check if it overlaps with capture region
@@ -90,6 +106,7 @@ pub struct WindowsGdiCopyCaptureEngine {
     capture_region: Option<CaptureRect>,
     is_active: bool,
     show_cursor: bool,
+    excluded_windows: Vec<WindowIdentifier>,
 }
 
 impl WindowsGdiCopyCaptureEngine {
@@ -98,6 +115,7 @@ impl WindowsGdiCopyCaptureEngine {
             capture_region: None,
             is_active: false,
             show_cursor: true,
+            excluded_windows: Vec::new(),
         })
     }
 
@@ -213,6 +231,7 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
         self.capture_region = Some(region);
         self.is_active = true;
         self.show_cursor = show_cursor;
+        self.excluded_windows = _excluded_windows.unwrap_or_default();
         Ok(())
     }
 
@@ -311,6 +330,9 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
             let _ = ReleaseDC(None, screen_dc);
         }
 
+        // Note: Window exclusion is not supported on Windows due to OS limitations
+        // See docs/technical/WINDOWS_LIMITATIONS.md for details
+
         Some(CaptureFrame {
             data,
             width,
@@ -341,6 +363,8 @@ impl CaptureEngine for WindowsGdiCopyCaptureEngine {
     }
 }
 
+// Window exclusion is not supported on Windows due to OS API limitations.
+// See docs/technical/WINDOWS_LIMITATIONS.md for detailed explanation.
 /// Windows-specific capture engine using Windows.Graphics.Capture API
 pub struct WindowsCaptureEngine {
     // D3D11 resources
@@ -360,6 +384,7 @@ pub struct WindowsCaptureEngine {
     show_cursor: bool,
     current_cursor_state: bool, // Track actual cursor state in session
     gpu_acceleration: bool, // Enable GPU texture passthrough (zero-copy)
+    excluded_windows: Vec<WindowIdentifier>,
 }
 
 impl WindowsCaptureEngine {
@@ -382,6 +407,7 @@ impl WindowsCaptureEngine {
             show_cursor: true,
             current_cursor_state: true,
             gpu_acceleration: false, // TEMPORARILY DISABLED - Different D3D devices cause crash
+            excluded_windows: Vec::new(),
         })
     }
 
@@ -695,6 +721,9 @@ impl WindowsCaptureEngine {
             d3d_context.Unmap(&staging_texture, 0);
         }
 
+        // Note: Window exclusion is not supported on Windows due to OS limitations
+        // See docs/technical/WINDOWS_LIMITATIONS.md for details
+
         Some(CaptureFrame {
             data,
             width: clipped_width,
@@ -774,6 +803,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.show_cursor = show_cursor;
         self.current_cursor_state = show_cursor;
         self.is_active = true;
+        self.excluded_windows = _excluded_windows.unwrap_or_default();
 
         Ok(())
     }
@@ -911,7 +941,8 @@ impl CaptureEngine for WindowsCaptureEngine {
         // Choose GPU or CPU path based on gpu_acceleration setting
         // GPU path: Return texture handle for zero-copy rendering (fast)
         // CPU path: Copy to system memory for compatibility (slower)
-        if self.gpu_acceleration {
+        // If GPU path is enabled but we need to apply exclusions, fall back to CPU path
+        if self.gpu_acceleration && self.excluded_windows.is_empty() {
             // Try GPU path first
             let result = self.get_frame_gpu(&texture, region);
             if result.is_some() {

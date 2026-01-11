@@ -424,28 +424,25 @@ Ensure:
 - Using ScreenCaptureKit (if available)
 ```
 
-### Discord Can't Detect Window
+### Discord Screen Sharing Not Supported
 
-**Problem**: Discord screen share doesn't list RustFrame window
+**Problem**: Discord screen share doesn't work with RustFrame
 
-**Solution**:
-```
-1. Use "Discord" capture profile:
-   - Download from profiles/ folder or create manually
-2. Restart capture
-3. Preview window will appear in taskbar briefly
-4. Select it in Discord quickly
-5. Window auto-hides after 2 seconds
-```
+**Explanation**: 
+Discord's Application Window picker has technical limitations that make it incompatible with RustFrame's architecture:
+- Discord requires windows to be visible and non-minimized, which causes infinite mirroring when the preview window overlaps with the capture border
+- Making the preview window small (e.g., 50x50 pixels) causes Discord to also share a 50x50 pixel output
+- Off-screen windows are paused by Discord's sharing system
 
-**Manual Fix** (edit settings.json):
-```json
-{
-  "winapi_destination_toolwindow": false,
-  "winapi_destination_appwindow": true,
-  "winapi_destination_noactivate": false
-}
-```
+**Workaround**: 
+Use Discord's **Screen Capture** mode instead of Application Window mode. This allows you to share your entire screen or a specific monitor where you position the RustFrame border.
+
+**Supported Applications**:
+- ✅ Google Meet
+- ✅ Microsoft Teams  
+- ✅ Zoom
+- ✅ OBS Studio
+- ❌ Discord (use Screen Capture mode)
 
 ---
 

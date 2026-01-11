@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings } from "../App";
+import { PlatformInfo } from "../config";
 
 interface AvailableWindow {
   id: number;
@@ -15,17 +16,64 @@ interface AvailableApp {
 
 type FilterMode = "apps" | "windows";
 
+type WindowFilterMode = "none" | "exclude_list" | "include_only";
+
 interface WindowExclusionTabProps {
   settings: Settings;
   onSettingsChange: (settings: Settings) => void;
+  platformInfo: PlatformInfo;
 }
 
-export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusionTabProps) {
+export function WindowExclusionTab({ settings, onSettingsChange, platformInfo }: WindowExclusionTabProps) {
   const [availableApps, setAvailableApps] = useState<AvailableApp[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("apps");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  // Force "none" mode on Windows since window exclusion is not supported
+  useEffect(() => {
+    if (platformInfo.os_type === "windows" && settings.window_filter.mode !== "none") {
+      console.log("Windows detected, forcing window_filter mode to 'none'");
+      const newSettings = {
+        ...settings,
+        window_filter: {
+          ...settings.window_filter,
+          mode: "none" as WindowFilterMode,
+          auto_exclude_preview: true,
+        },
+      };
+      onSettingsChange(newSettings);
+    }
+  }, [platformInfo.os_type]); // Only run when platform changes, not on every settings change
+
+  // Hide entire tab on Windows
+  if (platformInfo.os_type === "windows") {
+    return (
+      <div className="space-y-6 animate-fadeIn">
+        <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-xl p-6 flex items-start gap-4">
+          <div className="text-yellow-500 mt-1">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <h3 className="text-lg font-semibold text-yellow-200 mb-2">Window Exclusion Not Available on Windows</h3>
+            <p className="text-sm text-yellow-300/90 mb-3">
+              Due to Windows OS limitations, selective window exclusion is not currently supported. 
+              RustFrame will capture all content within the selected screen area.
+            </p>
+            <div className="bg-yellow-900/10 rounded-lg p-3 border border-yellow-500/20">
+              <p className="text-xs text-yellow-300/80">
+                <strong>Note:</strong> This feature is available on macOS and Linux. On Windows, 
+                the preview window is automatically excluded from screen sharing applications.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleLoadWindows = async () => {
     try {
@@ -41,12 +89,19 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
     }
   };
 
-  const handleModeChange = (mode: "None" | "Include" | "Exclude") => {
+  const handleModeChange = (mode: WindowFilterMode) => {
+    // On Windows, only allow "none" mode (Capture All)
+    if (platformInfo.os_type === "windows" && mode !== "none") {
+      return;
+    }
+    
     const newSettings = {
       ...settings,
       window_filter: {
         ...settings.window_filter,
         mode,
+        // Always force preview exclusion on
+        auto_exclude_preview: true,
       },
     };
     onSettingsChange(newSettings);
@@ -66,29 +121,32 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
 
   const handleAddSelected = () => {
     const excluded_windows = [...settings.window_filter.excluded_windows];
+    const included_windows = [...settings.window_filter.included_windows];
     
     selectedItems.forEach(id => {
+      const pushIfMissing = (list: typeof excluded_windows, app_id: string, window_name: string) => {
+        if (!list.some(w => w.app_id === app_id && w.window_name === window_name)) {
+          list.push({ app_id, window_name });
+        }
+      };
+
       if (filterMode === "apps") {
-        // Add all windows from this app
         const app = availableApps.find(a => a.bundle_id === id);
         if (app) {
           app.windows.forEach(window => {
-            if (!excluded_windows.some(w => w.app_id === app.bundle_id && w.window_name === window.title)) {
-              excluded_windows.push({
-                app_id: app.bundle_id,
-                window_name: window.title,
-              });
+            if (settings.window_filter.mode === "include_only") {
+              pushIfMissing(included_windows, app.bundle_id, window.title);
+            } else {
+              pushIfMissing(excluded_windows, app.bundle_id, window.title);
             }
           });
         }
       } else {
-        // Add specific window
         const [bundleId, windowTitle] = id.split(":::");
-        if (!excluded_windows.some(w => w.app_id === bundleId && w.window_name === windowTitle)) {
-          excluded_windows.push({
-            app_id: bundleId,
-            window_name: windowTitle,
-          });
+        if (settings.window_filter.mode === "include_only") {
+          pushIfMissing(included_windows, bundleId, windowTitle);
+        } else {
+          pushIfMissing(excluded_windows, bundleId, windowTitle);
         }
       }
     });
@@ -98,6 +156,8 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
       window_filter: {
         ...settings.window_filter,
         excluded_windows,
+        included_windows,
+        auto_exclude_preview: true,
       },
     };
     onSettingsChange(newSettings);
@@ -105,17 +165,22 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
   };
 
   const handleRemoveItem = (index: number) => {
-    const excluded_windows = [...settings.window_filter.excluded_windows];
-    excluded_windows.splice(index, 1);
-    
-    const newSettings = {
-      ...settings,
-      window_filter: {
-        ...settings.window_filter,
-        excluded_windows,
-      },
-    };
-    onSettingsChange(newSettings);
+    const wf = settings.window_filter;
+    if (wf.mode === "include_only") {
+      const included_windows = [...wf.included_windows];
+      included_windows.splice(index, 1);
+      onSettingsChange({
+        ...settings,
+        window_filter: { ...wf, included_windows, auto_exclude_preview: true },
+      });
+    } else {
+      const excluded_windows = [...wf.excluded_windows];
+      excluded_windows.splice(index, 1);
+      onSettingsChange({
+        ...settings,
+        window_filter: { ...wf, excluded_windows, auto_exclude_preview: true },
+      });
+    }
   };
 
   const filteredApps = availableApps.filter(app =>
@@ -142,91 +207,99 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
         </p>
       </div>
 
+      {/* Windows Warning */}
+      {platformInfo.os === "windows" && (
+        <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-xl p-4 flex items-start gap-3">
+          <div className="text-yellow-500 mt-1">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold text-yellow-200">Window Exclusion Not Available on Windows</h4>
+            <p className="text-xs text-yellow-300/80 mt-1">
+              Due to Windows OS limitations, selective window exclusion is not currently supported. 
+              RustFrame will capture all content on the selected screen area.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Mode Selection */}
       <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
         <h4 className="text-md font-semibold text-gray-200 mb-3">Capture Mode</h4>
         <div className="flex gap-3">
           <button
-            onClick={() => handleModeChange("None")}
+            onClick={() => handleModeChange("none")}
+            disabled={platformInfo.os === "windows" && settings.window_filter.mode !== "none"}
             className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
-              settings.window_filter.mode === "None"
+              settings.window_filter.mode === "none"
                 ? "bg-blue-600 border-blue-500 text-white shadow-lg"
                 : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
-            }`}
+            } ${platformInfo.os === "windows" && settings.window_filter.mode !== "none" ? "opacity-50 cursor-not-allowed" : ""}`}
           >
             <div className="font-semibold">Capture All</div>
             <div className="text-xs opacity-80">No restrictions</div>
           </button>
           <button
-            onClick={() => handleModeChange("Exclude")}
+            onClick={() => handleModeChange("exclude_list")}
+            disabled={platformInfo.os === "windows"}
             className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
-              settings.window_filter.mode === "Exclude"
+              settings.window_filter.mode === "exclude_list"
                 ? "bg-red-600 border-red-500 text-white shadow-lg"
                 : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
-            }`}
+            } ${platformInfo.os === "windows" ? "opacity-50 cursor-not-allowed" : ""}`}
           >
             <div className="font-semibold">Exclude Windows</div>
             <div className="text-xs opacity-80">Hide specific windows</div>
+            {platformInfo.os === "windows" && (
+              <div className="text-xs opacity-60 mt-1">Not supported on Windows</div>
+            )}
           </button>
           <button
-            onClick={() => handleModeChange("Include")}
+            onClick={() => handleModeChange("include_only")}
+            disabled={platformInfo.os === "windows"}
             className={`flex-1 px-4 py-3 rounded-lg border transition-all ${
-              settings.window_filter.mode === "Include"
+              settings.window_filter.mode === "include_only"
                 ? "bg-green-600 border-green-500 text-white shadow-lg"
                 : "bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600"
-            }`}
+            } ${platformInfo.os === "windows" ? "opacity-50 cursor-not-allowed" : ""}`}
           >
             <div className="font-semibold">Include Only</div>
             <div className="text-xs opacity-80">Show only selected</div>
+            {platformInfo.os === "windows" && (
+              <div className="text-xs opacity-60 mt-1">Not supported on Windows</div>
+            )}
           </button>
         </div>
       </div>
 
-      {/* Auto-exclude preview */}
-      <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={settings.window_filter.auto_exclude_preview}
-            onChange={(e) => {
-              const newSettings = {
-                ...settings,
-                window_filter: {
-                  ...settings.window_filter,
-                  auto_exclude_preview: e.target.checked,
-                },
-              };
-              onSettingsChange(newSettings);
-            }}
-            className="w-5 h-5 accent-blue-500"
-          />
-          <div>
-            <div className="font-semibold text-gray-200">Auto-exclude Preview Window</div>
-            <div className="text-sm text-gray-400">Prevents "Infinity Mirror" effect during capture</div>
-          </div>
-        </label>
-      </div>
-
       {/* Current List (moved up for visibility) */}
-      {settings.window_filter.excluded_windows.length > 0 && (
+      {((settings.window_filter.mode === "include_only" && settings.window_filter.included_windows.length > 0) ||
+        (settings.window_filter.mode !== "include_only" && settings.window_filter.excluded_windows.length > 0)) && (
         <div className="bg-gray-800/60 rounded-xl p-4 border border-gray-700 space-y-3">
           <div className="flex items-center justify-between">
             <div>
               <h4 className="text-sm font-semibold text-gray-200">Current Selection</h4>
               <p className="text-xs text-gray-400">
-                {settings.window_filter.excluded_windows.length} item{settings.window_filter.excluded_windows.length !== 1 ? "s" : ""} selected
+                {settings.window_filter.mode === "include_only"
+                  ? `${settings.window_filter.included_windows.length} item${settings.window_filter.included_windows.length !== 1 ? "s" : ""} selected`
+                  : `${settings.window_filter.excluded_windows.length} item${settings.window_filter.excluded_windows.length !== 1 ? "s" : ""} selected`}
               </p>
             </div>
             <button
               onClick={() => {
-                const newSettings = {
-                  ...settings,
-                  window_filter: {
-                    ...settings.window_filter,
-                    excluded_windows: [],
-                  },
-                };
-                onSettingsChange(newSettings);
+                if (settings.window_filter.mode === "include_only") {
+                  onSettingsChange({
+                    ...settings,
+                    window_filter: { ...settings.window_filter, included_windows: [], auto_exclude_preview: true },
+                  });
+                } else {
+                  onSettingsChange({
+                    ...settings,
+                    window_filter: { ...settings.window_filter, excluded_windows: [], auto_exclude_preview: true },
+                  });
+                }
               }}
               className="text-xs text-red-400 hover:text-red-300 font-medium px-2 py-1 rounded hover:bg-red-900/20"
             >
@@ -234,7 +307,10 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
             </button>
           </div>
           <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-            {settings.window_filter.excluded_windows.map((item, index) => (
+            {(settings.window_filter.mode === "include_only"
+              ? settings.window_filter.included_windows
+              : settings.window_filter.excluded_windows
+            ).map((item, index) => (
               <span
                 key={index}
                 className="flex items-center gap-2 px-3 py-1 rounded-full bg-gray-900/70 border border-gray-700 text-xs text-gray-200"
@@ -256,7 +332,7 @@ export function WindowExclusionTab({ settings, onSettingsChange }: WindowExclusi
       )}
 
       {/* Load & Filter Section */}
-      {settings.window_filter.mode !== "None" && (
+      {settings.window_filter.mode !== "none" && (
         <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700 space-y-3">
           <div className="flex items-center gap-3">
             <button

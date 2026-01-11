@@ -42,8 +42,118 @@ lazy_static! {
 }
 
 // ============================================================================
-// Cleanup - Ensures all resources are properly released
+// Collision Detection & Auto-Repositioning
 // ============================================================================
+
+/// Check if two rectangles intersect
+fn rectangles_intersect(r1: (i32, i32, i32, i32), r2: (i32, i32, i32, i32)) -> bool {
+    let (x1, y1, w1, h1) = r1;
+    let (x2, y2, w2, h2) = r2;
+    
+    !(x1 + w1 <= x2 || x2 + w2 <= x1 || y1 + h1 <= y2 || y2 + h2 <= y1)
+}
+
+/// Find a safe position for preview window that doesn't intersect with border
+fn find_safe_preview_position(
+    border_rect: (i32, i32, i32, i32),
+    preview_size: (i32, i32),
+    monitors: &[MonitorInfo],
+) -> (i32, i32) {
+    let (bx, by, bw, bh) = border_rect;
+    let (pw, ph) = preview_size;
+    
+    // Try positions in order of preference:
+    // 1. Top-left of border
+    // 2. Top-right of border  
+    // 3. Bottom-left of border
+    // 4. Bottom-right of border
+    // 5. Move to another monitor if available
+    
+    let candidates = vec![
+        (bx - pw - 10, by),                    // Left of border
+        (bx + bw + 10, by),                    // Right of border
+        (bx, by - ph - 10),                    // Above border
+        (bx, by + bh + 10),                    // Below border
+    ];
+    
+    // Find first candidate that doesn't intersect with border and fits on screen
+    for (px, py) in candidates {
+        let preview_rect = (px, py, pw, ph);
+        if !rectangles_intersect(border_rect, preview_rect) {
+            // Check if it fits on any monitor
+            for monitor in monitors {
+                let mx = monitor.x as i32;
+                let my = monitor.y as i32;
+                let mw = monitor.width as i32;
+                let mh = monitor.height as i32;
+                
+                if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
+                    return (px, py);
+                }
+            }
+        }
+    }
+    
+    // If no safe position found on current monitor, try other monitors
+    if monitors.len() > 1 {
+        for monitor in monitors {
+            let mx = monitor.x as i32;
+            let my = monitor.y as i32;
+            let mw = monitor.width as i32;
+            let mh = monitor.height as i32;
+            
+            // Try top-left corner of other monitors
+            let px = mx + 50;
+            let py = my + 50;
+            let preview_rect = (px, py, pw, ph);
+            
+            if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
+                if !rectangles_intersect(border_rect, preview_rect) {
+                    return (px, py);
+                }
+            }
+        }
+    }
+    
+    // Fallback: slightly offset from border
+    (bx + bw + 20, by + 20)
+}
+
+/// Auto-reposition preview window if it intersects with border
+fn auto_reposition_preview_if_needed(
+    border_x: i32,
+    border_y: i32, 
+    border_width: i32,
+    border_height: i32,
+    monitors: &[MonitorInfo],
+) {
+    if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+        if let Some(ref mut dest_window) = *dest_lock {
+            // Get current preview position and size
+            if let Some((px, py, pw, ph)) = dest_window.get_rect() {
+                let border_rect = (border_x, border_y, border_width, border_height);
+                let preview_rect = (px, py, pw, ph);
+                
+                // Check for intersection
+                if rectangles_intersect(border_rect, preview_rect) {
+                    tracing::info!(
+                        "Border and preview intersect, auto-repositioning preview. Border: {:?}, Preview: {:?}", 
+                        border_rect, preview_rect
+                    );
+                    
+                    let (new_x, new_y) = find_safe_preview_position(
+                        border_rect,
+                        (pw, ph),
+                        monitors,
+                    );
+                    
+                    dest_window.set_pos(new_x, new_y);
+                    tracing::info!("Preview repositioned to ({}, {})", new_x, new_y);
+                }
+            }
+        }
+    }
+}
 
 /// Perform cleanup of all capture resources
 /// This function is safe to call multiple times - it will only execute once
@@ -60,27 +170,33 @@ fn perform_cleanup() {
     platform::input::stop_click_capture();
     tracing::debug!("Mouse hook stopped");
 
-    // Clean up hollow border window
+    // Clean up hollow border window (use spawn to avoid blocking)
     if let Ok(mut border) = HOLLOW_BORDER.try_lock() {
-        if border.is_some() {
-            *border = None;
-            tracing::debug!("Hollow border cleaned up");
+        if let Some(b) = border.take() {
+            std::thread::spawn(move || {
+                drop(b); // Drop in background thread
+            });
+            tracing::debug!("Hollow border cleanup initiated");
         }
     }
 
-    // Clean up destination window
+    // Clean up destination window (use spawn to avoid blocking)
     if let Ok(mut dest) = DESTINATION_WINDOW.try_lock() {
-        if dest.is_some() {
-            *dest = None;
-            tracing::debug!("Destination window cleaned up");
+        if let Some(d) = dest.take() {
+            std::thread::spawn(move || {
+                drop(d); // Drop in background thread
+            });
+            tracing::debug!("Destination window cleanup initiated");
         }
     }
 
-    // Clean up REC indicator
+    // Clean up REC indicator (use spawn to avoid blocking)
     if let Ok(mut rec) = REC_INDICATOR.try_lock() {
-        if rec.is_some() {
-            *rec = None;
-            tracing::debug!("REC indicator cleaned up");
+        if let Some(r) = rec.take() {
+            std::thread::spawn(move || {
+                drop(r); // Drop in background thread
+            });
+            tracing::debug!("REC indicator cleanup initiated");
         }
     }
 
@@ -442,6 +558,7 @@ struct AppState {
     settings_modal_open: Arc<Mutex<bool>>,
     render_thread_stop: Arc<Mutex<bool>>,
     render_thread_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    monitors: Arc<Mutex<Vec<MonitorInfo>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -665,6 +782,40 @@ fn sanitize_settings_json_for_platform(value: &mut serde_json::Value) {
 
         if invalid_for_platform {
             obj.remove("preview_mode");
+        }
+    }
+
+    // Normalize window_filter section
+    if let Some(window_filter) = obj.get_mut("window_filter").and_then(|v| v.as_object_mut()) {
+        // Force auto_exclude_preview to true (checkbox removed in UI)
+        window_filter.insert(
+            "auto_exclude_preview".to_string(),
+            serde_json::Value::Bool(true),
+        );
+
+        // Normalize mode to snake_case expected by serde
+        if let Some(mode_val) = window_filter.get("mode") {
+            if let Some(mode_str) = mode_val.as_str() {
+                let normalized_owned = mode_str.to_lowercase();
+                let normalized = match normalized_owned.as_str() {
+                    "none" => "none",
+                    "exclude" | "exclude_list" => "exclude_list",
+                    "include" | "include_only" => "include_only",
+                    other => other,
+                };
+                window_filter.insert(
+                    "mode".to_string(),
+                    serde_json::Value::String(normalized.to_string()),
+                );
+            }
+        }
+
+        // Ensure included_windows exists for include-only flow
+        if !window_filter.contains_key("included_windows") {
+            window_filter.insert(
+                "included_windows".to_string(),
+                serde_json::Value::Array(vec![]),
+            );
         }
     }
 }
@@ -1298,6 +1449,10 @@ fn show_preview_border(
         border.update_style(border_width, border_color);
         border.set_preview_mode();
         border.show();
+        
+        // Auto-reposition preview window if it intersects with border
+        auto_reposition_preview_if_needed(x, y, width, height, &state.monitors.lock().unwrap());
+        
         return Ok(());
     }
 
@@ -1309,6 +1464,10 @@ fn show_preview_border(
     border.set_preview_mode();
 
     *preview = Some(border);
+    
+    // Auto-reposition preview window if it intersects with border
+    auto_reposition_preview_if_needed(x, y, width, height, &state.monitors.lock().unwrap());
+    
     Ok(())
 }
 
@@ -1708,7 +1867,8 @@ async fn start_capture(
             height: (height as i32 - border_offset * 2).max(1) as u32,
         };
         
-        // Get preview window ID for smart exclusion (macOS only)
+        // Get preview window ID for smart exclusion
+        // macOS: use real window id; others: use logical marker (still skipped by should_capture)
         #[cfg(target_os = "macos")]
         let preview_window_id = {
             use window_filter::WindowIdentifier;
@@ -1722,12 +1882,58 @@ async fn start_capture(
         };
         
         #[cfg(not(target_os = "macos"))]
-        let preview_window_id: Option<window_filter::WindowIdentifier> = None;
+        let preview_window_id: Option<window_filter::WindowIdentifier> = Some(window_filter::WindowIdentifier::preview_window());
         
-        // Get exclusion list from window_filter settings
-        let excluded_windows = settings.window_filter.get_exclusions(preview_window_id.as_ref());
+        // Build exclusion list depending on filter mode
+        use window_filter::{WindowFilterMode, WindowIdentifier};
+        let mut excluded_windows: Vec<WindowIdentifier> = match settings.window_filter.mode {
+            WindowFilterMode::IncludeOnly => {
+                // Include-only: compute exclusions as (all current windows - included_windows)
+                let mut all_ids: Vec<WindowIdentifier> = Vec::new();
+                match platform::window_enumerator::enumerate_windows() {
+                    Ok(apps) => {
+                        for app in apps {
+                            for w in app.windows {
+                                all_ids.push(WindowIdentifier {
+                                    app_id: app.bundle_id.clone(),
+                                    window_name: w.title,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error=%e, "Failed to enumerate windows for include_only; defaulting to no exclusions");
+                    }
+                }
+
+                let include_set = settings.window_filter.included_windows.clone();
+
+                // Windows: provide included list to mask layer to avoid black holes in include-only
+                #[cfg(target_os = "windows")]
+                {
+                    use rustframe_capture::capture::windows::set_included_windows_for_mask;
+                    set_included_windows_for_mask(include_set.clone());
+                }
+
+                all_ids
+                    .into_iter()
+                    .filter(|id| !include_set.contains(id))
+                    .collect()
+            }
+            WindowFilterMode::ExcludeList => settings.window_filter.excluded_windows.clone(),
+            WindowFilterMode::None => Vec::new(),
+        };
+
+        // Ensure preview window is excluded when configured
+        if settings.window_filter.auto_exclude_preview && !settings.window_filter.dev_mode {
+            if let Some(preview_id) = preview_window_id.as_ref() {
+                if !excluded_windows.contains(preview_id) {
+                    excluded_windows.push(preview_id.clone());
+                }
+            }
+        }
         
-        log::info!("[MAIN] Calling engine.start() with region: {:?}, excluded: {:?}", region, excluded_windows);
+        log::info!("[MAIN] Calling engine.start() with region: {:?}, excluded: {} items", region, excluded_windows.len());
         engine.start(region, settings.show_cursor, Some(excluded_windows)).map_err(|e| {
             tracing::error!(error = %e, "Capture engine start failed");
             e.to_string()
@@ -1744,8 +1950,8 @@ async fn start_capture(
         use rustframe_capture::capture::windows::set_preview_bounds_and_check_overlap;
         
         // Get destination window bounds
-        if let Ok(dest_lock) = DESTINATION_WINDOW.lock() {
-            if let Some(ref dest_window) = *dest_lock {
+        if let Ok(mut dest_lock) = DESTINATION_WINDOW.lock() {
+            if let Some(ref mut dest_window) = *dest_lock {
                 if let Some((px, py, pw, ph)) = dest_window.get_rect() {
                     tracing::info!(
                         preview_x = px,
@@ -1759,6 +1965,7 @@ async fn start_capture(
                         "Checking preview/capture region overlap for cursor filtering"
                     );
                     
+                    // Check overlap for cursor filtering
                     set_preview_bounds_and_check_overlap(
                         px, py, pw, ph,                    // preview bounds
                         x, y, width as i32, height as i32  // capture bounds
@@ -1796,6 +2003,8 @@ async fn start_capture(
         let engine_for_cb = state.capture_engine.clone();
         let border_w = settings.border_width;
         let app_for_cb = app.clone();
+        let monitors_for_cb = state.monitors.clone();
+        let settings_for_cb = state.settings.clone();
 
         set_border_interaction_complete_callback(move |x, y, width, height| {
             log::info!(
@@ -2108,15 +2317,113 @@ async fn start_capture(
                 inner_width,
                 inner_height
             );
+            
+            // Check for overlap and move preview window if needed
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref mut dest) = *dest_lock {
+                        // 1. Get current rect BEFORE resize for collision detection
+                        if let Some((px, py, pw, ph)) = dest.get_rect() {
+                            // Get all monitors
+                            let monitors_lock = monitors_for_cb.lock().unwrap();
+                            let monitors = monitors_lock.clone();
+                            drop(monitors_lock);
+                            
+                            // Check if preview is out of monitor bounds
+                            let mut out_of_bounds = true;
+                            for monitor in monitors.iter() {
+                                let mx = monitor.x;
+                                let my = monitor.y;
+                                let mw = monitor.width as i32;
+                                let mh = monitor.height as i32;
+                                
+                                // Check if preview is within this monitor
+                                if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
+                                    out_of_bounds = false;
+                                    break;
+                                }
+                            }
+                            
+                            // RELEASE MODE ONLY: Collision detection and snap-to-border
+                            // Prevents cursor position issues when preview overlaps border
+                            #[cfg(not(debug_assertions))]
+                            {
+                                // Check collision and snap if needed
+                                log::debug!("Collision detection enabled");
+                                    
+                                    // Check intersection with NEW border dimensions (after resize)
+                                    let intersect = !(x >= px + (inner_width as i32) || px >= x + width || 
+                                                     y >= py + (inner_height as i32) || py >= y + height);
+                                    
+                                    if intersect || out_of_bounds {
+                                        if intersect {
+                                            log::info!("⚠️ COLLISION DETECTED - Snapping preview to border position");
+                                        }
+                                        if out_of_bounds {
+                                            log::info!("⚠️ Preview out of bounds - Snapping to border position");
+                                        }
+                                        
+                                        // SOLUTION: Snap preview window to border position (same x, y, width, height)
+                                        // This eliminates coordinate transformation issues and prevents double cursor
+                                        dest.resize(inner_width as u32, inner_height as u32);
+                                        dest.set_pos(x, y);
+                                        
+                                        // Disable cursor in capture to prevent double cursor (border + preview)
+                                        if let Ok(mut engine_lock) = engine_for_cb.try_lock() {
+                                            if let Some(ref mut eng) = *engine_lock {
+                                                if let Err(e) = eng.set_cursor_visible(false) {
+                                                    log::warn!("Failed to disable cursor: {}", e);
+                                                } else {
+                                                    log::info!("✅ Cursor disabled (preview snapped to border)");
+                                                }
+                                            }
+                                        }
+                                        
+                                        log::info!("✅ Preview snapped to border: ({}, {}) {}x{}", x, y, inner_width, inner_height);
+                                    } else {
+                                        // No collision - resize normally and ensure cursor is enabled
+                                        dest.resize(inner_width as u32, inner_height as u32);
+                                        
+                                        // Re-enable cursor if it was disabled
+                                        if let Ok(mut engine_lock) = engine_for_cb.try_lock() {
+                                            if let Some(ref mut eng) = *engine_lock {
+                                                // Get original show_cursor setting from settings
+                                                let settings_lock = settings_for_cb.lock().unwrap();
+                                                let should_show_cursor = settings_lock.show_cursor;
+                                                drop(settings_lock);
+                                                
+                                                if let Err(e) = eng.set_cursor_visible(should_show_cursor) {
+                                                    log::warn!("Failed to restore cursor state: {}", e);
+                                                }
+                                            }
+                                        }
+                                        
+                                        log::info!("✅ Preview resized (no collision): {}x{}", inner_width, inner_height);
+                                    }
+                            }
+                            
+                            // DEBUG MODE: Simple resize without collision detection
+                            #[cfg(debug_assertions)]
+                            {
+                                dest.resize(inner_width as u32, inner_height as u32);
+                                log::info!("✅ Preview resized (debug mode - no collision check): {}x{}", inner_width, inner_height);
+                            }
+                        }
+                    } else {
+                        log::warn!("⚠️ Destination window is None!");
+                    }
+                } else {
+                    log::warn!("⚠️ Could not lock DESTINATION_WINDOW!");
+                }
+            }
+            
+            #[cfg(not(target_os = "windows"))]
             if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref mut dest) = *dest_lock {
                     dest.resize(inner_width as u32, inner_height as u32);
                     log::info!("✅ Destination window resize() called");
-                } else {
-                    log::warn!("⚠️ Destination window is None!");
                 }
-            } else {
-                log::warn!("⚠️ Could not lock DESTINATION_WINDOW!");
             }
 
             // Update REC indicator position
@@ -2179,8 +2486,22 @@ async fn start_capture(
                 }
             }
             
-            // Note: Cursor filtering is now set once at capture start based on initial overlap
-            // No need to update it during drag/resize since it's efficient enough
+            // Update cursor filtering in real-time during drag
+            #[cfg(target_os = "windows")]
+            {
+                use rustframe_capture::capture::windows::set_preview_bounds_and_check_overlap;
+                if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref dest_window) = *dest_lock {
+                        if let Some((px, py, pw, ph)) = dest_window.get_rect() {
+                            set_preview_bounds_and_check_overlap(
+                                px, py, pw, ph,         // preview bounds
+                                x, y, width, height     // capture (border) bounds
+                            );
+                        }
+                    }
+                }
+            }
+            
             // Note: Cannot emit events from here as we don't have app handle in this scope
             // Region updates will be reflected when border interaction completes
         });
@@ -2612,7 +2933,7 @@ async fn get_monitors() -> Result<Vec<MonitorInfo>, String> {
 // Non-Windows implementation using Tauri API
 #[cfg(not(target_os = "windows"))]
 #[tauri::command]
-async fn get_monitors(window: tauri::Window) -> Result<Vec<MonitorInfo>, String> {
+async fn get_monitors(window: tauri::Window, state: State<'_, AppState>) -> Result<Vec<MonitorInfo>, String> {
     match window.available_monitors() {
         Ok(monitors) => {
             let mut result = Vec::new();
@@ -2637,6 +2958,10 @@ async fn get_monitors(window: tauri::Window) -> Result<Vec<MonitorInfo>, String>
                     refresh_rate: 60, // Tauri doesn't always provide this, default to 60
                 });
             }
+            
+            // Update the global monitors state
+            *state.monitors.lock().unwrap() = result.clone();
+            
             Ok(result)
         }
         Err(e) => Err(format!("Failed to list monitors: {}", e)),
@@ -2894,6 +3219,7 @@ fn main() {
         settings_modal_open: Arc::new(Mutex::new(false)),
         render_thread_stop: Arc::new(Mutex::new(false)),
         render_thread_handle: Arc::new(Mutex::new(None)),
+        monitors: Arc::new(Mutex::new(Vec::new())),
     };
 
     tauri::Builder::default()
@@ -2941,6 +3267,14 @@ fn main() {
             match event {
                 tauri::WindowEvent::CloseRequested { api: _, .. } => {
                     log::info!("Window close requested, performing cleanup...");
+
+                    // Immediately hide/destroy hollow border to unblock its message loop
+                    if let Ok(mut border) = HOLLOW_BORDER.try_lock() {
+                        if border.is_some() {
+                            log::info!("Closing hollow border window");
+                            *border = None; // Drop the border, triggering cleanup
+                        }
+                    }
 
                     // Stop capture if running
                     if *app_state.is_capturing.lock().unwrap() {

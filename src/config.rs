@@ -46,6 +46,20 @@ pub mod capture {
     pub const LOG_RETENTION_DAYS: u64 = 30;
 }
 
+/// Platform Feature Support
+pub mod platform {
+    /// Whether the platform supports native window filtering/exclusion
+    /// 
+    /// macOS: ✅ SCContentFilter provides native GPU-accelerated window exclusion
+    /// Windows: ❌ No native API for arbitrary window exclusion in region capture
+    /// Linux: ❌ Not yet implemented
+    #[cfg(target_os = "macos")]
+    pub const SUPPORTS_WINDOW_FILTERING: bool = true;
+    
+    #[cfg(not(target_os = "macos"))]
+    pub const SUPPORTS_WINDOW_FILTERING: bool = false;
+}
+
 /// REC Indicator Configuration
 pub mod rec_indicator {
     /// Size presets: (width, height) in pixels

@@ -70,13 +70,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostQuitMessage, RegisterClassExW, SetWindowPos, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
     HCURSOR, HICON, HWND_TOPMOST, MSG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_CLOSE, WM_DESTROY,
     WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP, WINDOW_EX_STYLE,
+    WS_POPUP, WINDOW_EX_STYLE, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
 };
 
 // WS_EX_NOREDIRECTIONBITMAP constant (0x00200000L)
 // Excludes window from DWM redirection (screen capture exclusion)
-#[cfg(windows)]
-const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x00200000);
+// REMOVED because it causes the window to be invisible to the user on desktop
+
 
 lazy_static! {
     static ref REC_HWND: Mutex<isize> = Mutex::new(0);
@@ -602,9 +602,10 @@ fn run_rec_thread(stop_flag: Arc<AtomicBool>) {
         let (width, height) = get_indicator_dimensions();
 
         let hwnd = match CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
+            // Removed WS_EX_NOREDIRECTIONBITMAP to make it visible to user
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
             PCWSTR(class_name.as_ptr()),
-            PCWSTR(wide_string("REC").as_ptr()),
+            PCWSTR(wide_string("").as_ptr()), // Empty title to help hide from selective share pickers
             WS_POPUP,
             0,
             0,
@@ -625,6 +626,9 @@ fn run_rec_thread(stop_flag: Arc<AtomicBool>) {
         if let Ok(mut hwnd_lock) = REC_HWND.lock() {
             *hwnd_lock = hwnd.0 as isize;
         }
+
+        // Exclude from capture (content will be invisible in screen share, but window visible on desktop)
+        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 
         // Set transparency key (magenta will be transparent)
         let _ = SetLayeredWindowAttributes(

@@ -49,8 +49,12 @@ export interface Settings {
   
   // Window Exclusion
   window_filter: {
-    mode: "None" | "Include" | "Exclude";
+    mode: "none" | "exclude_list" | "include_only";
     excluded_windows: Array<{
+      app_id: string;
+      window_name: string;
+    }>;
+    included_windows: Array<{
       app_id: string;
       window_name: string;
     }>;
@@ -102,6 +106,26 @@ function App() {
   const [activeProfile, setActiveProfile] = useState<string | null>(null);
   const [activeProfileHints, setActiveProfileHints] = useState<CaptureProfileHints | null>(null);
   const [showProfileInfo, setShowProfileInfo] = useState(false); // Tooltip state
+  const [showShareModeModal, setShowShareModeModal] = useState(false);
+
+  const normalizeSettings = (input: Settings): Settings => {
+    const wf = input.window_filter;
+    const normalizedMode = (() => {
+      if (wf.mode === "Include") return "include_only" as const;
+      if (wf.mode === "Exclude") return "exclude_list" as const;
+      if (wf.mode === "None") return "none" as const;
+      return wf.mode ?? "none";
+    })();
+    return {
+      ...input,
+      window_filter: {
+        ...wf,
+        mode: normalizedMode,
+        included_windows: wf.included_windows ?? [],
+        auto_exclude_preview: true,
+      },
+    };
+  };
 
   useEffect(() => {
     initializeApp();
@@ -201,7 +225,7 @@ function App() {
 
       // Then load settings
       const loadedSettings = await invoke<Settings>("get_settings");
-      setSettings(loadedSettings);
+      setSettings(normalizeSettings(loadedSettings));
 
       // Load capture profiles (profile_*.json) and current selection
       const loadedProfiles = await invoke<CaptureProfileInfo[]>("get_capture_profiles");
@@ -393,15 +417,20 @@ function App() {
     }
   };
 
-  const openSettings = (tab: "capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about" = "capture") => {
+  const openSettings = (tab: "capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about" | "share_content" = "capture") => {
+    if (isCapturing) {
+      console.warn("Settings blocked while capturing");
+      return;
+    }
     setInitialSettingsTab(tab);
     setShowSettings(true);
   };
 
   const handleSaveSettings = async (newSettings: Settings) => {
     try {
-      await invoke("save_settings", { settings: newSettings });
-      setSettings(newSettings);
+      const normalized = normalizeSettings(newSettings);
+      await invoke("save_settings", { settings: normalized });
+      setSettings(normalized);
       setShowSettings(false);
     } catch (error) {
       console.error("Failed to save settings:", error);
@@ -415,6 +444,23 @@ function App() {
       </div>
     );
   }
+
+  const windowFilterSummary = (() => {
+    const wf = settings.window_filter;
+    if (wf.mode === "include_only") {
+      const count = wf.included_windows.length;
+      return count > 0
+        ? `Include only ${count} window${count === 1 ? "" : "s"}`
+        : "Include only selected windows";
+    }
+    if (wf.mode === "exclude_list") {
+      const count = wf.excluded_windows.length;
+      return count > 0
+        ? `Excluding ${count} window${count === 1 ? "" : "s"}`
+        : "Capture all except preview";
+    }
+    return "Capture all windows";
+  })();
 
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col rounded-lg overflow-hidden border border-gray-700">
@@ -601,7 +647,8 @@ function App() {
                   <span className="text-gray-600">|</span>
                   <button 
                     onClick={() => openSettings("region")}
-                    className="text-blue-400 hover:text-blue-300 underline"
+                    disabled={isCapturing}
+                    className={`underline ${isCapturing ? "text-gray-500 cursor-not-allowed" : "text-blue-400 hover:text-blue-300"}`}
                   >
                     Edit
                   </button>
@@ -654,6 +701,8 @@ function App() {
                 {isCapturing && (
                   <span className="text-xs text-gray-400 animate-pulse">Press to stop recording</span>
                 )}
+
+                {/* Share filter info moved to Quick Settings tile + modal */}
               </div>
             </div>
           </div>
@@ -664,7 +713,8 @@ function App() {
               <h3 className="text-lg font-semibold text-gray-200">Quick Settings</h3>
               <button
                 onClick={() => openSettings("capture")}
-                className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                disabled={isCapturing}
+                className={`text-sm flex items-center gap-1 transition-colors ${isCapturing ? "text-gray-500 cursor-not-allowed" : "text-blue-400 hover:text-blue-300"}`}
               >
                 <span>View All</span>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -674,10 +724,27 @@ function App() {
             </div>
             
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              {/* Share Mode Tile */}
+              <div 
+                onClick={() => !isCapturing && setShowShareModeModal(true)}
+                className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 ${isCapturing ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:scale-105"} from-blue-500/15 to-gray-800 border-blue-500/40`}
+              >
+                <div className="flex flex-col items-center text-center space-y-2">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-500/25 text-blue-300">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-gray-300">Share Mode</div>
+                    <div className="text-sm font-bold text-gray-200">{settings.window_filter.mode === "include_only" ? "Include Only" : settings.window_filter.mode === "exclude_list" ? "Exclude List" : "Capture All"}</div>
+                  </div>
+                </div>
+              </div>
               {/* Cursor Card */}
               <div 
-                onClick={() => openSettings("mouse")}
-                className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 cursor-pointer hover:scale-105 ${
+                onClick={() => !isCapturing && openSettings("mouse")}
+                className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 ${isCapturing ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:scale-105"} ${
                 settings.show_cursor 
                   ? 'from-green-500/20 to-gray-800 border-green-500/50 shadow-lg shadow-green-500/20' 
                   : 'from-gray-700/20 to-gray-800 border-gray-600 hover:border-gray-500'
@@ -701,12 +768,13 @@ function App() {
 
               {/* Click Highlight Card */}
               <div 
-                onClick={() => openSettings("mouse")}
-                className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 cursor-pointer hover:scale-105 ${
-                settings.capture_clicks 
-                  ? 'from-green-500/20 to-gray-800 border-green-500/50 shadow-lg shadow-green-500/20' 
-                  : 'from-gray-700/20 to-gray-800 border-gray-600 hover:border-gray-500'
-              }`}>
+                onClick={() => !isCapturing && openSettings("mouse")}
+                className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 ${isCapturing ? "opacity-60 cursor-not-allowed" : "cursor-pointer hover:scale-105"} ${
+                  settings.capture_clicks 
+                    ? 'from-green-500/20 to-gray-800 border-green-500/50 shadow-lg shadow-green-500/20' 
+                    : 'from-gray-700/20 to-gray-800 border-gray-600 hover:border-gray-500'
+                }`}
+              >
                 <div className="flex flex-col items-center text-center space-y-2">
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
                     settings.capture_clicks ? 'bg-green-500/30 text-green-400' : 'bg-gray-600/30 text-gray-400'
@@ -717,9 +785,9 @@ function App() {
                     </svg>
                   </div>
                   <div>
-                    <div className="text-xs font-medium text-gray-300">Clicks</div>
+                    <div className="text-xs font-medium text-gray-300">Click Highlight</div>
                     <div className={`text-sm font-bold ${settings.capture_clicks ? 'text-green-400' : 'text-gray-500'}`}>
-                      {settings.capture_clicks ? "ON" : "OFF"}
+                      {settings.capture_clicks ? 'ON' : 'OFF'}
                     </div>
                   </div>
                 </div>
@@ -727,8 +795,9 @@ function App() {
 
               {/* FPS Card */}
               <div 
-                onClick={() => openSettings("performance")}
-                className="group relative bg-gradient-to-br from-blue-500/20 to-gray-800 rounded-xl p-4 border-2 border-blue-500/50 transition-all duration-300 cursor-pointer hover:scale-105 shadow-lg shadow-blue-500/20">
+                onClick={() => !isCapturing && openSettings("performance")}
+                className="group relative bg-gradient-to-br from-blue-500/20 to-gray-800 rounded-xl p-4 border-2 border-blue-500/50 transition-all duration-300 cursor-pointer hover:scale-105 shadow-lg shadow-blue-500/20"
+              >
                 <div className="flex flex-col items-center text-center space-y-2">
                   <div className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-500/30 text-blue-400">
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -736,7 +805,7 @@ function App() {
                     </svg>
                   </div>
                   <div>
-                    <div className="text-xs font-medium text-gray-300">FPS</div>
+                    <div className="text-xs font-medium text-gray-300">Target FPS</div>
                     <div className="text-sm font-bold text-blue-400">{settings.target_fps}</div>
                   </div>
                 </div>
@@ -744,7 +813,7 @@ function App() {
 
               {/* Border Card */}
               <div 
-                onClick={() => openSettings("visual")}
+                onClick={() => !isCapturing && openSettings("visual")}
                 className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 cursor-pointer hover:scale-105 ${
                 settings.show_border 
                   ? 'from-purple-500/20 to-gray-800 border-purple-500/50 shadow-lg shadow-purple-500/20' 
@@ -761,7 +830,7 @@ function App() {
                   <div>
                     <div className="text-xs font-medium text-gray-300">Border</div>
                     <div className={`text-sm font-bold ${settings.show_border ? 'text-purple-400' : 'text-gray-500'}`}>
-                      {settings.show_border ? `${settings.border_width}px` : "OFF"}
+                      {settings.show_border ? `${settings.border_width}px` : 'OFF'}
                     </div>
                   </div>
                 </div>
@@ -769,7 +838,7 @@ function App() {
 
               {/* REC Indicator Card */}
               <div 
-                onClick={() => openSettings("visual")}
+                onClick={() => !isCapturing && openSettings("visual")}
                 className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 cursor-pointer hover:scale-105 ${
                 settings.show_rec_indicator 
                   ? 'from-red-500/20 to-gray-800 border-red-500/50 shadow-lg shadow-red-500/20' 
@@ -784,9 +853,9 @@ function App() {
                     </svg>
                   </div>
                   <div>
-                    <div className="text-xs font-medium text-gray-300">REC</div>
+                    <div className="text-xs font-medium text-gray-300">REC Indicator</div>
                     <div className={`text-sm font-bold ${settings.show_rec_indicator ? 'text-red-400' : 'text-gray-500'}`}>
-                      {settings.show_rec_indicator ? settings.rec_indicator_size.toUpperCase() : "OFF"}
+                      {settings.show_rec_indicator ? settings.rec_indicator_size.toUpperCase() : 'OFF'}
                     </div>
                   </div>
                 </div>
@@ -794,7 +863,7 @@ function App() {
 
               {/* Region Memory Card */}
               <div 
-                onClick={() => openSettings("advanced")}
+                onClick={() => !isCapturing && openSettings("advanced")}
                 className={`group relative bg-gradient-to-br rounded-xl p-4 border-2 transition-all duration-300 cursor-pointer hover:scale-105 ${
                 settings.remember_last_region 
                   ? 'from-yellow-500/20 to-gray-800 border-yellow-500/50 shadow-lg shadow-yellow-500/20' 
@@ -1165,6 +1234,56 @@ function App() {
               <p className="text-gray-500 text-xs mt-4">
                 This message appears occasionally. Thank you for understanding! 🙏
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Mode Modal */}
+      {showShareModeModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowShareModeModal(false)}>
+          <div 
+            className="bg-gray-800 rounded-xl overflow-hidden max-w-sm w-full mx-4 border border-gray-700 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-700">
+              <h2 className="text-lg font-semibold text-white">Share Content</h2>
+              <button
+                onClick={() => setShowShareModeModal(false)}
+                className="text-gray-400 hover:text-white transition-colors p-1"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {/* Content */}
+            <div className="p-6 space-y-2">
+              <div className="text-sm text-gray-300">
+                Mode: {settings.window_filter.mode === "include_only" ? "Include Only" : settings.window_filter.mode === "exclude_list" ? "Exclude List" : "Capture All"}
+              </div>
+              <div className="text-sm text-gray-300">
+                Selected: {settings.window_filter.mode === "include_only" ? settings.window_filter.included_windows.length : settings.window_filter.excluded_windows.length} window{(settings.window_filter.mode === "include_only" ? settings.window_filter.included_windows.length : settings.window_filter.excluded_windows.length) === 1 ? "" : "s"}
+              </div>
+              <div className="text-xs text-gray-500">Preview window: Always excluded</div>
+            </div>
+            {/* Actions */}
+            <div className="p-4 border-t border-gray-700 flex gap-2">
+              <button
+                onClick={() => { setShowShareModeModal(false); openSettings("share_content"); }}
+                className={`flex-1 py-2 rounded-lg transition-colors ${isCapturing ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 text-white"}`}
+                disabled={isCapturing}
+              >
+                Open Settings
+              </button>
+              <button
+                onClick={() => setShowShareModeModal(false)}
+                className="px-4 py-2 text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

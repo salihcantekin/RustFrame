@@ -25,8 +25,9 @@
   "winapi_destination_overlapped": false,
   "winapi_destination_hide_taskbar_after_ms": null,
   "window_filter": {
-    "mode": "None",
+    "mode": "none",
     "excluded_windows": [],
+    "included_windows": [],
     "auto_exclude_preview": true,
     "dev_mode": false
   }

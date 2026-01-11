@@ -272,6 +272,30 @@ impl DestinationWindow {
             }
         }
     }
+
+    /// Set window position
+    pub fn set_position(&self, x: i32, y: i32) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOSIZE, SWP_NOZORDER, SWP_NOACTIVATE};
+
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val == 0 {
+            return;
+        }
+
+        unsafe {
+            let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+            let _ = SetWindowPos(
+                hwnd,
+                None, // ignored because SWP_NOZORDER
+                x,
+                y,
+                0, // ignored
+                0, // ignored
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+            );
+        }
+    }
 }
 
 impl Drop for DestinationWindow {
@@ -712,6 +736,16 @@ impl PreviewWindow for DestinationWindow {
         // Scale dimensions for DPI (input is in logical points)
         let width_pixels = points_to_pixels(width);
         let height_pixels = points_to_pixels(height);
+
+        // Clear frame buffer to prevent ghost borders
+        if let Ok(mut buffer) = FRAME_BUFFER.lock() {
+            *buffer = None;
+        }
+        
+        // Clear GPU texture data
+        if let Ok(mut data) = GPU_TEXTURE_DATA.lock() {
+            *data = None;
+        }
 
         // Resize the destination window
         if let Ok(hwnd_lock) = DEST_HWND.lock() {

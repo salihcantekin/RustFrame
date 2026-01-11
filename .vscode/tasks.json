@@ -1,218 +1,245 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "🔨 Build (Windows - Local)",
-      "type": "shell",
-      "command": "cargo",
-      "args": ["build"],
-      "group": "build",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": "$rustc"
-    },
-    {
-      "label": "🚀 Build Release (Windows - Local)",
-      "type": "shell",
-      "command": "cargo",
-      "args": ["build", "--release"],
-      "group": "build",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": "$rustc"
-    },
-    {
-      "label": "🍎 Build (macOS - Remote via SSH)",
-      "type": "shell",
-      "command": "ssh",
-      "args": [
-        "${config:rustframe.macOS.sshHost}",
-        "cd ${config:rustframe.macOS.projectPath} && cargo build"
-      ],
-      "group": "build",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "showReuseMessage": false
-      },
-      "problemMatcher": {
-        "owner": "rust",
-        "fileLocation": ["relative", "${config:rustframe.macOS.projectPath}"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "endLine": 4,
-          "endColumn": 5,
-          "severity": 6,
-          "message": 7
-        }
-      }
-    },
-    {
-      "label": "🍎 Build Release (macOS - Remote via SSH)",
-      "type": "shell",
-      "command": "ssh",
-      "args": [
-        "${config:rustframe.macOS.sshHost}",
-        "cd ${config:rustframe.macOS.projectPath} && cargo build --release"
-      ],
-      "group": "build",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "showReuseMessage": false
-      },
-      "problemMatcher": {
-        "owner": "rust",
-        "fileLocation": ["relative", "${config:rustframe.macOS.projectPath}"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "endLine": 4,
-          "endColumn": 5,
-          "severity": 6,
-          "message": 7
-        }
-      }
-    },
-    {
-      "label": "🍎 Check (macOS - Remote via SSH)",
-      "type": "shell",
-      "command": "ssh",
-      "args": [
-        "${config:rustframe.macOS.sshHost}",
-        "cd ${config:rustframe.macOS.projectPath} && cargo check"
-      ],
-      "group": "build",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "showReuseMessage": false
-      },
-      "problemMatcher": {
-        "owner": "rust",
-        "fileLocation": ["relative", "${config:rustframe.macOS.projectPath}"],
-        "pattern": {
-          "regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
-          "file": 1,
-          "line": 2,
-          "column": 3,
-          "endLine": 4,
-          "endColumn": 5,
-          "severity": 6,
-          "message": 7
-        }
-      }
-    },
-    {
-      "label": "📤 Sync to macOS (tar+scp)",
-      "type": "shell",
-      "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-      "args": [
-        ".vscode/sync-to-macos.sh",
-        "${config:rustframe.macOS.sshHost}",
-        "${config:rustframe.macOS.projectPath}"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "📥 Sync from macOS (tar+scp)",
-      "type": "shell",
-      "command": "C:\\Program Files\\Git\\bin\\bash.exe",
-      "args": [
-        ".vscode/sync-from-macos.sh",
-        "${config:rustframe.macOS.sshHost}",
-        "${config:rustframe.macOS.projectPath}"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "new",
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "🔄 Full Remote Build (Sync + Build + Check)",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "📤 Sync to macOS (tar+scp)",
-        "🍎 Build (macOS - Remote via SSH)",
-        "🍎 Check (macOS - Remote via SSH)"
-      ],
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "🧪 Test (Windows - Local)",
-      "type": "shell",
-      "command": "cargo",
-      "args": ["test"],
-      "group": "test",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": "$rustc"
-    },
-    {
-      "label": "🍎 Test (macOS - Remote via SSH)",
-      "type": "shell",
-      "command": "ssh",
-      "args": [
-        "${config:rustframe.macOS.sshHost}",
-        "cd ${config:rustframe.macOS.projectPath} && cargo test"
-      ],
-      "group": "test",
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "🧹 Clean (Windows - Local)",
-      "type": "shell",
-      "command": "cargo",
-      "args": ["clean"],
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "🍎 Clean (macOS - Remote via SSH)",
-      "type": "shell",
-      "command": "ssh",
-      "args": [
-        "${config:rustframe.macOS.sshHost}",
-        "cd ${config:rustframe.macOS.projectPath} && cargo clean"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "new"
-      },
-      "problemMatcher": []
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "🔨 Build (Windows - Local)",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"build"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": "$rustc"
+		},
+		{
+			"label": "🚀 Build Release (Windows - Local)",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"build",
+				"--release"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": "$rustc"
+		},
+		{
+			"label": "🍎 Build (macOS - Remote via SSH)",
+			"type": "shell",
+			"command": "ssh",
+			"args": [
+				"${config:rustframe.macOS.sshHost}",
+				"cd ${config:rustframe.macOS.projectPath} && cargo build"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"showReuseMessage": false
+			},
+			"problemMatcher": {
+				"owner": "rust",
+				"fileLocation": [
+					"relative",
+					"${config:rustframe.macOS.projectPath}"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"endLine": 4,
+					"endColumn": 5,
+					"severity": 6,
+					"message": 7
+				}
+			}
+		},
+		{
+			"label": "🍎 Build Release (macOS - Remote via SSH)",
+			"type": "shell",
+			"command": "ssh",
+			"args": [
+				"${config:rustframe.macOS.sshHost}",
+				"cd ${config:rustframe.macOS.projectPath} && cargo build --release"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"showReuseMessage": false
+			},
+			"problemMatcher": {
+				"owner": "rust",
+				"fileLocation": [
+					"relative",
+					"${config:rustframe.macOS.projectPath}"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"endLine": 4,
+					"endColumn": 5,
+					"severity": 6,
+					"message": 7
+				}
+			}
+		},
+		{
+			"label": "🍎 Check (macOS - Remote via SSH)",
+			"type": "shell",
+			"command": "ssh",
+			"args": [
+				"${config:rustframe.macOS.sshHost}",
+				"cd ${config:rustframe.macOS.projectPath} && cargo check"
+			],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"showReuseMessage": false
+			},
+			"problemMatcher": {
+				"owner": "rust",
+				"fileLocation": [
+					"relative",
+					"${config:rustframe.macOS.projectPath}"
+				],
+				"pattern": {
+					"regexp": "^(.*):(\\d+):(\\d+):\\s+(\\d+):(\\d+)\\s+(warning|error):\\s+(.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"endLine": 4,
+					"endColumn": 5,
+					"severity": 6,
+					"message": 7
+				}
+			}
+		},
+		{
+			"label": "📤 Sync to macOS (tar+scp)",
+			"type": "shell",
+			"command": "C:\\Program Files\\Git\\bin\\bash.exe",
+			"args": [
+				".vscode/sync-to-macos.sh",
+				"${config:rustframe.macOS.sshHost}",
+				"${config:rustframe.macOS.projectPath}"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"showReuseMessage": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "📥 Sync from macOS (tar+scp)",
+			"type": "shell",
+			"command": "C:\\Program Files\\Git\\bin\\bash.exe",
+			"args": [
+				".vscode/sync-from-macos.sh",
+				"${config:rustframe.macOS.sshHost}",
+				"${config:rustframe.macOS.projectPath}"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "new",
+				"showReuseMessage": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "🔄 Full Remote Build (Sync + Build + Check)",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"📤 Sync to macOS (tar+scp)",
+				"🍎 Build (macOS - Remote via SSH)",
+				"🍎 Check (macOS - Remote via SSH)"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "🧪 Test (Windows - Local)",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"test"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": "$rustc"
+		},
+		{
+			"label": "🍎 Test (macOS - Remote via SSH)",
+			"type": "shell",
+			"command": "ssh",
+			"args": [
+				"${config:rustframe.macOS.sshHost}",
+				"cd ${config:rustframe.macOS.projectPath} && cargo test"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "🧹 Clean (Windows - Local)",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"clean"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "🍎 Clean (macOS - Remote via SSH)",
+			"type": "shell",
+			"command": "ssh",
+			"args": [
+				"${config:rustframe.macOS.sshHost}",
+				"cd ${config:rustframe.macOS.projectPath} && cargo clean"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "🔨 Build (Windows - Local)",
+			"type": "shell",
+			"command": "cargo",
+			"args": [
+				"build"
+			],
+			"group": "build"
+		}
+	]
 }

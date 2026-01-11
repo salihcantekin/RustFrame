@@ -1082,7 +1082,7 @@ function SettingsDialog({
 
           {/* TAB: SHARE CONTENT */}
           {activeTab === "share_content" && (
-            <WindowExclusionTab settings={localSettings} onSettingsChange={setLocalSettings} />
+            <WindowExclusionTab settings={localSettings} onSettingsChange={setLocalSettings} platformInfo={platformInfo} />
           )}
 
           {/* TAB: ADVANCED */}
