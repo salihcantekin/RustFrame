@@ -1,6 +1,7 @@
 {
   "name": "Google Meet (macOS)",
   "description": "Optimized for Google Meet on macOS - normal window level for screen sharing visibility",
+  "explanation": "Google Meet (Chrome-based) uses Chrome's screen capture APIs which enumerate visible windows via CGWindowListCreateDescriptionFromArray. Normal window level (macos_floating_level=false) keeps the window in the standard layer. Cycle participation (macos_participates_in_cycle=true) ensures it appears in browser's native screen picker. Sharing type 1 grants Chrome's sandbox the necessary permissions to read window contents.",
   "macos_floating_level": false,
   "macos_sharing_type": 1,
   "macos_participates_in_cycle": true,

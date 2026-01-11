@@ -21,9 +21,8 @@ use super::d3d11_renderer::D3D11Renderer;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
-    GetDC, InvalidateRect, ReleaseDC, SelectObject, ValidateRect, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
+    BeginPaint, EndPaint, GetDC, InvalidateRect, ReleaseDC, StretchDIBits, ValidateRect, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
@@ -252,6 +251,27 @@ impl DestinationWindow {
     pub fn hwnd_value(&self) -> isize {
         DEST_HWND.lock().map(|h| *h).unwrap_or(0)
     }
+    
+    /// Get current window position and size
+    pub fn get_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        use windows::Win32::Foundation::{HWND, RECT};
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val == 0 {
+            return None;
+        }
+        
+        unsafe {
+            let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok() {
+                Some((rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 impl Drop for DestinationWindow {
@@ -318,7 +338,7 @@ fn run_window_thread(
         if !CLASS_REGISTERED.swap(true, Ordering::SeqCst) {
             let wc = WNDCLASSEXW {
                 cbSize: mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
+                style: windows::Win32::UI::WindowsAndMessaging::WNDCLASS_STYLES(0), // No redraw on resize (prevents flickering)
                 lpfnWndProc: Some(window_proc),
                 hInstance: hinstance.into(),
                 lpszClassName: CLASS_NAME,
@@ -452,6 +472,10 @@ fn run_window_thread(
         if let Ok(mut hwnd_lock) = DEST_HWND.lock() {
             *hwnd_lock = hwnd.0 as isize;
         }
+
+        // NOTE: WDA_EXCLUDEFROMCAPTURE would prevent ALL captures (including Google Meet/Zoom)
+        // Instead, we rely on low opacity and recommend disabling show_cursor to avoid recursive capture
+        // when preview window overlaps capture region
 
         // In release mode, set very low opacity (1/255 = 0.4%) to make window nearly invisible
         // The window is still rendered and should be capturable by screen sharing apps
@@ -627,13 +651,6 @@ unsafe extern "system" fn window_proc(
 /// Paint frame to DC using GDI with double buffering
 /// This is a standard GDI painting approach that works with all capture methods
 unsafe fn paint_frame_gdi(hdc: HDC, data: &[u8], width: u32, height: u32) {
-    // Create a memory DC for double buffering
-    let mem_dc = CreateCompatibleDC(Some(hdc));
-    if mem_dc.is_invalid() {
-        return;
-    }
-
-    // Create DIB section - this creates a device-independent bitmap
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -642,47 +659,29 @@ unsafe fn paint_frame_gdi(hdc: HDC, data: &[u8], width: u32, height: u32) {
             biPlanes: 1,
             biBitCount: 32,
             biCompression: BI_RGB.0,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
+            ..Default::default()
         },
-        bmiColors: [Default::default()],
+        ..Default::default()
     };
 
-    let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-    let dib = CreateDIBSection(Some(hdc), &bmi, DIB_RGB_COLORS, &mut bits_ptr, None, 0);
-
-    if let Ok(bitmap) = dib {
-        if !bits_ptr.is_null() {
-            // Copy frame data to DIB section
-            let expected_size = (width * height * 4) as usize;
-            if data.len() >= expected_size {
-                std::ptr::copy_nonoverlapping(data.as_ptr(), bits_ptr as *mut u8, expected_size);
-            }
-
-            // Select DIB into memory DC and blit to window
-            let old_bitmap = SelectObject(mem_dc, bitmap.into());
-            let _ = BitBlt(
-                hdc,
-                0,
-                0,
-                width as i32,
-                height as i32,
-                Some(mem_dc),
-                0,
-                0,
-                SRCCOPY,
-            );
-
-            // Cleanup
-            SelectObject(mem_dc, old_bitmap);
-            let _ = DeleteObject(bitmap.into());
-        }
-    }
-
-    let _ = DeleteDC(mem_dc);
+    // Use StretchDIBits to paint directly from the buffer to the window DC
+    // This is faster than CreateDIBSection + BitBlt because it avoids creating/destroying
+    // GDI objects (HBITMAP, HDC) on every frame.
+    let _ = StretchDIBits(
+        hdc,
+        0,
+        0,
+        width as i32,
+        height as i32,
+        0,
+        0,
+        width as i32,
+        height as i32,
+        Some(data.as_ptr() as *const _),
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY,
+    );
 }
 
 impl PreviewWindow for DestinationWindow {

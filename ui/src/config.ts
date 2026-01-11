@@ -20,8 +20,9 @@ export const AppConfig = {
   
   // Links
   links: {
-    github: "https://github.com/salihcantekin/RustFrameApp",
-    documentation: "https://github.com/salihcantekin/RustFrameApp/blob/master/README.md",
+    github: "https://github.com/salihcantekin/RustFrame",
+    documentation: "https://github.com/salihcantekin/RustFrame/blob/master/README.md",
+    profilesBase: "https://raw.githubusercontent.com/salihcantekin/RustFrame/master/resources/profiles",
   },
   
   // UI Settings

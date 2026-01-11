@@ -1,6 +1,7 @@
 {
   "name": "Zoom",
   "description": "Optimized for Zoom - uses standard window flags for maximum compatibility",
+  "explanation": "Zoom's screen sharing works best with standard application windows. This profile uses appwindow with layered style for clean rendering and topmost flag to prevent window occlusion during meetings. Zoom's window detection is very permissive, so this configuration ensures maximum compatibility across all Zoom versions.",
   "winapi_destination_overlapped": false,
   "winapi_destination_appwindow": true,
   "winapi_destination_toolwindow": false,

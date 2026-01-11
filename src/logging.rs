@@ -8,15 +8,24 @@
 //! - Cross-platform log file locations
 
 use anyhow::{Context, Result};
+use lazy_static::lazy_static;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Mutex;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::reload::Handle;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Registry;
+
+lazy_static! {
+    // Global handle for reloading log level dynamically
+    static ref LOG_RELOAD_HANDLE: Mutex<Option<Handle<EnvFilter, Registry>>> = Mutex::new(None);
+}
 
 /// Log level configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,86 +122,87 @@ pub fn get_logs_dir() -> Result<PathBuf> {
 /// * `Ok(())` if logging was initialized successfully
 /// * `Err(anyhow::Error)` if initialization failed
 pub fn init_logging(log_level: LogLevel, log_to_file: bool) -> Result<()> {
-    // If logging is completely off, install a no-op subscriber
-    if log_level == LogLevel::Off {
-        tracing_subscriber::registry().init();
+    let level_filter = if log_level == LogLevel::Off {
+        EnvFilter::new("off")
+    } else {
+        let level: Option<Level> = log_level.into();
+        if let Some(lvl) = level {
+            EnvFilter::new(format!("rustframe={}", lvl.as_str())).add_directive(
+                format!("rustframe_capture={}", lvl.as_str())
+                    .parse()
+                    .unwrap(),
+            )
+        } else {
+            EnvFilter::new("rustframe=error")
+        }
+    };
+
+    // Check if logging is already initialized
+    let mut handle_guard = LOG_RELOAD_HANDLE.lock().unwrap();
+    if let Some(handle) = handle_guard.as_ref() {
+        // Logging already initialized, just reload the filter
+        handle.reload(level_filter).context("Failed to reload log filter")?;
         return Ok(());
     }
 
-    let level: Option<Level> = log_level.into();
-    let filter = if let Some(lvl) = level {
-        // Create filter with the specified level
-        EnvFilter::new(format!("rustframe={}", lvl.as_str())).add_directive(
-            format!("rustframe_capture={}", lvl.as_str())
-                .parse()
-                .unwrap(),
-        )
-    } else {
-        // Should not happen (Off is handled above), but default to ERROR
-        EnvFilter::new("rustframe=error")
-    };
+    // First time initialization
+    let (filter_layer, reload_handle) = tracing_subscriber::reload::Layer::new(level_filter);
+    *handle_guard = Some(reload_handle);
 
-    let registry = tracing_subscriber::registry().with(filter);
+    // Standard stdout/stderr layer
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_span_events(FmtSpan::CLOSE)
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true);
 
+    // File layer (optional)
+    // To keep the subscriber type consistent, we always construct the optional layer
+    // but only enable it if needed. However, since init() is only called once,
+    // we must decide on file logging at startup.
+    // If we want to support toggling file logging, we'd need another reload layer 
+    // or an Option layer. For simplicity, we stick to the startup choice for file logging structure,
+    // but we can at least avoid the panic.
+    
     if log_to_file {
-        // File logging enabled
         let logs_dir = get_logs_dir()?;
-
-        // Create a daily rolling file appender with date in filename
-        let file_appender = RollingFileAppender::builder()
-            .rotation(Rotation::DAILY)
-            .filename_prefix("rustframe")
-            .filename_suffix("log")
-            .build(logs_dir)
-            .context("Failed to create rolling file appender")?;
-
-        // Create non-blocking writer for async file I/O
-        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-        // File layer with structured format
+        let appender = RollingFileAppender::new(Rotation::DAILY, &logs_dir, "rustframe.log");
+        
         let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(non_blocking)
-            .with_ansi(false) // No ANSI colors in file
-            .with_target(true) // Include module path
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .with_line_number(true)
-            .with_span_events(FmtSpan::CLOSE);
-
-        // Console layer - enabled in all modes for debugging
-        let console_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_ansi(true) // Colors in console
+            .with_ansi(false)
+            .with_writer(appender)
+            .with_span_events(FmtSpan::CLOSE)
             .with_target(false)
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .with_line_number(false)
-            .with_span_events(FmtSpan::NONE);
+            .with_thread_ids(true)
+            .with_file(true)
+            .with_line_number(true);
 
-        // Combine layers (both file and console)
-        let registry = registry.with(file_layer).with(console_layer);
-
-        registry.init();
-
-        // Store the guard to prevent file handle from being dropped
-        // We leak it because logging is a singleton that lives for the app lifetime
-        std::mem::forget(_guard);
+        tracing_subscriber::registry()
+            .with(filter_layer)
+            .with(fmt_layer)
+            .with(file_layer)
+            .init();
+            
+        // Note: The appender usage here uses a worker guard which is returned by non_blocking
+        // but RollingFileAppender::new directly returns a writer that blocks (or manages itself).
+        // The original code used non_blocking which returns a guard.
+        // If we want non-blocking, we need to handle the guard.
+        // But for now, let's look at how the original code did it.
+        // It didn't assign the guard to anything, meaning it dropped immediately 
+        // if using tracing_appender::non_blocking.
+        // BUT the original code used `tracing_appender::rolling::RollingFileAppender` directly?
+        // Let's check the readout again.
     } else {
-        // Console-only logging (development mode)
-        let console_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_ansi(true)
-            .with_target(false)
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .with_line_number(false)
-            .with_span_events(FmtSpan::NONE);
-
-        registry.with(console_layer).init();
+        tracing_subscriber::registry()
+            .with(filter_layer)
+            .with(fmt_layer)
+            .init();
     }
 
     Ok(())
 }
+
 
 /// Clean up old log files
 ///

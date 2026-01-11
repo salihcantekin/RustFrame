@@ -79,7 +79,7 @@ function App() {
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "advanced" | "about">("capture");
+  const [initialSettingsTab, setInitialSettingsTab] = useState<"capture" | "mouse" | "visual" | "region" | "performance" | "profiles" | "advanced" | "about">("capture");
   const [showDonate, setShowDonate] = useState(false);
   const [showDonateReminder, setShowDonateReminder] = useState(false);
   const [captureRegion, setCaptureRegion] = useState({ x: 0, y: 0, width: 800, height: 600 });
@@ -96,7 +96,29 @@ function App() {
     initializeApp();
     loadDevMode();
     applyDpiAwareWindowSize();
+    
+    // Listen for region changes during capture (when border is moved)
+    const unlisten = getCurrentWindow().listen<{x: number, y: number, width: number, height: number}>("region-changed", (event) => {
+      const { x, y, width, height } = event.payload;
+      setCaptureRegion({ x, y, width, height });
+    });
+    
+    return () => {
+      unlisten.then(fn => fn());
+    };
   }, []);
+
+  // Critical: Hide hollow border and stop capture when Settings is open
+  // This prevents window-level mouse event hijacking that breaks sliders
+  useEffect(() => {
+    if (showSettings) {
+      // Hide border and stop any capture to fully isolate Settings modal
+      if (isCapturing) {
+        invoke('stop_capture').catch(console.error);
+      }
+      invoke('hide_preview_border').catch(() => {}); // Hide border if visible
+    }
+  }, [showSettings, isCapturing]);
 
   // Apply DPI-aware window sizing on startup
   const applyDpiAwareWindowSize = async () => {
@@ -134,6 +156,29 @@ function App() {
 
     loadHints();
   }, [activeProfile]);
+  
+  // Detect monitor changes when capture region moves
+  useEffect(() => {
+    if (monitors.length === 0) return;
+    
+    // Find which monitor contains the center of the capture region
+    const centerX = captureRegion.x + captureRegion.width / 2;
+    const centerY = captureRegion.y + captureRegion.height / 2;
+    
+    const newMonitorIndex = monitors.findIndex((mon) => {
+      return (
+        centerX >= mon.x &&
+        centerX < mon.x + mon.width &&
+        centerY >= mon.y &&
+        centerY < mon.y + mon.height
+      );
+    });
+    
+    if (newMonitorIndex !== -1 && newMonitorIndex !== selectedMonitor) {
+      setSelectedMonitor(newMonitorIndex);
+      console.log(`Monitor changed to: ${monitors[newMonitorIndex].name}`);
+    }
+  }, [captureRegion, monitors, selectedMonitor]);
   
   // Combined initialization to ensure proper order
   const initializeApp = async () => {
@@ -244,36 +289,27 @@ function App() {
   };
 
   const handleStartCapture = async () => {
-    console.log("[DEBUG] handleStartCapture called");
-    console.log("[DEBUG] captureRegion:", captureRegion);
-    console.log("[DEBUG] captureRegion values:", {
-      x: captureRegion.x,
-      y: captureRegion.y,
-      width: captureRegion.width,
-      height: captureRegion.height
-    });
+    // Prevent capture start if Settings modal is open
+    if (showSettings) {
+      return;
+    }
     
     try {
       console.log("Starting capture with region:", captureRegion);
-      console.log("[DEBUG] About to invoke start_capture...");
       await invoke("start_capture", {
         x: captureRegion.x,
         y: captureRegion.y,
         width: captureRegion.width,
         height: captureRegion.height,
       });
-      console.log("[DEBUG] invoke completed successfully");
       setIsCapturing(true);
       console.log("Capture started successfully!");
     } catch (error) {
-      console.error("[DEBUG] invoke failed with error:", error);
       console.error("Failed to start capture:", error);
       
       // CRITICAL: Clean up any partially created windows/borders
       try {
-        console.log("[DEBUG] Calling cleanup_on_capture_failed...");
         await invoke("cleanup_on_capture_failed");
-        console.log("[DEBUG] Cleanup completed");
       } catch (cleanupError) {
         console.error("Cleanup also failed:", cleanupError);
       }
@@ -381,6 +417,12 @@ function App() {
             return;
           }
           
+          // CRITICAL: Do NOT start window dragging when Settings modal is open!
+          // startDragging() hijacks all pointer events and breaks slider/color picker interactions.
+          if (showSettings || showDonate || showDonateReminder) {
+            return;
+          }
+          
           // e.detail: 1 = single click, 2 = double click
           if (e.detail === 2) {
             // Double click - toggle maximize
@@ -403,12 +445,12 @@ function App() {
             title="Support Development"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+               <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
             </svg>
             <span className="hidden sm:inline">Donate</span>
           </button>
-          
-           {/* Help Button */}
+
+          {/* Help Button */}
            <button
             onClick={() => open(AppConfig.links.documentation)}
             className="px-2 py-1 text-sm text-gray-400 hover:text-white hover:bg-gray-700/50 rounded transition-colors flex items-center gap-1"
@@ -537,6 +579,15 @@ function App() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
                   </svg>
                   <span>Region: {captureRegion.width} × {captureRegion.height}</span>
+                  {monitors.length > 0 && selectedMonitor < monitors.length && (
+                    <>
+                      <span className="text-gray-600">|</span>
+                      <span className="text-gray-500">
+                        {monitors[selectedMonitor].name} ({monitors[selectedMonitor].width}x{monitors[selectedMonitor].height} 
+                        @ {Math.round((monitors[selectedMonitor].scale_factor || 1) * 100)}%)
+                      </span>
+                    </>
+                  )}
                   <span className="text-gray-600">|</span>
                   <button 
                     onClick={() => openSettings("region")}

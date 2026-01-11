@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-01-10",
+  "profiles": {
+    "windows": {
+      "discord": {
+        "version": "1.0.0",
+        "file": "discord.json",
+        "description": "Optimized for Discord screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "googlemeet": {
+        "version": "1.0.0",
+        "file": "googlemeet.json",
+        "description": "Optimized for Google Meet screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "teams": {
+        "version": "1.0.0",
+        "file": "teams.json",
+        "description": "Optimized for Microsoft Teams screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "zoom": {
+        "version": "1.0.0",
+        "file": "zoom.json",
+        "description": "Optimized for Zoom screen sharing",
+        "last_updated": "2026-01-10"
+      }
+    },
+    "macos": {
+      "discord": {
+        "version": "1.0.0",
+        "file": "discord.json",
+        "description": "Optimized for Discord screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "googlemeet": {
+        "version": "1.0.0",
+        "file": "googlemeet.json",
+        "description": "Optimized for Google Meet screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "teams": {
+        "version": "1.0.0",
+        "file": "teams.json",
+        "description": "Optimized for Microsoft Teams screen sharing",
+        "last_updated": "2026-01-10"
+      },
+      "zoom": {
+        "version": "1.0.0",
+        "file": "zoom.json",
+        "description": "Optimized for Zoom screen sharing",
+        "last_updated": "2026-01-10"
+      }
+    }
+  }
+}

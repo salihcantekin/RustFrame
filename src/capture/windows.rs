@@ -37,6 +37,50 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::{CaptureEngine, CaptureFrame};
 use crate::capture::CaptureRect;
 
+// Global state for cursor filtering
+lazy_static::lazy_static! {
+    // Only set once at capture start: true if preview overlaps with capture region
+    static ref SHOULD_FILTER_CURSOR: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    // Preview window bounds (for overlap detection)
+    static ref PREVIEW_WINDOW_RECT: std::sync::Mutex<Option<(i32, i32, i32, i32)>> = std::sync::Mutex::new(None);
+}
+
+/// Set preview window bounds and check if it overlaps with capture region
+/// This is called once at capture start, not per-frame
+pub fn set_preview_bounds_and_check_overlap(px: i32, py: i32, pw: i32, ph: i32, cx: i32, cy: i32, cw: i32, ch: i32) {
+    // Store preview bounds
+    if let Ok(mut rect) = PREVIEW_WINDOW_RECT.lock() {
+        *rect = Some((px, py, pw, ph));
+    }
+    
+    // Check if preview overlaps capture region
+    let overlaps = !(px + pw <= cx || px >= cx + cw || py + ph <= cy || py >= cy + ch);
+    
+    if let Ok(mut filter) = SHOULD_FILTER_CURSOR.lock() {
+        *filter = overlaps;
+        if overlaps {
+            log::info!("🔄 Preview overlaps capture region - cursor filtering ENABLED");
+        } else {
+            log::info!("✓ No overlap - cursor filtering DISABLED");
+        }
+    }
+}
+
+/// Clear cursor filtering on capture stop
+pub fn clear_cursor_filtering() {
+    if let Ok(mut rect) = PREVIEW_WINDOW_RECT.lock() {
+        *rect = None;
+    }
+    if let Ok(mut filter) = SHOULD_FILTER_CURSOR.lock() {
+        *filter = false;
+    }
+}
+
+/// Get current preview window bounds (for testing/debugging)
+pub fn get_preview_window_rect() -> Option<(i32, i32, i32, i32)> {
+    PREVIEW_WINDOW_RECT.lock().ok().and_then(|r| *r)
+}
+
 /// Windows GDI-based capture engine (RegionToShare-style)
 ///
 /// Captures a screen region by copying pixels from the desktop DC (BitBlt/CopyFromScreen equivalent)
@@ -99,6 +143,38 @@ impl WindowsGdiCopyCaptureEngine {
         // CURSOR_SHOWING = 0x00000001
         if (ci.flags.0 & 0x00000001) == 0 {
             return;
+        }
+
+        // Optimization: Only check preview overlap if filtering is enabled
+        // This was set once at capture start, not per-frame
+        if let Ok(filter) = SHOULD_FILTER_CURSOR.lock() {
+            if *filter {
+                if let Ok(rect) = PREVIEW_WINDOW_RECT.lock() {
+                    if let Some((px, py, pw, ph)) = *rect {
+                        let cursor_x = ci.ptScreenPos.x;
+                        let cursor_y = ci.ptScreenPos.y;
+                
+                        // Debug logging (every 60 frames to avoid spam)
+                        static mut FRAME_COUNT: u32 = 0;
+                        unsafe {
+                            FRAME_COUNT += 1;
+                            if FRAME_COUNT % 60 == 0 {
+                                log::debug!(
+                                    "Cursor filter check: cursor=({}, {}), preview=({}, {}, {}x{})",
+                                    cursor_x, cursor_y, px, py, pw, ph
+                                );
+                            }
+                        }
+                
+                        // Check if cursor is within preview window bounds
+                        if cursor_x >= px && cursor_x < px + pw &&
+                           cursor_y >= py && cursor_y < py + ph {
+                            log::debug!("🎯 Cursor filtered (inside preview window)");
+                            return; // Skip drawing cursor over preview window
+                        }
+                    }
+                }
+            }
         }
 
         let mut icon_info = ICONINFO::default();
@@ -281,6 +357,7 @@ pub struct WindowsCaptureEngine {
     monitor_size: (u32, u32), // Monitor width and height
     is_active: bool,
     show_cursor: bool,
+    current_cursor_state: bool, // Track actual cursor state in session
     gpu_acceleration: bool, // Enable GPU texture passthrough (zero-copy)
 }
 
@@ -302,6 +379,7 @@ impl WindowsCaptureEngine {
             monitor_size: (0, 0),
             is_active: false,
             show_cursor: true,
+            current_cursor_state: true,
             gpu_acceleration: false, // TEMPORARILY DISABLED - Different D3D devices cause crash
         })
     }
@@ -693,6 +771,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.monitor_origin = monitor_origin;
         self.monitor_size = monitor_size;
         self.show_cursor = show_cursor;
+        self.current_cursor_state = show_cursor;
         self.is_active = true;
 
         Ok(())
@@ -733,6 +812,51 @@ impl CaptureEngine for WindowsCaptureEngine {
     fn get_frame(&mut self) -> Option<CaptureFrame> {
         if !self.is_active {
             return None;
+        }
+
+        // Dynamic Cursor Filtering Logic
+        // If cursor is enabled, check if it's over the preview window.
+        // If so, temporarily disable cursor capture in the session to avoid "double cursor".
+        if let Some(session) = &self.capture_session {
+            if self.show_cursor {
+                let mut should_show_cursor = true;
+
+                // Check cursor position
+                let mut ci = CURSORINFO {
+                    cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+                    ..Default::default()
+                };
+
+                if unsafe { GetCursorInfo(&mut ci).is_ok() } {
+                    // Check if cursor is showing (flags & CURSOR_SHOWING)
+                    if (ci.flags.0 & 0x00000001) != 0 {
+                        let cursor_x = ci.ptScreenPos.x;
+                        let cursor_y = ci.ptScreenPos.y;
+
+                        // Check preview bounds
+                        if let Ok(rect) = PREVIEW_WINDOW_RECT.lock() {
+                            if let Some((px, py, pw, ph)) = *rect {
+                                // If cursor is inside preview window, HIDE IT from capture
+                                if cursor_x >= px && cursor_x < px + pw &&
+                                   cursor_y >= py && cursor_y < py + ph {
+                                    should_show_cursor = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply setting if changed
+                if should_show_cursor != self.current_cursor_state {
+                    match session.SetIsCursorCaptureEnabled(should_show_cursor) {
+                        Ok(_) => {
+                            self.current_cursor_state = should_show_cursor;
+                            log::debug!("Dynamic cursor filtering: state changed to {}", should_show_cursor);
+                        },
+                        Err(e) => log::warn!("Failed to toggle cursor capture: {:?}", e),
+                    }
+                }
+            }
         }
 
         let frame_pool = self.frame_pool.as_ref()?;

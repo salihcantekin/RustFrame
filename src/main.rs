@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::{Emitter, State};
 
 // Import capture engine from library
 use rustframe_capture::capture::{create_capture_engine, CaptureEngine, CaptureRect};
@@ -432,6 +432,7 @@ struct AppState {
     settings: Arc<Mutex<Settings>>,
     active_profile: Arc<Mutex<Option<String>>>,
     is_capturing: Arc<Mutex<bool>>,
+    settings_modal_open: Arc<Mutex<bool>>,
     render_thread_stop: Arc<Mutex<bool>>,
     render_thread_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
@@ -909,6 +910,167 @@ async fn set_active_capture_profile(
     Ok(())
 }
 
+// ============================================================================
+// Profile Management Commands
+// ============================================================================
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ProfileVersionInfo {
+    pub version: String,
+    pub last_updated: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProfileVersionData {
+    pub version: String,
+    pub last_updated: String,
+    pub profiles: std::collections::HashMap<String, std::collections::HashMap<String, ProfileVersionInfo>>,
+}
+
+#[derive(Serialize)]
+pub struct ProfileDetails {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub file_name: String,
+    pub settings: serde_json::Value,
+}
+
+const PROFILE_VERSION_URL: &str = "https://raw.githubusercontent.com/salihcantekin/RustFrame/main/resources/profiles/version.json";
+
+fn get_profile_download_url(platform: &str, filename: &str) -> String {
+    format!("https://raw.githubusercontent.com/salihcantekin/RustFrame/main/resources/profiles/{}/{}", platform, filename)
+}
+
+#[tauri::command]
+async fn check_profile_updates() -> Result<ProfileVersionData, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(PROFILE_VERSION_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch profile versions: {}", e))?;
+
+    let version_data: ProfileVersionData = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse profile versions: {}", e))?;
+
+    Ok(version_data)
+}
+
+#[tauri::command]
+async fn download_profile(profile_id: String) -> Result<(), String> {
+    let platform = get_os_profile_subdir();
+    let Some(profiles_dir) = rustframe_profiles_dir() else {
+        return Err("Could not find profiles directory".to_string());
+    };
+
+    let platform_dir = profiles_dir.join(platform);
+    let _ = std::fs::create_dir_all(&platform_dir);
+
+    let filename = format!("{}.json", profile_id);
+    let url = get_profile_download_url(platform, &filename);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download profile: {}", e))?;
+
+    let content = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read profile content: {}", e))?;
+
+    // Validate JSON before saving
+    let _: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Downloaded profile has invalid JSON: {}", e))?;
+
+    let dest_path = platform_dir.join(&filename);
+    std::fs::write(&dest_path, content)
+        .map_err(|e| format!("Failed to save profile: {}", e))?;
+
+    tracing::info!("Downloaded profile '{}' to {:?}", profile_id, dest_path);
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_profile(profile_id: String) -> Result<(), String> {
+    let platform = get_os_profile_subdir();
+    let Some(profiles_dir) = rustframe_profiles_dir() else {
+        return Err("Could not find profiles directory".to_string());
+    };
+
+    let platform_dir = profiles_dir.join(platform);
+    let filename = format!("{}.json", profile_id);
+    let profile_path = platform_dir.join(&filename);
+
+    if !profile_path.exists() {
+        return Err(format!("Profile '{}' not found", profile_id));
+    }
+
+    std::fs::remove_file(&profile_path)
+        .map_err(|e| format!("Failed to delete profile: {}", e))?;
+
+    tracing::info!("Deleted profile '{}' from {:?}", profile_id, profile_path);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_profile_details(profile_id: String) -> Result<ProfileDetails, String> {
+    let platform = get_os_profile_subdir();
+    let Some(profiles_dir) = rustframe_profiles_dir() else {
+        return Err("Could not find profiles directory".to_string());
+    };
+
+    let platform_dir = profiles_dir.join(platform);
+    let filename = format!("{}.json", profile_id);
+    let profile_path = platform_dir.join(&filename);
+
+    if !profile_path.exists() {
+        return Err(format!("Profile '{}' not found", profile_id));
+    }
+
+    let content = std::fs::read_to_string(&profile_path)
+        .map_err(|e| format!("Failed to read profile: {}", e))?;
+
+    let settings: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse profile: {}", e))?;
+
+    let name = settings
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&profile_id)
+        .to_string();
+
+    let description = settings
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(ProfileDetails {
+        id: profile_id.clone(),
+        name,
+        description,
+        version: "1.0.0".to_string(), // TODO: Get from version.json
+        file_name: filename,
+        settings,
+    })
+}
+
 #[tauri::command]
 async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let old_log_level = state.settings.lock().unwrap().log_level.clone();
@@ -1114,14 +1276,16 @@ fn show_preview_border(
         return Err("Capture is active but no border found".to_string());
     }
 
-    // No capture active - create a preview border
+    // No capture active - create or update preview border
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
 
-    // Close existing preview if any
-    if preview.is_some() {
-        *preview = None;
-        // Give time for cleanup
-        std::thread::sleep(std::time::Duration::from_millis(50));
+    // If preview border already exists, just update it
+    if let Some(border) = preview.as_ref() {
+        border.update_rect(x, y, width, height);
+        border.update_style(border_width, border_color);
+        border.set_preview_mode();
+        border.show();
+        return Ok(());
     }
 
     // Create new preview border
@@ -1200,6 +1364,7 @@ async fn start_capture(
     width: u32,
     height: u32,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     tracing::info!(
         x = x,
@@ -1540,6 +1705,36 @@ async fn start_capture(
     }
     drop(engine_lock);
 
+    // Set up cursor filtering: check if preview overlaps capture region
+    #[cfg(target_os = "windows")]
+    {
+        use rustframe_capture::capture::windows::set_preview_bounds_and_check_overlap;
+        
+        // Get destination window bounds
+        if let Ok(dest_lock) = DESTINATION_WINDOW.lock() {
+            if let Some(ref dest_window) = *dest_lock {
+                if let Some((px, py, pw, ph)) = dest_window.get_rect() {
+                    tracing::info!(
+                        preview_x = px,
+                        preview_y = py,
+                        preview_width = pw,
+                        preview_height = ph,
+                        capture_x = x,
+                        capture_y = y,
+                        capture_width = width,
+                        capture_height = height,
+                        "Checking preview/capture region overlap for cursor filtering"
+                    );
+                    
+                    set_preview_bounds_and_check_overlap(
+                        px, py, pw, ph,                    // preview bounds
+                        x, y, width as i32, height as i32  // capture bounds
+                    );
+                }
+            }
+        }
+    }
+
     tracing::debug!(
         capture_clicks = settings.capture_clicks,
         "Checking click capture setting"
@@ -1567,6 +1762,7 @@ async fn start_capture(
         use crate::hollow_border::set_border_interaction_complete_callback;
         let engine_for_cb = state.capture_engine.clone();
         let border_w = settings.border_width;
+        let app_for_cb = app.clone();
 
         set_border_interaction_complete_callback(move |x, y, width, height| {
             log::info!(
@@ -1576,6 +1772,16 @@ async fn start_capture(
                 width,
                 height
             );
+            
+            // Emit region update to frontend  
+            if let Err(e) = app_for_cb.emit("region-changed", serde_json::json!({
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height
+            })) {
+                log::error!("Failed to emit region-changed event: {}", e);
+            }
 
             // Calculate inner region (excluding border)
             let border_offset = border_w as i32;
@@ -1886,6 +2092,27 @@ async fn start_capture(
                     rec.update_position(x, y, width, border_w as i32);
                 }
             }
+
+            // Update cursor filtering based on new border position
+            // If border was moved/resized, preview might now overlap/non-overlap with it
+            #[cfg(target_os = "windows")]
+            {
+                use rustframe_capture::capture::windows::set_preview_bounds_and_check_overlap;
+                
+                // Get destination window bounds
+                if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref dest_window) = *dest_lock {
+                        if let Some((px, py, pw, ph)) = dest_window.get_rect() {
+                            // Capture region is inner rect (excluding border)
+                            // offset by border_width from hollow border position
+                            set_preview_bounds_and_check_overlap(
+                                px, py, pw, ph,         // preview bounds
+                                x, y, width, height     // capture (border) bounds
+                            );
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -1895,14 +2122,34 @@ async fn start_capture(
     {
         use crate::hollow_border::set_border_live_move_callback;
         let border_w = settings.border_width;
+        let update_counter = std::sync::Arc::new(std::sync::Mutex::new(0u64));
 
         set_border_live_move_callback(move |x, y, width, height| {
-            // Update REC indicator position in real-time during drag
+            // Throttle updates to reduce lag - update every 3rd event
+            // With high refresh rate mice (1000Hz), processing every move is too expensive
+            // causing window drag lag. Throttling ensures smoothness.
+            let should_update = if let Ok(mut c) = update_counter.lock() {
+                *c += 1;
+                *c % 3 == 0
+            } else {
+                false
+            };
+
+            if !should_update {
+                return;
+            }
+
+            // Update REC indicator position in real-time during drag (fixed: re-enabled)
             if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
                 if let Some(ref rec) = *rec_lock {
                     rec.update_position(x, y, width, border_w as i32);
                 }
             }
+            
+            // Note: Cursor filtering is now set once at capture start based on initial overlap
+            // No need to update it during drag/resize since it's efficient enough
+            // Note: Cannot emit events from here as we don't have app handle in this scope
+            // Region updates will be reflected when border interaction completes
         });
     }
 
@@ -2179,11 +2426,21 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     // Clean up capture-related windows
     tracing::debug!("Clearing DESTINATION_WINDOW");
     *DESTINATION_WINDOW.lock().unwrap() = None;
+    
+    // Clear cursor filtering on capture stop
+    #[cfg(target_os = "windows")]
+    {
+        use rustframe_capture::capture::windows::clear_cursor_filtering;
+        clear_cursor_filtering();
+        tracing::debug!("Cursor filtering cleared");
+    }
+    
     tracing::debug!("Clearing REC_INDICATOR");
     *REC_INDICATOR.lock().unwrap() = None;
     log::info!("Capture windows cleaned up");
 
-    // Clear click capture data
+    // Stop mouse hook completely and clear click capture data
+    platform::input::stop_click_capture();
     platform::input::clear_clicks();
 
     *state.is_capturing.lock().unwrap() = false;
@@ -2601,6 +2858,7 @@ fn main() {
         settings: Arc::new(Mutex::new(settings)),
         active_profile: Arc::new(Mutex::new(active_profile)),
         is_capturing: Arc::new(Mutex::new(false)),
+        settings_modal_open: Arc::new(Mutex::new(false)),
         render_thread_stop: Arc::new(Mutex::new(false)),
         render_thread_handle: Arc::new(Mutex::new(None)),
     };
@@ -2621,6 +2879,10 @@ fn main() {
             get_active_capture_profile,
             get_capture_profile_hints,
             set_active_capture_profile,
+            check_profile_updates,
+            download_profile,
+            delete_profile,
+            get_profile_details,
             save_settings,
             get_settings_path,
             open_settings_folder,

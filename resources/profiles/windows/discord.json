@@ -1,6 +1,7 @@
 {
   "name": "Discord",
   "description": "Optimized for Discord screen sharing - uses WS_OVERLAPPEDWINDOW to appear in Discord's window list",
+  "explanation": "Discord's screen sharing requires windows with WS_OVERLAPPEDWINDOW style to be detected in the application window picker. This profile uses overlapped window style with topmost flag to ensure the preview window appears in Discord's selection list while staying on top. The taskbar is hidden after 3 seconds to keep it clean during screen sharing.",
   "winapi_destination_overlapped": true,
   "winapi_destination_appwindow": false,
   "winapi_destination_toolwindow": false,

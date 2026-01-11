@@ -107,3 +107,15 @@ code {
 .hover-brightness:hover {
   filter: brightness(1.1);
 }
+
+/* Click Highlight Fade Animation */
+@keyframes clickHighlightFade {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}

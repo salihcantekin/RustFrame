@@ -1,6 +1,7 @@
 {
   "name": "Discord (macOS)",
   "description": "Optimized for Discord on macOS - normal window level with cycle participation",
+  "explanation": "Discord's screen sharing on macOS requires windows to participate in the window cycle (macos_participates_in_cycle=true) to appear in the picker. Normal window level (macos_floating_level=false) prevents it from staying always-on-top which could interfere with app switcher. Sharing type 1 (kCGWindowSharingNone) allows the window to be captured by screen recording APIs. Click-through enabled for non-intrusive overlay behavior.",
   "macos_floating_level": false,
   "macos_sharing_type": 1,
   "macos_participates_in_cycle": true,

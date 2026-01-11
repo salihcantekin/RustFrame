@@ -63,6 +63,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "local-time", "ansi"] }
 tracing-appender = "0.2"
 
+# HTTP client for profile downloads
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["time", "sync"] }
+
 # Windows-specific dependencies
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

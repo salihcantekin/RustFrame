@@ -1,6 +1,7 @@
 {
   "name": "Microsoft Teams",
   "description": "Optimized for Microsoft Teams - similar to Meet, appears as regular application",
+  "explanation": "Microsoft Teams prefers windows with WS_EX_APPWINDOW extended style to appear as normal application windows in the screen sharing picker. This profile uses appwindow flag with layered style for transparency support, and topmost to keep the window visible. Unlike Discord, Teams doesn't require taskbar hiding.",
   "winapi_destination_overlapped": false,
   "winapi_destination_appwindow": true,
   "winapi_destination_toolwindow": false,

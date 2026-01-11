@@ -1,6 +1,7 @@
 {
   "name": "Google Meet",
   "description": "Optimized for Google Meet - uses WS_EX_APPWINDOW to appear as a regular application window",
+  "explanation": "Google Meet (running in Chrome/Edge) detects windows using the standard Windows Desktop Duplication API and prefers windows with WS_EX_APPWINDOW extended style. This profile ensures the window appears as a regular application with layered rendering for smooth video output. The topmost flag keeps it visible above browser windows.",
   "winapi_destination_overlapped": false,
   "winapi_destination_appwindow": true,
   "winapi_destination_toolwindow": false,

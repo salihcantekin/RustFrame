@@ -1,6 +1,7 @@
 {
   "name": "Zoom (macOS)",
   "description": "Optimized for Zoom on macOS - normal level with full screen auxiliary support",
+  "explanation": "Zoom's screen sharing relies on CGWindowListCopyWindowInfo which requires windows to be in the normal window layer (macos_floating_level=false). Window cycle participation (macos_participates_in_cycle=true) ensures Zoom's window picker can enumerate it. Sharing type 1 allows Zoom's screen recording permissions to access the window content. This configuration balances visibility with non-intrusive behavior.",
   "macos_floating_level": false,
   "macos_sharing_type": 1,
   "macos_participates_in_cycle": true,

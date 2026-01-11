@@ -68,10 +68,15 @@ use windows::Win32::UI::WindowsAndMessaging::LWA_COLORKEY;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SetWindowPos, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    HCURSOR, HICON, HWND_TOPMOST, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_CLOSE, WM_DESTROY,
-    WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP,
+    HCURSOR, HICON, HWND_TOPMOST, MSG, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_CLOSE, WM_DESTROY,
+    WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_POPUP, WINDOW_EX_STYLE,
 };
+
+// WS_EX_NOREDIRECTIONBITMAP constant (0x00200000L)
+// Excludes window from DWM redirection (screen capture exclusion)
+#[cfg(windows)]
+const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x00200000);
 
 lazy_static! {
     static ref REC_HWND: Mutex<isize> = Mutex::new(0);
@@ -200,7 +205,7 @@ impl RecIndicator {
                         pos_y,
                         width,
                         height,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
                     );
                 }
             }
@@ -393,7 +398,7 @@ impl RecIndicator {
                             pos_y_scaled,
                             width_scaled,
                             height_scaled,
-                            SWP_NOACTIVATE,
+                            SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
                         );
                     }
                 }
@@ -597,7 +602,7 @@ fn run_rec_thread(stop_flag: Arc<AtomicBool>) {
         let (width, height) = get_indicator_dimensions();
 
         let hwnd = match CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
             PCWSTR(class_name.as_ptr()),
             PCWSTR(wide_string("REC").as_ptr()),
             WS_POPUP,
@@ -629,17 +634,9 @@ fn run_rec_thread(stop_flag: Arc<AtomicBool>) {
             LWA_COLORKEY,
         );
 
-        // Exclude from screen capture so it doesn't appear in recordings
-        {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-            };
-            if let Err(e) = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) {
-                tracing::error!(error = ?e, "Failed to exclude REC indicator from capture");
-            } else {
-                tracing::debug!("REC indicator excluded from screen capture");
-            }
-        }
+        // NOTE: WDA_EXCLUDEFROMCAPTURE causes black window in Google Meet/screen pickers
+        // REC indicator is already WS_EX_TOOLWINDOW which keeps it out of Alt-Tab
+        // and most window pickers. For complete hiding, use RUSTFRAME_DISABLE_REC_INDICATOR=1
 
         REC_THREAD_RUNNING.store(true, Ordering::SeqCst);
         tracing::info!("REC indicator window created (Windows)");

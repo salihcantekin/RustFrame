@@ -1,7 +1,6 @@
 {
   "name": "Microsoft Teams (macOS)",
-  "description": "Optimized for Microsoft Teams on macOS - standard window sharing settings",
-  "macos_floating_level": false,
+  "description": "Optimized for Microsoft Teams on macOS - standard window sharing settings",  "explanation": "Microsoft Teams on macOS uses CGWindowList APIs for screen sharing detection. Normal window level (macos_floating_level=false) ensures the window appears in standard window lists. Participating in the window cycle (macos_participates_in_cycle=true) makes it visible in Mission Control and screen capture pickers. Sharing type 1 ensures Teams can access the window through ScreenCaptureKit.",  "macos_floating_level": false,
   "macos_sharing_type": 1,
   "macos_participates_in_cycle": true,
   "alpha": 255,

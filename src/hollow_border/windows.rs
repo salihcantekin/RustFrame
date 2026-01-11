@@ -542,7 +542,8 @@ fn run_window_thread(
         if !CLASS_REGISTERED.swap(true, Ordering::SeqCst) {
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
+                // Removed CS_HREDRAW | CS_VREDRAW to prevent flickering during resize
+                style: windows::Win32::UI::WindowsAndMessaging::WNDCLASS_STYLES(0),
                 lpfnWndProc: Some(window_proc),
                 cbClsExtra: 0,
                 cbWndExtra: 0,
