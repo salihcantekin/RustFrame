@@ -737,8 +737,12 @@ impl WindowsCaptureEngine {
 }
 
 impl CaptureEngine for WindowsCaptureEngine {
-    fn start(&mut self, region: CaptureRect, show_cursor: bool, _excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
+    fn start(&mut self, region: CaptureRect, show_cursor: bool, excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
         info!("Starting capture for region: {:?}", region);
+
+        if let Some(windows) = &excluded_windows {
+            info!("Received {} windows to exclude from capture", windows.len());
+        }
 
         // Create D3D11 device
         let (d3d_device, d3d_context) = Self::create_d3d_device()?;
@@ -759,6 +763,11 @@ impl CaptureEngine for WindowsCaptureEngine {
             "Created capture item for monitor at origin {:?}, size {:?}",
             monitor_origin, monitor_size
         );
+
+        // Store active excludes for potential usage
+        if let Some(ref wins) = excluded_windows {
+            self.excluded_windows = wins.clone();
+        }
 
         // Get capture size
         let size = capture_item.Size()?;
@@ -803,7 +812,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         self.show_cursor = show_cursor;
         self.current_cursor_state = show_cursor;
         self.is_active = true;
-        self.excluded_windows = _excluded_windows.unwrap_or_default();
+        // excluded_windows already stored above, no need to set again
 
         Ok(())
     }
@@ -845,47 +854,18 @@ impl CaptureEngine for WindowsCaptureEngine {
             return None;
         }
 
-        // Dynamic Cursor Filtering Logic
-        // If cursor is enabled, check if it's over the preview window.
-        // If so, temporarily disable cursor capture in the session to avoid "double cursor".
+        // Dynamic Cursor Filtering Logic - DISABLED
+        // With separation layer in place, preview window no longer causes infinite mirror.
+        // Simply use the user's show_cursor setting without any filtering.
         if let Some(session) = &self.capture_session {
-            if self.show_cursor {
-                let mut should_show_cursor = true;
-
-                // Check cursor position
-                let mut ci = CURSORINFO {
-                    cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-                    ..Default::default()
-                };
-
-                if unsafe { GetCursorInfo(&mut ci).is_ok() } {
-                    // Check if cursor is showing (flags & CURSOR_SHOWING)
-                    if (ci.flags.0 & 0x00000001) != 0 {
-                        let cursor_x = ci.ptScreenPos.x;
-                        let cursor_y = ci.ptScreenPos.y;
-
-                        // Check preview bounds
-                        if let Ok(rect) = PREVIEW_WINDOW_RECT.lock() {
-                            if let Some((px, py, pw, ph)) = *rect {
-                                // If cursor is inside preview window, HIDE IT from capture
-                                if cursor_x >= px && cursor_x < px + pw &&
-                                   cursor_y >= py && cursor_y < py + ph {
-                                    should_show_cursor = false;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Apply setting if changed
-                if should_show_cursor != self.current_cursor_state {
-                    match session.SetIsCursorCaptureEnabled(should_show_cursor) {
-                        Ok(_) => {
-                            self.current_cursor_state = should_show_cursor;
-                            log::debug!("Dynamic cursor filtering: state changed to {}", should_show_cursor);
-                        },
-                        Err(e) => log::warn!("Failed to toggle cursor capture: {:?}", e),
-                    }
+            // Apply cursor setting if it differs from current state
+            if self.show_cursor != self.current_cursor_state {
+                match session.SetIsCursorCaptureEnabled(self.show_cursor) {
+                    Ok(_) => {
+                        self.current_cursor_state = self.show_cursor;
+                        log::debug!("Cursor capture setting applied: {}", self.show_cursor);
+                    },
+                    Err(e) => log::warn!("Failed to set cursor capture: {:?}", e),
                 }
             }
         }

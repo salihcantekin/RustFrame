@@ -941,4 +941,13 @@ impl PreviewWindow for DestinationWindow {
         }
         tracing::debug!("macOS destination window brought to front");
     }
+
+    fn exclude_from_capture(&self) {
+        // macOS: Use NSWindow sharingType to exclude from screen capture
+        // kCGWindowSharingNone = 0 prevents window from being captured
+        unsafe {
+            let _: () = msg_send![self.window, setSharingType: 0]; // NSWindowSharingNone
+        }
+        tracing::info!("✅ macOS destination window excluded from screen capture");
+    }
 }

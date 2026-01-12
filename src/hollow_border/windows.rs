@@ -208,6 +208,11 @@ impl HollowBorder {
     pub fn hwnd_value(&self) -> isize {
         HOLLOW_HWND.lock().map(|h| *h).unwrap_or(0)
     }
+    
+    /// Get the HWND for desktop detection (excludes our window from checks)
+    pub fn get_hwnd(&self) -> isize {
+        self.hwnd_value()
+    }
 
     /// Update the border position and size
     pub fn update_rect(&self, x: i32, y: i32, width: i32, height: i32) {
@@ -607,6 +612,10 @@ fn run_window_thread(
             255,
             LWA_COLORKEY,
         );
+
+        // Exclude from capture (optional, but good practice to avoid capturing our own border)
+        // WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
 
         // Apply the hollow region (using window dimensions which include border)
         apply_hollow_region(hwnd, window_w, window_h, border_width);

@@ -28,19 +28,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
     GetMessageW, GetSystemMetrics, GetWindowRect, PostMessageW, PostQuitMessage, RegisterClassExW,
     SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_VISIBLE,
+    SWP_NOZORDER, SWP_ASYNCWINDOWPOS, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
+    WS_POPUP, WS_VISIBLE, ShowWindow, SW_HIDE, SW_SHOW, SWP_FRAMECHANGED,
+    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
 };
+
+use windows::Win32::Foundation::COLORREF;
 
 // Only used in release builds for positioning.
 #[cfg(not(debug_assertions))]
 use windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN;
 
-#[cfg(not(debug_assertions))]
-use windows::Win32::Foundation::COLORREF;
-
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-#[cfg(not(debug_assertions))]
 use windows::Win32::UI::WindowsAndMessaging::{
     SetLayeredWindowAttributes, LWA_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
     WS_EX_TRANSPARENT,
@@ -58,6 +57,8 @@ lazy_static! {
     static ref DEST_HWND: Mutex<isize> = Mutex::new(0);
     /// Global D3D11 renderer (created in window thread)
     static ref D3D11_RENDERER: Mutex<Option<D3D11Renderer>> = Mutex::new(None);
+    /// Global masking state - when true, render solid color instead of captured content
+    static ref MASKING_ENABLED: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
 
 struct FrameData {
@@ -148,14 +149,14 @@ unsafe impl Sync for DestinationWindow {}
 
 impl DestinationWindow {
     /// Create a new destination window in its own thread
-    pub fn new(width: u32, height: u32, config: DestinationWindowConfig) -> Option<Self> {
+    pub fn new(x: i32, y: i32, width: u32, height: u32, config: DestinationWindowConfig) -> Option<Self> {
         // Scale dimensions for DPI (input is in logical points)
         let width_pixels = points_to_pixels(width);
         let height_pixels = points_to_pixels(height);
 
         info!(
-            "Creating WinAPI destination window {}x{} points ({}x{} pixels) in dedicated thread",
-            width, height, width_pixels, height_pixels
+            "Creating WinAPI destination window at ({}, {}) {}x{} points ({}x{} pixels) in dedicated thread",
+            x, y, width, height, width_pixels, height_pixels
         );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -163,7 +164,7 @@ impl DestinationWindow {
 
         // Spawn window thread - window will be created and message loop will run here
         let thread_handle = thread::spawn(move || {
-            run_window_thread(width_pixels, height_pixels, config, stop_flag_clone);
+            run_window_thread(x, y, width_pixels, height_pixels, config, stop_flag_clone);
         });
 
         // Wait for window to be created
@@ -315,7 +316,7 @@ impl DestinationWindow {
             // but still keeps it visible and capturable
             let result = SetWindowPos(
                 hwnd,
-                HWND_BOTTOM,
+                Some(HWND_BOTTOM),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
             );
@@ -324,6 +325,36 @@ impl DestinationWindow {
                 tracing::debug!("Preview window sent to back (HWND_BOTTOM) for screen sharing");
             } else {
                 tracing::warn!("Failed to send window to back");
+            }
+        }
+    }
+
+    /// Exclude window from screen capture (Windows 10 2000H+)
+    /// Prevents infinite mirroring when capturing desktop regions that include the preview window
+    pub fn exclude_from_capture(&self) {
+        use windows::Win32::Foundation::HWND;
+
+        const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
+
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val == 0 {
+            return;
+        }
+
+        unsafe {
+            let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+            
+            // Windows API declaration - returns i32 (BOOL)
+            extern "system" {
+                fn SetWindowDisplayAffinity(hwnd: HWND, dwAffinity: u32) -> i32;
+            }
+
+            let result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+            
+            if result != 0 {
+                tracing::info!("✅ Preview window excluded from screen capture (WDA_EXCLUDEFROMCAPTURE)");
+            } else {
+                tracing::warn!("⚠️ Failed to exclude window from capture (requires Windows 10 2000H+)");
             }
         }
     }
@@ -342,11 +373,71 @@ impl DestinationWindow {
             let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
             let _ = SetWindowPos(
                 hwnd,
-                HWND_TOP,
+                Some(HWND_TOP),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
             );
             tracing::debug!("Preview window brought to front");
+        }
+    }
+
+    /// Enable masking (render solid color instead of captured content)
+    pub fn enable_masking(&self) {
+        MASKING_ENABLED.store(true, Ordering::SeqCst);
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val != 0 {
+            unsafe {
+                let _ = InvalidateRect(Some(HWND(hwnd_val as _)), None, false);
+            }
+        }
+    }
+
+    /// Disable masking (render captured content normally)
+    pub fn disable_masking(&self) {
+        MASKING_ENABLED.store(false, Ordering::SeqCst);
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val != 0 {
+            unsafe {
+                let _ = InvalidateRect(Some(HWND(hwnd_val as _)), None, false);
+            }
+        }
+    }
+
+    /// Hide the preview window (make it invisible)
+    pub fn hide(&self) {
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val != 0 {
+            unsafe {
+                let _ = ShowWindow(HWND(hwnd_val as _), SW_HIDE);
+            }
+        }
+    }
+
+    /// Show the preview window (make it visible)
+    pub fn show(&self) {
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val != 0 {
+            unsafe {
+                let _ = ShowWindow(HWND(hwnd_val as _), SW_SHOW);
+            }
+        }
+    }
+
+    /// Set position and size of the preview window
+    pub fn set_position_and_size(&self, x: i32, y: i32, width: i32, height: i32) {
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val != 0 {
+            unsafe {
+                let _ = SetWindowPos(
+                    HWND(hwnd_val as _),
+                    None,
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                );
+            }
         }
     }
 }
@@ -394,6 +485,8 @@ impl Drop for DestinationWindow {
 
 /// Window thread - creates window and runs its own message loop
 fn run_window_thread(
+    x: i32,
+    y: i32,
     width: u32,
     height: u32,
     config: DestinationWindowConfig,
@@ -429,45 +522,27 @@ fn run_window_thread(
             }
         }
 
-        // Position window on-screen for proper DWM composition
-        // The window will be cloaked (hidden from user) but still composed by DWM
-        // DEBUG: top-right corner for easy visibility and testing (not cloaked)
-        // RELEASE: bottom-right corner, will be cloaked after creation
-        #[cfg(debug_assertions)]
-        let (x_pos, y_pos) = {
-            let screen_width = GetSystemMetrics(SM_CXSCREEN);
-            (screen_width - width as i32 - 20, 20)
-        };
-        #[cfg(not(debug_assertions))]
-        let (x_pos, y_pos) = {
-            let screen_width = GetSystemMetrics(SM_CXSCREEN);
-            let screen_height = GetSystemMetrics(SM_CYSCREEN);
-            // Position at bottom-right corner (visible but unobtrusive)
-            // Window stays on-screen for DWM composition and screen sharing detection
-            (
-                screen_width - width as i32 - 10,
-                screen_height - height as i32 - 60,
-            )
-        };
+        // Position window at the requested coordinates
+        let x_pos = x;
+        let y_pos = y;
 
         // Window style:
-        // - Default: WS_POPUP for borderless window
-        // - Optional: WS_OVERLAPPEDWINDOW to look like a normal app window (can improve picker visibility)
+        // - Default: WS_OVERLAPPEDWINDOW for normal app window (z-order compatible)
+        // - Optional: WS_POPUP for borderless (legacy mode)
+        // FIX: Default to WS_POPUP to remove title bar/borders
         let window_style = if config.overlapped.unwrap_or(false) {
             WS_OVERLAPPEDWINDOW | WS_VISIBLE
         } else {
             WS_POPUP | WS_VISIBLE
         };
 
-        let topmost = config.topmost.unwrap_or(true);
+        let topmost = config.topmost.unwrap_or(false);
 
         // Extended styles:
         // - WS_EX_NOACTIVATE: Don't steal focus when created
-        // - WS_EX_TOPMOST: Empirically required for Google Meet window-share to keep capturing updates
-        // - WS_EX_LAYERED (release only): Allow transparency to make window nearly invisible
-        // - WS_EX_TRANSPARENT (release only): Click-through so it doesn't block the user's screen
-        // - WS_EX_TOOLWINDOW (release only): Keep it out of Alt-Tab/taskbar UI
-        let noactivate = config.noactivate.unwrap_or(true);
+        // - WS_EX_APPWINDOW: Show in taskbar/window pickers (for screen sharing)
+        // - No layered/transparent: Window is fully visible but controlled via z-order
+        let noactivate = config.noactivate.unwrap_or(false);
 
         #[cfg(debug_assertions)]
         let ex_style = {
@@ -483,17 +558,20 @@ fn run_window_thread(
         };
         #[cfg(not(debug_assertions))]
         let ex_style = {
-            let layered = config.layered.unwrap_or(true);
-            let click_through = config.click_through.unwrap_or(false); // Default FALSE for screen sharing
-            let toolwindow = config.toolwindow.unwrap_or(false); // Default FALSE - must appear in window lists
-            let appwindow = config.appwindow.unwrap_or(true); // Default TRUE - act as regular app window
+            let layered = config.layered.unwrap_or(false); // Default FALSE - no transparency
+            let click_through = config.click_through.unwrap_or(false); // Default FALSE - window is interactive
+            // FIX: Default to 'toolwindow = true' to hide from Taskbar
+            let toolwindow = config.toolwindow.unwrap_or(true); 
+            // FIX: Default to 'appwindow = false' to avoid taskbar icon
+            let appwindow = config.appwindow.unwrap_or(false); 
 
             let mut style = if noactivate {
                 WS_EX_NOACTIVATE
             } else {
                 Default::default()
             };
-            if layered {
+            // Force layered if click_through is requested (required for transparency behavior)
+            if layered || click_through {
                 style |= WS_EX_LAYERED;
             }
             if click_through {
@@ -501,7 +579,9 @@ fn run_window_thread(
             }
             if toolwindow {
                 style |= WS_EX_TOOLWINDOW;
-            } else if appwindow {
+            } 
+            // Apply AppWindow only if specifically requested and NOT toolwindow
+            if appwindow && !toolwindow {
                 style |= WS_EX_APPWINDOW;
             }
             if topmost {
@@ -512,7 +592,7 @@ fn run_window_thread(
 
         // For WS_POPUP, window size = client size (no borders)
         // For WS_OVERLAPPEDWINDOW, adjust so client is the requested size.
-        let (adjusted_width, adjusted_height) = if config.overlapped.unwrap_or(false) {
+        let (adjusted_width, adjusted_height) = if config.overlapped.unwrap_or(true) {
             let mut rect = RECT {
                 left: 0,
                 top: 0,
@@ -560,7 +640,7 @@ fn run_window_thread(
         // Window is positioned at bottom-right corner (on-screen but unobtrusive)
         #[cfg(not(debug_assertions))]
         {
-            if config.layered.unwrap_or(true) {
+            if config.layered.unwrap_or(false) || config.click_through.unwrap_or(false) {
                 // Alpha default = 255 (fully opaque) for screen sharing compatibility
                 // Can be overridden via settings.json if needed
                 let alpha = config.alpha.unwrap_or(255);
@@ -584,7 +664,7 @@ fn run_window_thread(
             use windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
             let result = SetWindowPos(
                 hwnd,
-                HWND_BOTTOM,
+                Some(HWND_BOTTOM),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
@@ -646,11 +726,31 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, MA_NOACTIVATE, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_MOUSEACTIVATE,
-        WM_PAINT,
+        DestroyWindow, MA_NOACTIVATE, WM_ACTIVATE, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_MOUSEACTIVATE,
+        WM_PAINT, HWND_BOTTOM, SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE,
     };
 
     match msg {
+        WM_ACTIVATE => {
+            // When user clicks on preview window (making it active), immediately send it to back
+            // This prevents preview from blocking other windows during Discord setup period
+            let activated = (wparam.0 & 0xFFFF) != 0; // WA_INACTIVE = 0, WA_ACTIVE = 1, WA_CLICKACTIVE = 2
+            if activated {
+                tracing::debug!("Preview window activated by user, sending to back");
+                unsafe {
+                    let _ = SetWindowPos(
+                        hwnd,
+                        Some(HWND_BOTTOM),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+            }
+            LRESULT(0)
+        }
         WM_FRAME_UPDATE => {
             // Frame update signal - just trigger repaint (event-driven)
             // Resize and actual painting will happen in WM_PAINT
@@ -664,7 +764,28 @@ unsafe extern "system" fn window_proc(
             LRESULT(MA_NOACTIVATE as isize)
         }
         WM_PAINT => {
-            // Try GPU path first, fallback to GDI if not available
+            // Check if masking is enabled (border overlaps desktop)
+            let is_masked = MASKING_ENABLED.load(Ordering::SeqCst);
+            
+            if is_masked {
+                // Render solid black color
+                let mut ps = PAINTSTRUCT::default();
+                unsafe {
+                    let hdc = BeginPaint(hwnd, &mut ps);
+                    let mut rect = RECT::default();
+                    GetClientRect(hwnd, &mut rect);
+                    
+                    use windows::Win32::Graphics::Gdi::{CreateSolidBrush, FillRect, DeleteObject};
+                    let brush = CreateSolidBrush(COLORREF(0x00000000)); // Black
+                    FillRect(hdc, &rect, brush);
+                    let _ = DeleteObject(brush.into());
+                    
+                    EndPaint(hwnd, &ps);
+                }
+                return LRESULT(0);
+            }
+            
+            // Normal rendering path - try GPU path first, fallback to GDI if not available
             let mut gpu_rendered = false;
 
             // Check if we have GPU texture data
@@ -785,11 +906,11 @@ unsafe fn paint_frame_gdi(hdc: HDC, data: &[u8], width: u32, height: u32) {
 impl PreviewWindow for DestinationWindow {
     type Config = DestinationWindowConfig;
 
-    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self>
+    fn new(x: i32, y: i32, width: u32, height: u32, config: Self::Config) -> Option<Self>
     where
         Self: Sized,
     {
-        DestinationWindow::new(width, height, config)
+        DestinationWindow::new(x, y, width, height, config)
     }
 
     fn hwnd_value(&self) -> isize {
@@ -871,5 +992,17 @@ impl PreviewWindow for DestinationWindow {
                 }
             }
         }
+    }
+
+    fn send_to_back(&self) {
+        DestinationWindow::send_to_back(self);
+    }
+
+    fn bring_to_front(&self) {
+        DestinationWindow::bring_to_front(self);
+    }
+
+    fn exclude_from_capture(&self) {
+        DestinationWindow::exclude_from_capture(self);
     }
 }

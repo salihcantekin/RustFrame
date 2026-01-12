@@ -85,7 +85,7 @@ pub trait PreviewWindow: Send + Sync {
     type Config;
 
     /// Create a new destination window with specified dimensions and config
-    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self>
+    fn new(x: i32, y: i32, width: u32, height: u32, config: Self::Config) -> Option<Self>
     where
         Self: Sized;
 
@@ -112,4 +112,8 @@ pub trait PreviewWindow: Send + Sync {
 
     /// Bring window to front (for debugging or special cases)
     fn bring_to_front(&self);
+
+    /// Exclude window from screen capture to prevent infinite mirroring
+    /// (Windows 10 2000H+ only, no-op on other platforms)
+    fn exclude_from_capture(&self);
 }

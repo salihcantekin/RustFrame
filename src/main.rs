@@ -21,6 +21,7 @@ mod logging;
 mod platform;
 mod platform_info;
 mod rec_indicator;
+mod separation_layer;
 mod single_instance;
 mod traits; // Cross-platform trait definitions
 
@@ -28,12 +29,14 @@ use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
 use platform::window_enumerator::{self, AvailableApp};
 use rec_indicator::RecIndicator;
+use separation_layer::SeparationLayer;
 use traits::PreviewWindow;
 
 // Global state for Windows (not thread-safe, but only accessed from commands)
 lazy_static! {
     static ref HOLLOW_BORDER: Mutex<Option<HollowBorder>> = Mutex::new(None);
     static ref DESTINATION_WINDOW: Mutex<Option<DestinationWindow>> = Mutex::new(None);
+    static ref SEPARATION_LAYER: Mutex<Option<SeparationLayer>> = Mutex::new(None);
     static ref REC_INDICATOR: Mutex<Option<RecIndicator>> = Mutex::new(None);
     // Global flag to track if cleanup has been performed
     static ref CLEANUP_PERFORMED: AtomicBool = AtomicBool::new(false);
@@ -118,6 +121,8 @@ fn find_safe_preview_position(
     // Fallback: slightly offset from border
     (bx + bw + 20, by + 20)
 }
+
+
 
 /// Auto-reposition preview window if it intersects with border
 fn auto_reposition_preview_if_needed(
@@ -1732,7 +1737,7 @@ async fn start_capture(
                 noactivate: settings.winapi_destination_noactivate,
                 overlapped: settings.winapi_destination_overlapped,
             };
-            let dest_window = DestinationWindow::new(width, height, config)
+            let dest_window = DestinationWindow::new(x, y, width, height, config)
                 .ok_or("Failed to create destination window")?;
 
             log::info!("Destination window created successfully");
@@ -1838,6 +1843,19 @@ async fn start_capture(
             } else {
                 tracing::error!("Failed to store destination window - is None after assignment");
             }
+        }
+    }
+    
+    // Create separation layer (RegionToShare approach)
+    // Positioned between border and preview in z-order
+    #[cfg(target_os = "windows")]
+    {
+        let separation_color = 0x4682B4; // Steel Blue like RegionToShare
+        if let Some(separation) = SeparationLayer::new(x, y, width as i32, height as i32, separation_color) {
+            *SEPARATION_LAYER.lock().unwrap() = Some(separation);
+            log::info!("✅ Separation layer created (RegionToShare style)");
+        } else {
+            log::warn!("⚠️ Failed to create separation layer");
         }
     }
 
@@ -1952,6 +1970,41 @@ async fn start_capture(
         // Get destination window bounds
         if let Ok(mut dest_lock) = DESTINATION_WINDOW.lock() {
             if let Some(ref mut dest_window) = *dest_lock {
+                // DO NOT exclude preview from screen capture - this causes black screen in Meet/Discord!
+                // We rely on z-order (putting it at bottom) or window filtering to avoid infinite mirror.
+                // dest_window.exclude_from_capture();
+                log::info!("✅ Preview window configured for capture visibility");
+                
+                // RegionToShare approach: Position preview at border location
+                // It will be below separation layer in z-order
+                dest_window.set_pos(x, y);
+                dest_window.resize(width, height);
+                log::info!("✅ Preview positioned at border location: ({}, {}) {}x{}", x, y, width, height);
+                dest_window.disable_masking();
+                
+                // Setup z-order: Preview below separation layer
+                // Get separation layer HWND
+                if let Ok(sep_lock) = SEPARATION_LAYER.lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+                        use windows::Win32::Foundation::HWND;
+                        
+                        let sep_hwnd = HWND(sep.hwnd_value() as *mut _);
+                        let preview_hwnd = HWND(dest_window.hwnd_value() as *mut _);
+                        
+                        // Position preview below separation layer
+                        let _ = unsafe {
+                            SetWindowPos(
+                                preview_hwnd,
+                                Some(sep_hwnd), // Insert below separation layer
+                                0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                            )
+                        };
+                        log::info!("✅ Z-order established: Border → Separation Layer → Preview");
+                    }
+                }
+                
                 if let Some((px, py, pw, ph)) = dest_window.get_rect() {
                     tracing::info!(
                         preview_x = px,
@@ -1962,7 +2015,7 @@ async fn start_capture(
                         capture_y = y,
                         capture_width = width,
                         capture_height = height,
-                        "Checking preview/capture region overlap for cursor filtering"
+                        "Preview positioned at border for RegionToShare approach"
                     );
                     
                     // Check overlap for cursor filtering
@@ -2014,6 +2067,17 @@ async fn start_capture(
                 width,
                 height
             );
+            
+            // Update separation layer (RegionToShare approach)
+            // Now safe to do directly because it uses SWP_ASYNCWINDOWPOS and a dedicated message loop
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        sep.update_position(x, y, width, height);
+                    }
+                }
+            }
             
             // Emit region update to frontend  
             if let Err(e) = app_for_cb.emit("region-changed", serde_json::json!({
@@ -2091,7 +2155,13 @@ async fn start_capture(
                         }
 
                         // Get current capture monitor origin
-                        let mut engine = engine_for_cb.lock().unwrap();
+                        let mut engine = match engine_for_cb.try_lock() {
+                            Ok(e) => e,
+                            Err(e) => {
+                                log::error!("❌ Failed to lock capture engine during border move: {:?}", e);
+                                return;
+                            }
+                        };
                         let needs_restart = if let Some(ref eng) = *engine {
                             // Check if we have a WindowsCaptureEngine with monitor_origin
                             if let Some(wce) = eng
@@ -2144,7 +2214,13 @@ async fn start_capture(
                             drop(engine);
 
                             // Same monitor - just update region
-                            let mut engine = engine_for_cb.lock().unwrap();
+                            let mut engine = match engine_for_cb.try_lock() {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    log::error!("❌ Failed to lock capture engine for region update: {:?}", e);
+                                    return;
+                                }
+                            };
                             if let Some(ref mut eng) = *engine {
                                 let new_region = crate::CaptureRect {
                                     x: x + border_offset,
@@ -2175,7 +2251,13 @@ async fn start_capture(
                 #[cfg(target_os = "macos")]
                 {
                     // macOS: Check if border moved to different display
-                    let mut engine = engine_for_cb.lock().unwrap();
+                    let mut engine = match engine_for_cb.try_lock() {
+                        Ok(e) => e,
+                        Err(e) => {
+                            log::error!("❌ Failed to lock capture engine (macOS): {:?}", e);
+                            return;
+                        }
+                    };
                     let needs_restart = if let Some(ref eng) = *engine {
                         if let Some(macos_eng) =
                             eng.as_any()
@@ -2260,7 +2342,13 @@ async fn start_capture(
                         drop(engine);
 
                         // Same monitor - just update region
-                        let mut engine = engine_for_cb.lock().unwrap();
+                        let mut engine = match engine_for_cb.try_lock() {
+                            Ok(e) => e,
+                            Err(e) => {
+                                log::error!("❌ Failed to lock capture engine for region update (macOS): {:?}", e);
+                                return;
+                            }
+                        };
                         if let Some(ref mut eng) = *engine {
                             let new_region = crate::CaptureRect {
                                 x: x + border_offset,
@@ -2287,7 +2375,13 @@ async fn start_capture(
                 #[cfg(not(target_os = "macos"))]
                 {
                     // Linux and other platforms: just update region
-                    let mut engine = engine_for_cb.lock().unwrap();
+                    let mut engine = match engine_for_cb.try_lock() {
+                        Ok(e) => e,
+                        Err(e) => {
+                            log::error!("❌ Failed to lock capture engine (Linux): {:?}", e);
+                            return;
+                        }
+                    };
                     if let Some(ref mut eng) = *engine {
                         let new_region = crate::CaptureRect {
                             x: x + border_offset,
@@ -2310,7 +2404,7 @@ async fn start_capture(
                     drop(engine);
                 }
             }
-
+            
             // Resize destination window
             log::info!(
                 "🔄 Attempting to resize destination window to {}x{} pixels...",
@@ -2318,103 +2412,17 @@ async fn start_capture(
                 inner_height
             );
             
-            // Check for overlap and move preview window if needed
+            // Windows: Resize preview and position at border location (not off-screen!)
+            // RegionToShare approach: Preview is visible to capture but below separation layer
             #[cfg(target_os = "windows")]
             {
                 if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(ref mut dest) = *dest_lock {
-                        // 1. Get current rect BEFORE resize for collision detection
-                        if let Some((px, py, pw, ph)) = dest.get_rect() {
-                            // Get all monitors
-                            let monitors_lock = monitors_for_cb.lock().unwrap();
-                            let monitors = monitors_lock.clone();
-                            drop(monitors_lock);
-                            
-                            // Check if preview is out of monitor bounds
-                            let mut out_of_bounds = true;
-                            for monitor in monitors.iter() {
-                                let mx = monitor.x;
-                                let my = monitor.y;
-                                let mw = monitor.width as i32;
-                                let mh = monitor.height as i32;
-                                
-                                // Check if preview is within this monitor
-                                if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
-                                    out_of_bounds = false;
-                                    break;
-                                }
-                            }
-                            
-                            // RELEASE MODE ONLY: Collision detection and snap-to-border
-                            // Prevents cursor position issues when preview overlaps border
-                            #[cfg(not(debug_assertions))]
-                            {
-                                // Check collision and snap if needed
-                                log::debug!("Collision detection enabled");
-                                    
-                                    // Check intersection with NEW border dimensions (after resize)
-                                    let intersect = !(x >= px + (inner_width as i32) || px >= x + width || 
-                                                     y >= py + (inner_height as i32) || py >= y + height);
-                                    
-                                    if intersect || out_of_bounds {
-                                        if intersect {
-                                            log::info!("⚠️ COLLISION DETECTED - Snapping preview to border position");
-                                        }
-                                        if out_of_bounds {
-                                            log::info!("⚠️ Preview out of bounds - Snapping to border position");
-                                        }
-                                        
-                                        // SOLUTION: Snap preview window to border position (same x, y, width, height)
-                                        // This eliminates coordinate transformation issues and prevents double cursor
-                                        dest.resize(inner_width as u32, inner_height as u32);
-                                        dest.set_pos(x, y);
-                                        
-                                        // Disable cursor in capture to prevent double cursor (border + preview)
-                                        if let Ok(mut engine_lock) = engine_for_cb.try_lock() {
-                                            if let Some(ref mut eng) = *engine_lock {
-                                                if let Err(e) = eng.set_cursor_visible(false) {
-                                                    log::warn!("Failed to disable cursor: {}", e);
-                                                } else {
-                                                    log::info!("✅ Cursor disabled (preview snapped to border)");
-                                                }
-                                            }
-                                        }
-                                        
-                                        log::info!("✅ Preview snapped to border: ({}, {}) {}x{}", x, y, inner_width, inner_height);
-                                    } else {
-                                        // No collision - resize normally and ensure cursor is enabled
-                                        dest.resize(inner_width as u32, inner_height as u32);
-                                        
-                                        // Re-enable cursor if it was disabled
-                                        if let Ok(mut engine_lock) = engine_for_cb.try_lock() {
-                                            if let Some(ref mut eng) = *engine_lock {
-                                                // Get original show_cursor setting from settings
-                                                let settings_lock = settings_for_cb.lock().unwrap();
-                                                let should_show_cursor = settings_lock.show_cursor;
-                                                drop(settings_lock);
-                                                
-                                                if let Err(e) = eng.set_cursor_visible(should_show_cursor) {
-                                                    log::warn!("Failed to restore cursor state: {}", e);
-                                                }
-                                            }
-                                        }
-                                        
-                                        log::info!("✅ Preview resized (no collision): {}x{}", inner_width, inner_height);
-                                    }
-                            }
-                            
-                            // DEBUG MODE: Simple resize without collision detection
-                            #[cfg(debug_assertions)]
-                            {
-                                dest.resize(inner_width as u32, inner_height as u32);
-                                log::info!("✅ Preview resized (debug mode - no collision check): {}x{}", inner_width, inner_height);
-                            }
-                        }
-                    } else {
-                        log::warn!("⚠️ Destination window is None!");
+                        dest.resize(inner_width as u32, inner_height as u32);
+                        dest.set_pos(x, y);
+                        log::info!("✅ Preview resized and positioned at border: {}x{} at ({}, {})", 
+                            inner_width, inner_height, x, y);
                     }
-                } else {
-                    log::warn!("⚠️ Could not lock DESTINATION_WINDOW!");
                 }
             }
             
@@ -2477,6 +2485,22 @@ async fn start_capture(
 
             if !should_update {
                 return;
+            }
+
+            // Update Separation Layer position (maintains z-order)
+            #[cfg(target_os = "windows")]
+            if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                if let Some(ref sep) = *sep_lock {
+                    sep.update_position(x, y, width, height);
+                }
+            }
+
+            // Update Destination Window position (smooth follow)
+            #[cfg(target_os = "windows")]
+            if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                if let Some(ref dest) = *dest_lock {
+                    dest.set_position_and_size(x, y, width, height);
+                }
             }
 
             // Update REC indicator position in real-time during drag (fixed: re-enabled)
@@ -2781,6 +2805,14 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     tracing::debug!("Clearing DESTINATION_WINDOW");
     *DESTINATION_WINDOW.lock().unwrap() = None;
     
+    // Clean up separation layer (RegionToShare approach)
+    #[cfg(target_os = "windows")]
+    {
+        tracing::debug!("Clearing SEPARATION_LAYER");
+        *SEPARATION_LAYER.lock().unwrap() = None;
+        log::info!("Separation layer cleared");
+    }
+    
     // Clear cursor filtering on capture stop
     #[cfg(target_os = "windows")]
     {
@@ -2824,6 +2856,12 @@ async fn cleanup_on_capture_failed(state: State<'_, AppState>) -> Result<(), Str
     *PREVIEW_BORDER.lock().unwrap() = None;
     *DESTINATION_WINDOW.lock().unwrap() = None;
     *REC_INDICATOR.lock().unwrap() = None;
+    
+    // Clean up separation layer (RegionToShare approach)
+    #[cfg(target_os = "windows")]
+    {
+        *SEPARATION_LAYER.lock().unwrap() = None;
+    }
 
     // Clear click capture data
     platform::input::clear_clicks();
