@@ -792,6 +792,23 @@ impl DestinationWindow {
         }
     }
 
+    /// Get current window position and size (x, y, width, height)
+    pub fn get_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        unsafe {
+            let frame: NSRect = msg_send![self.window, frame];
+            let screen_frame: NSRect = msg_send![self.window, screen];
+            let screen_height = screen_frame.size.height;
+
+            // Convert from bottom-left origin to top-left origin
+            let x = frame.origin.x as i32;
+            let y = (screen_height - frame.origin.y - frame.size.height) as i32;
+            let width = frame.size.width as i32;
+            let height = frame.size.height as i32;
+
+            Some((x, y, width, height))
+        }
+    }
+
     /// Get the macOS CGWindowID for this window (used for filtering in capture engine)
     pub fn get_window_id(&self) -> u32 {
         extern "C" fn get_window_id_on_main_thread(ctx_ptr: *mut std::ffi::c_void) -> u32 {
@@ -907,5 +924,21 @@ impl PreviewWindow for DestinationWindow {
 
     fn set_pos(&mut self, x: i32, y: i32) {
         self.set_pos(x, y);
+    }
+
+    fn send_to_back(&self) {
+        // macOS: orderBack moves window behind all others at the same level
+        unsafe {
+            let _: () = msg_send![self.window, orderBack: nil];
+        }
+        tracing::debug!("macOS destination window sent to back");
+    }
+
+    fn bring_to_front(&self) {
+        // macOS: orderFront brings window to front
+        unsafe {
+            let _: () = msg_send![self.window, orderFront: nil];
+        }
+        tracing::debug!("macOS destination window brought to front");
     }
 }

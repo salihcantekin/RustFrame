@@ -36,7 +36,9 @@ RustFrame lets you capture and share a specific region of your screen in video c
 1. **Launch RustFrame** → UI window opens
 2. **Configure region (optional)** → Settings → Capture Region (use preview border)
 3. **Start capture** → Click "Start Capture"
-4. **Share** → In your video call, select "RustFrame Preview" window
+4. **Share** → In your video call, select "RustFrame - Share This Window"
+
+**Note**: The preview window is positioned at the bottom-right corner of your screen and sent to the back (z-order) to minimize interference. It remains fully visible to screen sharing applications (Discord, Meet, Zoom, Teams) while being unobtrusive to your workflow.
 
 → See [Quick Start Guide](docs/user-guide/quick-start.md) for detailed walkthrough
 

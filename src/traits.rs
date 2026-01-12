@@ -105,4 +105,11 @@ pub trait PreviewWindow: Send + Sync {
 
     /// Move window to new position
     fn set_pos(&mut self, x: i32, y: i32);
+
+    /// Send window to back (HWND_BOTTOM on Windows) for screen sharing compatibility
+    /// Keeps window visible but at lowest z-order
+    fn send_to_back(&self);
+
+    /// Bring window to front (for debugging or special cases)
+    fn bring_to_front(&self);
 }

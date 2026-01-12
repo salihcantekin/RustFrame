@@ -1444,7 +1444,7 @@ fn show_preview_border(
     let mut preview = PREVIEW_BORDER.lock().map_err(|e| e.to_string())?;
 
     // If preview border already exists, just update it
-    if let Some(border) = preview.as_ref() {
+    if let Some(border) = preview.as_mut() {
         border.update_rect(x, y, width, height);
         border.update_style(border_width, border_color);
         border.set_preview_mode();

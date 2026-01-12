@@ -296,6 +296,59 @@ impl DestinationWindow {
             );
         }
     }
+
+    /// Send window to back (HWND_BOTTOM) for screen sharing compatibility
+    /// This keeps the window visible and on-screen but at the lowest z-order,
+    /// making it less intrusive while remaining detectable by screen sharing apps
+    pub fn send_to_back(&self) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SWP_SHOWWINDOW, HWND_BOTTOM};
+
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val == 0 {
+            return;
+        }
+
+        unsafe {
+            let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+            // HWND_BOTTOM places window at the bottom of the z-order
+            // but still keeps it visible and capturable
+            let result = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+            );
+            
+            if result.is_ok() {
+                tracing::debug!("Preview window sent to back (HWND_BOTTOM) for screen sharing");
+            } else {
+                tracing::warn!("Failed to send window to back");
+            }
+        }
+    }
+
+    /// Bring window to front (for debugging or special cases)
+    pub fn bring_to_front(&self) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, HWND_TOP};
+
+        let hwnd_val = self.hwnd_value();
+        if hwnd_val == 0 {
+            return;
+        }
+
+        unsafe {
+            let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOP,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            );
+            tracing::debug!("Preview window brought to front");
+        }
+    }
 }
 
 impl Drop for DestinationWindow {
@@ -389,10 +442,11 @@ fn run_window_thread(
         let (x_pos, y_pos) = {
             let screen_width = GetSystemMetrics(SM_CXSCREEN);
             let screen_height = GetSystemMetrics(SM_CYSCREEN);
-            // Position at bottom-right, above taskbar
+            // Position at bottom-right corner (visible but unobtrusive)
+            // Window stays on-screen for DWM composition and screen sharing detection
             (
-                screen_width - width as i32 - 20,
-                screen_height - height as i32 - 80,
+                screen_width - width as i32 - 10,
+                screen_height - height as i32 - 60,
             )
         };
 
@@ -430,9 +484,9 @@ fn run_window_thread(
         #[cfg(not(debug_assertions))]
         let ex_style = {
             let layered = config.layered.unwrap_or(true);
-            let click_through = config.click_through.unwrap_or(true);
-            let toolwindow = config.toolwindow.unwrap_or(true);
-            let appwindow = config.appwindow.unwrap_or(false);
+            let click_through = config.click_through.unwrap_or(false); // Default FALSE for screen sharing
+            let toolwindow = config.toolwindow.unwrap_or(false); // Default FALSE - must appear in window lists
+            let appwindow = config.appwindow.unwrap_or(true); // Default TRUE - act as regular app window
 
             let mut style = if noactivate {
                 WS_EX_NOACTIVATE
@@ -474,7 +528,7 @@ fn run_window_thread(
         let hwnd = match CreateWindowExW(
             ex_style,
             CLASS_NAME,
-            w!("RustFrame Preview"),
+            w!("RustFrame - Share This Window"),
             window_style,
             x_pos,
             y_pos,
@@ -501,18 +555,18 @@ fn run_window_thread(
         // Instead, we rely on low opacity and recommend disabling show_cursor to avoid recursive capture
         // when preview window overlaps capture region
 
-        // In release mode, set very low opacity (1/255 = 0.4%) to make window nearly invisible
-        // The window is still rendered and should be capturable by screen sharing apps
+        // In release mode, set opacity for screen sharing visibility
+        // Alpha = 255 (fully opaque) ensures screen sharing apps can detect and capture the window
+        // Window is positioned at bottom-right corner (on-screen but unobtrusive)
         #[cfg(not(debug_assertions))]
         {
             if config.layered.unwrap_or(true) {
-                // Alpha value 0 = fully transparent.
-                // Some apps treat fully transparent windows specially, but many window-share flows still capture it.
-                // You can override this via settings.json.
-                let alpha = config.alpha.unwrap_or(0);
+                // Alpha default = 255 (fully opaque) for screen sharing compatibility
+                // Can be overridden via settings.json if needed
+                let alpha = config.alpha.unwrap_or(255);
                 let result = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
                 if result.is_ok() {
-                    tracing::debug!(alpha, "Window alpha set");
+                    tracing::debug!(alpha, "Window alpha set for screen sharing visibility");
                 } else {
                     tracing::warn!("Failed to set window transparency");
                 }
@@ -521,6 +575,26 @@ fn run_window_thread(
 
         WINDOW_THREAD_RUNNING.store(true, Ordering::SeqCst);
         tracing::info!(hwnd = ?hwnd, "Destination window created");
+
+        // Send window to back (HWND_BOTTOM) for screen sharing compatibility
+        // This keeps the window visible and on-screen but at the lowest z-order,
+        // making it less intrusive while remaining detectable by screen sharing apps
+        #[cfg(not(debug_assertions))]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM;
+            let result = SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            
+            if result.is_ok() {
+                tracing::info!("Preview window sent to back (HWND_BOTTOM) for screen sharing");
+            } else {
+                tracing::warn!("Failed to send window to back");
+            }
+        }
 
         // Initialize DirectX 11 renderer for GPU-accelerated presentation
         // Attempt to create renderer, but continue if it fails (fallback to GDI)
