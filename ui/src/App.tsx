@@ -107,6 +107,17 @@ function App() {
   const [activeProfileHints, setActiveProfileHints] = useState<CaptureProfileHints | null>(null);
   const [showProfileInfo, setShowProfileInfo] = useState(false); // Tooltip state
   const [showShareModeModal, setShowShareModeModal] = useState(false);
+  const [taskbarHideCountdown, setTaskbarHideCountdown] = useState<number | null>(null);
+
+  // Countdown timer for taskbar hiding
+  useEffect(() => {
+    if (taskbarHideCountdown !== null && taskbarHideCountdown > 0) {
+      const timer = setTimeout(() => {
+        setTaskbarHideCountdown((prev) => (prev !== null && prev > 1 ? prev - 1 : null));
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [taskbarHideCountdown]);
 
   const normalizeSettings = (input: Settings): Settings => {
     const wf = input.window_filter;
@@ -339,6 +350,11 @@ function App() {
       });
       setIsCapturing(true);
       console.log("Capture started successfully!");
+      
+      // Start countdown if applicable
+      if (activeProfileHints?.hide_taskbar_after_ms && activeProfileHints.hide_taskbar_after_ms >= 1000) {
+          setTaskbarHideCountdown(Math.ceil(activeProfileHints.hide_taskbar_after_ms / 1000));
+      }
     } catch (error) {
       console.error("Failed to start capture:", error);
       
@@ -354,13 +370,13 @@ function App() {
       let userMessage = "Failed to start capture. ";
       
       // Platform-specific error hints
-      if (platformInfo?.os === "macos") {
+      if (platformInfo?.os_type === "macos") {
         if (errorMsg.toLowerCase().includes("permission") || errorMsg.toLowerCase().includes("denied")) {
           userMessage += "Please grant Screen Recording and Accessibility permissions in System Settings > Privacy & Security. Then restart RustFrame.";
         } else {
           userMessage += "Check System Settings > Privacy & Security for Screen Recording permission. See logs for details.";
         }
-      } else if (platformInfo?.os === "windows") {
+      } else if (platformInfo?.os_type === "windows") {
         if (errorMsg.toLowerCase().includes("permission") || errorMsg.toLowerCase().includes("access")) {
           userMessage += "Check Windows permissions or try running as Administrator. See logs for details."; } else {
           userMessage += "Try restarting the application. See logs for details.";
@@ -699,7 +715,14 @@ function App() {
                 </button>
                 
                 {isCapturing && (
-                  <span className="text-xs text-gray-400 animate-pulse">Press to stop recording</span>
+                  <div className="flex flex-col items-center mt-2 space-y-1">
+                    <span className="text-xs text-gray-400 animate-pulse">Press to stop recording</span>
+                    {taskbarHideCountdown !== null && (
+                      <span className="text-xs text-yellow-500 font-bold animate-pulse" style={{ animationDuration: '0.8s' }}>
+                        Preview hiding in {taskbarHideCountdown}...
+                      </span>
+                    )}
+                  </div>
                 )}
 
                 {/* Share filter info moved to Quick Settings tile + modal */}

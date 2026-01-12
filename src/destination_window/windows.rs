@@ -73,6 +73,8 @@ struct GpuTextureData {
     crop_y: i32,
     crop_width: u32,
     crop_height: u32,
+    // Click data: x, y, radius, alpha, color([r,g,b,a])
+    click_data: Option<(f32, f32, f32, f32, [f32; 4])>,
 }
 
 impl Drop for GpuTextureData {
@@ -219,6 +221,7 @@ impl DestinationWindow {
         crop_y: i32,
         crop_width: u32,
         crop_height: u32,
+        click_data: Option<(f32, f32, f32, f32, [f32; 4])>,
     ) {
         debug!(
             "update_frame_from_texture: {}x{} at ({}, {}), ptr=0x{:X}",
@@ -233,6 +236,7 @@ impl DestinationWindow {
                 crop_y,
                 crop_width,
                 crop_height,
+                click_data,
             });
         }
 
@@ -800,12 +804,18 @@ unsafe extern "system" fn window_proc(
                                 "WM_PAINT: Calling render_texture with crop {}x{} at ({}, {})",
                                 data.crop_width, data.crop_height, data.crop_x, data.crop_y
                             );
-                            match r.render_texture(
-                                data.texture_ptr,
-                                data.crop_x,
-                                data.crop_y,
-                                data.crop_width,
-                                data.crop_height,
+                            debug!(
+                                "WM_PAINT: Calling render_frame with crop {}x{} at ({}, {})",
+                                data.crop_width, data.crop_height, data.crop_x, data.crop_y
+                            );
+                            
+                            // Default to "no click" if none provided (alpha 0)
+                            let click_params = data.click_data.unwrap_or((0.0, 0.0, 0.0, 0.0, [0.0; 4]));
+                            
+                            match r.render_frame(
+                                data.texture_ptr, 
+                                (data.crop_x, data.crop_y, data.crop_width, data.crop_height),
+                                click_params
                             ) {
                                 Ok(_) => {
                                     gpu_rendered = true;

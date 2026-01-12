@@ -205,6 +205,8 @@ fn perform_cleanup() {
         }
     }
 
+
+
     // Clear click capture data
     platform::input::clear_clicks();
     tracing::debug!("Click capture data cleared");
@@ -2588,69 +2590,80 @@ async fn start_capture(
                 let gpu_enabled = settings_clone.lock().unwrap().gpu_acceleration;
                 let use_gpu = gpu_enabled && frame.gpu_texture.is_some();
 
-                // Overlay click highlights if enabled
-                let has_clicks = if capture_clicks {
-                    // Get display info for coordinate conversion
-                    let display_info = display_info::get();
-
-                    // frame.offset_x/y are in points, but clicks are stored in pixels
-                    // Convert to pixels using centralized display info
-                    let offset_x_pixels = display_info.points_to_pixels(frame.offset_x as f64);
-                    let offset_y_pixels = display_info.points_to_pixels(frame.offset_y as f64);
-                    let width_pixels = display_info.points_to_pixels(frame.width as f64) as u32;
-                    let height_pixels = display_info.points_to_pixels(frame.height as f64) as u32;
-
-                    // Use frame's offset for accurate click detection
-                    // frame.offset_x/y tell us where the frame starts in screen coordinates
-                    // This handles clipped regions correctly
-                    let clicks = platform::input::get_recent_clicks(
-                        offset_x_pixels,
-                        offset_y_pixels,
-                        width_pixels,
-                        height_pixels,
-                        click_dissolve_ms,
-                    );
-
-                    if !clicks.is_empty() {
-                        for click in clicks {
-                            // Convert screen coordinates (pixels) to frame coordinates (pixels)
-                            // Frame buffer is already in pixels, so direct subtraction
-                            let frame_x = click.x - offset_x_pixels;
-                            let frame_y = click.y - offset_y_pixels;
-
-                            // Draw click highlight circle (fading based on age)
-                            let age_ms = click.timestamp.elapsed().as_millis() as f32;
-                            let alpha_factor = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
-
-                            // Scale radius for display (frame buffer is in pixels)
-                            let scaled_radius = display_info.points_to_pixels(click_radius as f64);
-
-                            draw_click_highlight(
-                                &mut frame.data,
-                                frame.width as i32,
-                                frame.height as i32,
-                                frame_x,
-                                frame_y,
-                                click_color,
-                                alpha_factor,
-                                scaled_radius,
-                            );
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(window) = dest_lock.as_ref() {
-                        // GPU path: Use IOSurface for cropped rendering (if no clicks to draw)
-                        // CPU path: Use regular frame data (required for click highlights)
+                        // Gather click data if enabled
+                        let mut click_shader_data = None;
+                        
+                        if capture_clicks {
+                            let display_info = display_info::get();
+                            
+                            // Convert frame offset to pixels
+                            let offset_x_pixels = display_info.points_to_pixels(frame.offset_x as f64);
+                            let offset_y_pixels = display_info.points_to_pixels(frame.offset_y as f64);
+                            let width_pixels = display_info.points_to_pixels(frame.width as f64) as u32;
+                            let height_pixels = display_info.points_to_pixels(frame.height as f64) as u32;
+
+                            let clicks = platform::input::get_recent_clicks(
+                                offset_x_pixels,
+                                offset_y_pixels,
+                                width_pixels,
+                                height_pixels,
+                                click_dissolve_ms,
+                            );
+
+                            if !clicks.is_empty() {
+                                // For GPU shader, we currently support only one active click (the most recent one)
+                                // or we could blend them if we upgraded the shader.
+                                // For now, picking the latest one is a good 80/20 solution.
+                                if let Some(latest_click) = clicks.last() {
+                                    let age_ms = latest_click.timestamp.elapsed().as_millis() as f32;
+                                    let alpha_factor = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
+                                    let scaled_radius = display_info.points_to_pixels(click_radius as f64);
+                                    
+                                    // Convert absolute pixels to frame-relative pixels
+                                    let frame_x = latest_click.x as f32 - offset_x_pixels as f32;
+                                    let frame_y = latest_click.y as f32 - offset_y_pixels as f32;
+                                    
+                                    // Normalize color to 0.0-1.0 (assuming RGBA from settings)
+                                    let c = click_color;
+                                    let r = c[0] as f32 / 255.0;
+                                    let g = c[1] as f32 / 255.0;
+                                    let b = c[2] as f32 / 255.0;
+                                    let a = c[3] as f32 / 255.0;
+                                    
+                                    click_shader_data = Some((frame_x, frame_y, scaled_radius as f32, alpha_factor, [r, g, b, a]));
+                                }
+
+                                // For CPU fallback, we still need to draw all clicks
+                                // ONLY if GPU is NOT used.
+                                if !use_gpu {
+                                    for click in clicks {
+                                        let frame_x = click.x - offset_x_pixels;
+                                        let frame_y = click.y - offset_y_pixels;
+                                        let age_ms = click.timestamp.elapsed().as_millis() as f32;
+                                        let alpha = 1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
+                                        let radius = display_info.points_to_pixels(click_radius as f64);
+
+                                        draw_click_highlight(
+                                            &mut frame.data,
+                                            frame.width as i32,
+                                            frame.height as i32,
+                                            frame_x,
+                                            frame_y,
+                                            click_color,
+                                            alpha,
+                                            radius,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // GPU path: Use IOSurface/Texture (if available) with optional click data
                         #[cfg(target_os = "macos")]
                         {
-                            if use_gpu && !has_clicks {
+                            if use_gpu {
                                 if let Some(rustframe_capture::capture::GpuTextureHandle::Metal {
                                     iosurface_ptr,
                                     crop_x,
@@ -2671,14 +2684,13 @@ async fn start_capture(
                                     window.update_frame(frame.data, frame.width, frame.height);
                                 }
                             } else {
-                                // Fall back to CPU rendering when clicks need to be drawn
                                 window.update_frame(frame.data, frame.width, frame.height);
                             }
                         }
 
                         #[cfg(target_os = "windows")]
                         {
-                            if use_gpu && !has_clicks {
+                            if use_gpu {
                                 if let Some(rustframe_capture::capture::GpuTextureHandle::D3D11 {
                                     texture_ptr,
                                     crop_x,
@@ -2694,12 +2706,13 @@ async fn start_capture(
                                         crop_y,
                                         crop_width,
                                         crop_height,
+                                        click_shader_data,
                                     );
                                 } else {
                                     window.update_frame(frame.data, frame.width, frame.height);
                                 }
                             } else {
-                                // Fall back to CPU rendering when clicks need to be drawn
+                                // Fall back to CPU rendering
                                 window.update_frame(frame.data, frame.width, frame.height);
                             }
                         }
