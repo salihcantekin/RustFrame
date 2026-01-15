@@ -360,13 +360,13 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // Note: Removed setBecomesKeyOnlyIfNeeded to allow immediate key window activation
         let _: () = msg_send![window, setWorksWhenModal: YES];
 
-        // CRITICAL: Use NORMAL level (0) for proper z-order with other windows
-        // Level 3 (floating) puts border above everything and breaks orderFront/orderBack
-        // All 3 windows (border, separation, preview) MUST be at level 0 for z-order restoration to work
-        const NS_NORMAL_WINDOW_LEVEL: i32 = 0;
-        let _: () = msg_send![window, setLevel: NS_NORMAL_WINDOW_LEVEL];
+        // CRITICAL: Border MUST be at floating level (3) - ALWAYS ON TOP like Windows TOPMOST
+        // This ensures user windows CANNOT cover the border (matching Windows behavior)
+        // Level 3 = NSFloatingWindowLevel - floats above normal windows
+        const NS_FLOATING_WINDOW_LEVEL: i32 = 3;
+        let _: () = msg_send![window, setLevel: NS_FLOATING_WINDOW_LEVEL];
 
-        // CRITICAL: Collection behavior MUST match destination and separation windows
+        // CRITICAL: Collection behavior for border window
         // - MANAGED (1 << 2): Participates in window management
         // - MOVE_TO_ACTIVE_SPACE (1 << 1): Moves with active space (hides on desktop view)
         // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows  

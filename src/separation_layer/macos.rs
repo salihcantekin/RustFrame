@@ -153,14 +153,27 @@ impl SeparationLayer {
                 let screen_frame: NSRect = msg_send![screen, frame];
                 let screen_height = screen_frame.size.height;
                 
+                log::debug!("[SepLayer] Input: ({}, {}) {}x{}, screen_height: {}", 
+                    ctx.x, ctx.y, ctx.width, ctx.height, screen_height);
+                
                 // Convert y from top-left to bottom-left origin
                 let cocoa_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
+                
+                log::debug!("[SepLayer] Converted cocoa_y: {} (from top-left y: {})", 
+                    cocoa_y, ctx.y);
                 
                 let new_frame = NSRect::new(
                     NSPoint::new(ctx.x as f64, cocoa_y),
                     NSSize::new(ctx.width as f64, ctx.height as f64),
                 );
                 let _: () = msg_send![ctx.window, setFrame:new_frame display:NO animate:NO];
+                
+                // Verify the frame was actually set
+                let actual_frame: NSRect = msg_send![ctx.window, frame];
+                log::debug!("[SepLayer] Actual frame after setFrame: origin=({}, {}), size=({}, {})",
+                    actual_frame.origin.x, actual_frame.origin.y, 
+                    actual_frame.size.width, actual_frame.size.height);
+                
                 // NOTE: Do NOT call orderOut/orderBack here - causes flashing!
                 // Z-order is restored separately in callback when interaction completes
             }

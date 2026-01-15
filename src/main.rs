@@ -1572,21 +1572,22 @@ fn restore_window_z_order_macos() {
         let ctx = unsafe { &*(ctx_ptr as *const ZOrderContext) };
         
         unsafe {
-            // CRITICAL Z-Order (from back to front): Preview → Separation → Border
+            // CRITICAL Z-Order at level 0 (from back to front): Preview → Separation → User Windows
+            // Border is at level 3 (floating) so it's ALWAYS on top - don't touch it!
             // Do NOT use orderOut - it causes flashing by removing window from screen!
-            // Just use orderBack and orderFront to reorder within the window list
             
-            // Step 1: Send preview/destination to absolute back
+            // Step 1: Send preview/destination to absolute back (level 0)
             let _: () = msg_send![ctx.dest_window, orderBack: cocoa::base::nil];
             
-            // Step 2: Place separation above preview (but still below border and user windows)
-            // Use orderWindow:relativeTo: to position separation just above preview
+            // Step 2: Place separation above preview but still at level 0
+            // orderWindow:1:relativeTo: means "order in front of" the specified window
             let _: () = msg_send![ctx.sep_window, orderWindow: 1 relativeTo: ctx.dest_window];
             
-            // Step 3: Border stays on top for user interaction
-            let _: () = msg_send![ctx.border_window, orderFront: cocoa::base::nil];
+            // Step 3: Border is level 3 - already always on top, NO need to call orderFront
+            // Calling orderFront can cause it to steal focus or flash
+            // let _: () = msg_send![ctx.border_window, orderFront: cocoa::base::nil];
             
-            log::info!("[Z-Order] ✅ Fixed: Border (front) → Separation (middle) → Preview (back)");
+            log::info!("[Z-Order] ✅ Fixed at level 0: Preview (back) → Separation (middle) | Border at level 3 (always on top)");
         }
     }
 
