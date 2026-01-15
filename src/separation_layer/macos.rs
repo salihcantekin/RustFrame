@@ -99,10 +99,8 @@ impl SeparationLayer {
                 // Desktop level windows are filtered by Meet/Zoom/Teams
                 let _: () = msg_send![window, setLevel: NS_NORMAL_WINDOW_LEVEL];
 
-                // CRITICAL: Show window behind ALL user windows
-                // orderOut first to ensure clean state, then orderBack to place at absolute back
-                let _: () = msg_send![window, orderOut: nil];
-                let _: () = msg_send![window, orderBack: nil];
+                // CRITICAL: Window will be positioned and shown via update_position() and show()
+                // Do NOT call orderOut/orderBack here - let z-order restoration handle it
 
                 *ctx.out_window = window;
             }
@@ -162,12 +160,9 @@ impl SeparationLayer {
                     NSPoint::new(ctx.x as f64, cocoa_y),
                     NSSize::new(ctx.width as f64, ctx.height as f64),
                 );
-                let _: () = msg_send![ctx.window, setFrame:new_frame display:YES animate:NO];
-                
-                // CRITICAL: Keep window behind ALL user apps (not just in same layer)
-                // orderOut first to remove from any existing order, then orderBack to ensure proper layering
-                let _: () = msg_send![ctx.window, orderOut: nil];
-                let _: () = msg_send![ctx.window, orderBack: nil];
+                let _: () = msg_send![ctx.window, setFrame:new_frame display:NO animate:NO];
+                // NOTE: Do NOT call orderOut/orderBack here - causes flashing!
+                // Z-order is restored separately in callback when interaction completes
             }
         }
 
@@ -199,7 +194,8 @@ impl SeparationLayer {
             extern "C" fn show_on_main(window_ptr: *mut std::ffi::c_void) {
                 unsafe {
                     let window = window_ptr as id;
-                    let _: () = msg_send![window, orderFront: nil];
+                    // CRITICAL: Do NOT use orderOut - causes flashing!
+                    // Just order to back to ensure proper layering
                     let _: () = msg_send![window, orderBack: nil];
                 }
             }
@@ -244,6 +240,23 @@ impl SeparationLayer {
     /// Get raw NSWindow pointer for z-order operations
     pub fn get_window(&self) -> id {
         self.window
+    }
+
+    /// Get current window position and size for debugging/verification
+    pub fn get_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        unsafe {
+            let frame: NSRect = msg_send![self.window, frame];
+            let screen: id = msg_send![class!(NSScreen), mainScreen];
+            let screen_frame: NSRect = msg_send![screen, frame];
+            let screen_height = screen_frame.size.height;
+
+            let x = frame.origin.x as i32;
+            let y = (screen_height - frame.origin.y - frame.size.height) as i32;
+            let width = frame.size.width as i32;
+            let height = frame.size.height as i32;
+
+            Some((x, y, width, height))
+        }
     }
 }
 

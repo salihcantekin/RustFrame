@@ -360,15 +360,22 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // Note: Removed setBecomesKeyOnlyIfNeeded to allow immediate key window activation
         let _: () = msg_send![window, setWorksWhenModal: YES];
 
-        // Set window level to floating (3) - always on top
-        let _: () = msg_send![window, setLevel: 3i32];
+        // CRITICAL: Use NORMAL level (0) for proper z-order with other windows
+        // Level 3 (floating) puts border above everything and breaks orderFront/orderBack
+        // All 3 windows (border, separation, preview) MUST be at level 0 for z-order restoration to work
+        const NS_NORMAL_WINDOW_LEVEL: i32 = 0;
+        let _: () = msg_send![window, setLevel: NS_NORMAL_WINDOW_LEVEL];
 
-        // Configure collection behavior to prevent affecting main window
-        // - Stay in all spaces (CanJoinAllSpaces)
-        // - Don't show in Cmd+Tab (IgnoresCycle)
-        // Note: Removed Transient and Stationary to allow main window activation
-        let collection_behavior = (1u64 << 0) | // CanJoinAllSpaces
-            (1u64 << 6); // IgnoresCycle
+        // CRITICAL: Collection behavior MUST match destination and separation windows
+        // - MANAGED (1 << 2): Participates in window management
+        // - MOVE_TO_ACTIVE_SPACE (1 << 1): Moves with active space (hides on desktop view)
+        // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows  
+        // - IGNORES_CYCLE (1 << 6): Hidden from Dock/Cmd+Tab
+        // Do NOT use CAN_JOIN_ALL_SPACES (1 << 0) - it conflicts with MOVE_TO_ACTIVE_SPACE!
+        let collection_behavior = (1u64 << 2) /*managed*/
+            | (1u64 << 1) /*move to active space - CRITICAL for desktop hiding*/
+            | (1u64 << 8) /*full screen auxiliary*/
+            | (1u64 << 6); /*ignores cycle*/
         let _: () = msg_send![window, setCollectionBehavior: collection_behavior];
 
         // Start in click-through mode; capture mode will dynamically enable events on the border.

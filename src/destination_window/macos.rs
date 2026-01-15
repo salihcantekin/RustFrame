@@ -848,12 +848,9 @@ impl DestinationWindow {
                     NSPoint::new(ctx.x as f64, cocoa_y),
                     NSSize::new(ctx.width as f64, ctx.height as f64),
                 );
-                let _: () = msg_send![ctx.window, setFrame:new_frame display:YES animate:NO];
-                
-                // CRITICAL: Keep preview window at absolute back (behind EVERYTHING)
-                // orderOut first to remove from any existing order
-                let _: () = msg_send![ctx.window, orderOut: nil];
-                let _: () = msg_send![ctx.window, orderBack: nil];
+                let _: () = msg_send![ctx.window, setFrame:new_frame display:NO animate:NO];
+                // NOTE: Do NOT call orderOut/orderBack here - causes flashing!
+                // Z-order is restored separately in callback when interaction completes
             }
         }
 

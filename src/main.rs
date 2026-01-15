@@ -1572,24 +1572,21 @@ fn restore_window_z_order_macos() {
         let ctx = unsafe { &*(ctx_ptr as *const ZOrderContext) };
         
         unsafe {
-            // CRITICAL Z-Order: Preview (absolute back) → Separation (behind all windows) → Border (front)
-            // NSWindowOrderingMode: 0 = NSWindowBelow, 1 = NSWindowAbove
+            // CRITICAL Z-Order (from back to front): Preview → Separation → Border
+            // Do NOT use orderOut - it causes flashing by removing window from screen!
+            // Just use orderBack and orderFront to reorder within the window list
             
-            // Step 1: Send preview/destination to absolute back (behind everything)
-            let _: () = msg_send![ctx.dest_window, orderOut: cocoa::base::nil];
+            // Step 1: Send preview/destination to absolute back
             let _: () = msg_send![ctx.dest_window, orderBack: cocoa::base::nil];
             
-            // Step 2: Place separation above preview but still behind all user windows
-            // Use orderWindow:relativeTo: with NSWindowAbove to place it just above preview
-            let _: () = msg_send![ctx.sep_window, orderOut: cocoa::base::nil];
+            // Step 2: Place separation above preview (but still below border and user windows)
+            // Use orderWindow:relativeTo: to position separation just above preview
             let _: () = msg_send![ctx.sep_window, orderWindow: 1 relativeTo: ctx.dest_window];
-            // Then orderBack to ensure it stays behind user windows
-            let _: () = msg_send![ctx.sep_window, orderBack: cocoa::base::nil];
             
             // Step 3: Border stays on top for user interaction
             let _: () = msg_send![ctx.border_window, orderFront: cocoa::base::nil];
             
-            log::info!("[Z-Order] ✅ Restored: Border (front) → User Windows → Separation (middle) → Preview (back)");
+            log::info!("[Z-Order] ✅ Fixed: Border (front) → Separation (middle) → Preview (back)");
         }
     }
 
@@ -2165,39 +2162,49 @@ async fn start_capture(
             {
                 // CRITICAL: All 3 windows MUST have same position and size
                 // Border, Separation, and Preview windows must be synchronized
+                // Only update position during drag, restore z-order once at the end
+                
+                log::info!("📍 Callback received: ({}, {}) {}x{}", x, y, width, height);
                 
                 // Update preview/destination window to match border exactly
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(ref dest) = *dest_lock {
+                        log::info!("  → Updating destination...");
                         dest.update_position(x, y, width as u32, height as u32);
-                        log::info!("✅ Preview window updated: ({}, {}) {}x{}", x, y, width, height);
                     }
                 }
                 
                 // Update separation layer to match border exactly  
                 if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
                     if let Some(ref sep) = *sep_lock {
+                        log::info!("  → Updating separation...");
                         sep.update_position(x, y, width, height);
-                        log::info!("✅ Separation layer updated: ({}, {}) {}x{}", x, y, width, height);
                     }
                 }
 
-                // CRITICAL: Restore z-order after all windows updated
-                // Order: Border (front) → Separation (middle) → Preview (back)
+                // CRITICAL: Restore z-order ONCE after all windows updated (at end of interaction)
+                // This ensures smooth movement without flashing/flickering
+                log::info!("  → Restoring z-order...");
                 restore_window_z_order_macos();
-                log::info!("[Z-Order] ✅ All windows synchronized and z-order restored");
                 
                 // DEBUG: Verify all windows have same position after update
                 if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
                     if let Some(border) = border_lock.as_ref() {
                         let (bx, by, bw, bh) = border.get_rect();
-                        log::info!("  → Border rect after update: ({}, {}) {}x{}", bx, by, bw, bh);
+                        log::info!("  ✓ Border after: ({}, {}) {}x{}", bx, by, bw, bh);
                     }
                 }
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(dest) = dest_lock.as_ref() {
                         if let Some((dx, dy, dw, dh)) = dest.get_rect() {
-                            log::info!("  → Destination rect after update: ({}, {}) {}x{}", dx, dy, dw, dh);
+                            log::info!("  ✓ Destination after: ({}, {}) {}x{}", dx, dy, dw, dh);
+                        }
+                    }
+                }
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(sep) = sep_lock.as_ref() {
+                        if let Some((sx, sy, sw, sh)) = sep.get_rect() {
+                            log::info!("  ✓ Separation after: ({}, {}) {}x{}", sx, sy, sw, sh);
                         }
                     }
                 }
