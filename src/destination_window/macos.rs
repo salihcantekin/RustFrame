@@ -58,7 +58,7 @@ const NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
 const NS_WINDOW_COLLECTION_BEHAVIOR_MOVE_TO_ACTIVE_SPACE: u64 = 1 << 1;
 const NS_WINDOW_COLLECTION_BEHAVIOR_MANAGED: u64 = 1 << 2;
 const NS_WINDOW_COLLECTION_BEHAVIOR_TRANSIENT: u64 = 1 << 3;
-const NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY: u64 = 1 << 4;
+const NS_WINDOW_COLLECTION_BEHAVIOR_STATIONARY: u64 = 1 << 4; // Stays behind user windows like desktop
 const NS_WINDOW_COLLECTION_BEHAVIOR_PARTICIPATES_IN_CYCLE: u64 = 1 << 5;
 const NS_WINDOW_COLLECTION_BEHAVIOR_IGNORES_CYCLE: u64 = 1 << 6;
 const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_PRIMARY: u64 = 1 << 7;
@@ -111,6 +111,8 @@ unsafe impl Sync for DestinationWindow {}
 
 // Context struct for main thread creation
 struct CreateDestWindowContext {
+    x: i32,
+    y: i32,
     width: u32,
     height: u32,
     config: DestinationWindowConfig,
@@ -141,17 +143,14 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
 
         log::info!("[DestWindow] Display backing scale: {}", backing_scale);
 
-        // Create window frame
-        // Position strategy:
-        // - Debug mode: On-screen at (100, 100) for debugging
-        // - Release mode: Off-screen to keep it completely hidden from user
-        //   Note: Off-screen windows are NOT visible in screen sharing pickers (Meet/Zoom)
-        //   but user experience (complete invisibility) is more important
-        let (x_pos, y_pos) = if cfg!(debug_assertions) {
-            (100.0, 100.0)
-        } else {
-            (-10000.0, -10000.0)
-        };
+        // Create window frame at requested position (already in points)
+        // CRITICAL: Convert from top-left to bottom-left origin (Cocoa coordinates)
+        // Use main screen frame (not visibleFrame) to get full screen height including menu bar
+        let screen_frame: NSRect = msg_send![main_screen, frame];
+        let screen_height = screen_frame.size.height;
+        let x_pos = ctx.x as f64;
+        let y_pos_top_left = ctx.y as f64;
+        let y_pos = screen_height - y_pos_top_left - (ctx.height as f64);
 
         // Use dimensions directly as they're already in POINTS
         let width = ctx.width as f64;
@@ -196,12 +195,13 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         // Using CFSTR to avoid NSString lifecycle issues
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
-        let title_cf = CFString::new("RustFrame Preview");
+        let title_cf = CFString::new("Rust - Share This Window");
         let _: () = msg_send![window, setTitle: title_cf.as_concrete_TypeRef()];
 
         // Configure window level based on config
-        // For screen sharing (Meet, Zoom, etc.): Use NORMAL level (0)
-        // Level -1 doesn't work - CGWindowList filters it out
+        // CRITICAL: Use NORMAL window level (0) for screen sharing visibility
+        // Desktop level windows are filtered out by Meet/Zoom/Teams screen capture
+        // Z-order control is done via orderWindow and collection behavior instead
         let use_floating = ctx.config.macos_floating_level.unwrap_or(false);
         let window_level = if use_floating {
             NS_FLOATING_WINDOW_LEVEL
@@ -210,34 +210,38 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         };
 
         log::info!(
-            "Setting window level to {} (floating: {})",
+            "Setting window level to {} (floating: {}, normal for screen sharing)",
             window_level,
             use_floating
         );
         let _: () = msg_send![window, setLevel: window_level];
 
         // Configure NSWindowSharingType for screen capture
-        // NSWindowSharingReadOnly (1) = window can be captured but not controlled
+        // CRITICAL: READ_ONLY (1) so destination window IS visible in Meet/Zoom picker
+        // Separation layer uses NONE (0) to stay hidden
         let sharing_type = ctx
             .config
             .macos_sharing_type
             .unwrap_or(NS_WINDOW_SHARING_READ_ONLY);
-        log::info!("Setting window sharing type to {}", sharing_type);
+        log::info!("Setting window sharing type to {} (READ_ONLY for screen sharing visibility)", sharing_type);
         let _: () = msg_send![window, setSharingType: sharing_type];
 
         // Configure NSWindowCollectionBehavior for window management
         // Key behaviors for screen sharing visibility:
         // - Managed: Participates in Exposé and window management
-        // - CanJoinAllSpaces: Available in all Mission Control spaces
-        // - ParticipatesInCycle: Visible in window cycling (Cmd+Tab, etc.)
+        // - MoveToActiveSpace: Moves with active space (hides on desktop view) - CRITICAL!
+        // - ParticipatesInCycle / IgnoresCycle: Window cycling visibility
         // - FullScreenAuxiliary: Can be shown alongside fullscreen windows
+        // CRITICAL: Do NOT use CAN_JOIN_ALL_SPACES - it keeps window visible on desktop view!
         let collection_behavior =
             if let Some(custom_behavior) = ctx.config.macos_collection_behavior {
                 custom_behavior
             } else {
                 // Default: optimal for screen sharing apps (Meet, Zoom, Discord)
+                // CRITICAL: Do NOT use STATIONARY - that hides window from screen sharing pickers
+                // Use MOVE_TO_ACTIVE_SPACE instead of CAN_JOIN_ALL_SPACES for proper desktop hiding
                 let mut behavior = NS_WINDOW_COLLECTION_BEHAVIOR_MANAGED
-                    | NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES
+                    | NS_WINDOW_COLLECTION_BEHAVIOR_MOVE_TO_ACTIVE_SPACE
                     | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY;
 
                 // ParticipatesInCycle vs IgnoresCycle
@@ -316,17 +320,18 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
         window.setAlphaValue_((window_alpha as f64) / 255.0);
 
         // Show the window
-        if cfg!(debug_assertions) {
-            window.makeKeyAndOrderFront_(nil);
-        } else {
-            let _: () = msg_send![window, orderFront: nil];
-        }
+        // CRITICAL: Place window at absolute back (behind EVERYTHING including desktop)
+        // orderOut first to ensure clean state, then orderBack
+        let _: () = msg_send![window, orderOut: nil];
+        let _: () = msg_send![window, orderBack: nil];
 
         // Log window visibility and position
         let is_visible: BOOL = msg_send![window, isVisible];
         let final_frame: NSRect = msg_send![window, frame];
         log::info!(
-            "Destination window created at ({}, {}) size {}x{} alpha={}",
+            "Destination window created at top-left ({}, {}) -> Cocoa ({}, {}) size {}x{} alpha={}",
+            ctx.x,
+            ctx.y,
             x_pos,
             y_pos,
             width,
@@ -349,8 +354,8 @@ extern "C" fn create_dest_window_on_main_thread(ctx_ptr: *mut std::ffi::c_void) 
 }
 
 impl DestinationWindow {
-    pub fn new(width: u32, height: u32, config: DestinationWindowConfig) -> Option<Self> {
-        log::info!("Creating destination window {}x{}", width, height);
+    pub fn new(x: i32, y: i32, width: u32, height: u32, config: DestinationWindowConfig) -> Option<Self> {
+        log::info!("Creating destination window at ({}, {}) {}x{}", x, y, width, height);
 
         let is_main = unsafe { pthread_main_np() } != 0;
 
@@ -358,6 +363,8 @@ impl DestinationWindow {
         let mut result_view: id = nil;
 
         let mut context = CreateDestWindowContext {
+            x,
+            y,
             width,
             height,
             config,
@@ -391,6 +398,11 @@ impl DestinationWindow {
 
     pub fn hwnd_value(&self) -> isize {
         self.window as isize
+    }
+
+    /// Get raw NSWindow pointer for z-order operations
+    pub fn get_window(&self) -> id {
+        self.window
     }
 
     pub fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
@@ -809,6 +821,63 @@ impl DestinationWindow {
         }
     }
 
+    /// Update window position and size - CRITICAL for keeping all windows synchronized
+    pub fn update_position(&self, x: i32, y: i32, width: u32, height: u32) {
+        #[repr(C)]
+        struct PosCtx {
+            window: id,
+            x: i32,
+            y: i32,
+            width: u32,
+            height: u32,
+        }
+
+        extern "C" fn move_on_main(ctx_ptr: *mut std::ffi::c_void) {
+            unsafe {
+                let ctx = &*(ctx_ptr as *const PosCtx);
+                
+                // macOS uses bottom-left origin, need to convert from top-left
+                let screen: id = msg_send![class!(NSScreen), mainScreen];
+                let screen_frame: NSRect = msg_send![screen, frame];
+                let screen_height = screen_frame.size.height;
+                
+                // Convert y from top-left to bottom-left origin
+                let cocoa_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
+                
+                let new_frame = NSRect::new(
+                    NSPoint::new(ctx.x as f64, cocoa_y),
+                    NSSize::new(ctx.width as f64, ctx.height as f64),
+                );
+                let _: () = msg_send![ctx.window, setFrame:new_frame display:YES animate:NO];
+                
+                // CRITICAL: Keep preview window at absolute back (behind EVERYTHING)
+                // orderOut first to remove from any existing order
+                let _: () = msg_send![ctx.window, orderOut: nil];
+                let _: () = msg_send![ctx.window, orderBack: nil];
+            }
+        }
+
+        let mut ctx = PosCtx {
+            window: self.window,
+            x,
+            y,
+            width,
+            height,
+        };
+
+        unsafe {
+            if pthread_main_np() != 0 {
+                move_on_main(&mut ctx as *mut _ as *mut std::ffi::c_void);
+            } else {
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    &mut ctx as *mut _ as *mut std::ffi::c_void,
+                    move_on_main,
+                );
+            }
+        }
+    }
+
     /// Get the macOS CGWindowID for this window (used for filtering in capture engine)
     pub fn get_window_id(&self) -> u32 {
         extern "C" fn get_window_id_on_main_thread(ctx_ptr: *mut std::ffi::c_void) -> u32 {
@@ -899,11 +968,11 @@ impl Drop for DestinationWindow {
 impl PreviewWindow for DestinationWindow {
     type Config = DestinationWindowConfig;
 
-    fn new(width: u32, height: u32, config: Self::Config) -> Option<Self>
+    fn new(x: i32, y: i32, width: u32, height: u32, config: Self::Config) -> Option<Self>
     where
         Self: Sized,
     {
-        DestinationWindow::new(width, height, config)
+        DestinationWindow::new(x, y, width, height, config)
     }
 
     fn hwnd_value(&self) -> isize {

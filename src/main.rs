@@ -30,7 +30,6 @@ use hollow_border::HollowBorder;
 use platform::window_enumerator::{self, AvailableApp};
 use rec_indicator::RecIndicator;
 use separation_layer::SeparationLayer;
-use traits::PreviewWindow;
 
 // Global state for Windows (not thread-safe, but only accessed from commands)
 lazy_static! {
@@ -154,6 +153,14 @@ fn auto_reposition_preview_if_needed(
                     
                     dest_window.set_pos(new_x, new_y);
                     tracing::info!("Preview repositioned to ({}, {})", new_x, new_y);
+
+                    // Keep separation layer aligned with preview when present
+                    #[cfg(any(target_os = "windows", target_os = "macos"))]
+                    if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                        if let Some(ref sep) = *sep_lock {
+                            sep.update_position(new_x, new_y, pw, ph);
+                        }
+                    }
                 }
             }
         }
@@ -1432,6 +1439,7 @@ fn show_preview_border(
             if let Some(ref mut border) = *border_lock {
                 border.set_preview_mode();
                 // Update position/size if different from current
+                // Update position/size if different from current
                 let (cur_x, cur_y, cur_w, cur_h) = border.get_rect();
                 if cur_x != x || cur_y != y || cur_w != width || cur_h != height {
                     border.update_rect(x, y, width, height);
@@ -1533,6 +1541,81 @@ fn get_preview_border_rect() -> Result<Option<(i32, i32, i32, i32)>, String> {
         Ok(Some(border.get_rect()))
     } else {
         Ok(None)
+    }
+}
+
+/// macOS: Restore window z-order after drag/resize operations
+/// Order from top to bottom: Border → User Windows → Separation → Destination
+#[cfg(target_os = "macos")]
+fn restore_window_z_order_macos() {
+    use cocoa::base::id;
+    use objc::{msg_send, sel, sel_impl};
+
+    extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_sync_f(
+            queue: *const std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: extern "C" fn(*mut std::ffi::c_void),
+        );
+        fn pthread_main_np() -> i32;
+    }
+
+    #[repr(C)]
+    struct ZOrderContext {
+        dest_window: id,
+        sep_window: id,
+        border_window: id,
+    }
+
+    extern "C" fn restore_z_order_on_main(ctx_ptr: *mut std::ffi::c_void) {
+        let ctx = unsafe { &*(ctx_ptr as *const ZOrderContext) };
+        
+        unsafe {
+            // CRITICAL Z-Order: Preview (absolute back) → Separation (behind all windows) → Border (front)
+            // NSWindowOrderingMode: 0 = NSWindowBelow, 1 = NSWindowAbove
+            
+            // Step 1: Send preview/destination to absolute back (behind everything)
+            let _: () = msg_send![ctx.dest_window, orderOut: cocoa::base::nil];
+            let _: () = msg_send![ctx.dest_window, orderBack: cocoa::base::nil];
+            
+            // Step 2: Place separation above preview but still behind all user windows
+            // Use orderWindow:relativeTo: with NSWindowAbove to place it just above preview
+            let _: () = msg_send![ctx.sep_window, orderOut: cocoa::base::nil];
+            let _: () = msg_send![ctx.sep_window, orderWindow: 1 relativeTo: ctx.dest_window];
+            // Then orderBack to ensure it stays behind user windows
+            let _: () = msg_send![ctx.sep_window, orderBack: cocoa::base::nil];
+            
+            // Step 3: Border stays on top for user interaction
+            let _: () = msg_send![ctx.border_window, orderFront: cocoa::base::nil];
+            
+            log::info!("[Z-Order] ✅ Restored: Border (front) → User Windows → Separation (middle) → Preview (back)");
+        }
+    }
+
+    let dest_lock = DESTINATION_WINDOW.lock().unwrap();
+    let sep_lock = SEPARATION_LAYER.lock().unwrap();
+    let border_lock = HOLLOW_BORDER.lock().unwrap();
+
+    if let (Some(dest), Some(sep), Some(border)) = (dest_lock.as_ref(), sep_lock.as_ref(), border_lock.as_ref()) {
+        let mut ctx = ZOrderContext {
+            dest_window: dest.get_window(),
+            sep_window: sep.get_window(),
+            border_window: border.get_window(),
+        };
+
+        unsafe {
+            let is_main = pthread_main_np() != 0;
+            if is_main {
+                restore_z_order_on_main(&mut ctx as *mut _ as *mut std::ffi::c_void);
+            } else {
+                dispatch_sync_f(
+                    &_dispatch_main_q,
+                    &mut ctx as *mut _ as *mut std::ffi::c_void,
+                    restore_z_order_on_main,
+                );
+            }
+        }
     }
 }
 
@@ -1830,8 +1913,17 @@ async fn start_capture(
             overlapped: None,
         };
 
-        tracing::debug!(width, height, "Creating DestinationWindow");
-        let dest_window = DestinationWindow::new(width, height, config)
+        // macOS: create preview window with same size as border (NOT inner size)
+        // CRITICAL: All 3 windows (Border, Separation, Preview) must have SAME dimensions
+        // Windows: already uses full border size
+        #[cfg(target_os = "macos")]
+        let (preview_x, preview_y, preview_w, preview_h) = (x, y, width, height);
+        
+        #[cfg(target_os = "windows")]
+        let (preview_x, preview_y, preview_w, preview_h) = (x, y, width, height);
+
+        tracing::debug!(preview_x, preview_y, preview_w, preview_h, "Creating DestinationWindow - SAME size as border");
+        let dest_window = DestinationWindow::new(preview_x, preview_y, preview_w, preview_h, config)
             .ok_or("Failed to create destination window")?;
 
         tracing::info!("Destination window created successfully");
@@ -1853,11 +1945,44 @@ async fn start_capture(
     #[cfg(target_os = "windows")]
     {
         let separation_color = 0x4682B4; // Steel Blue like RegionToShare
-        if let Some(separation) = SeparationLayer::new(x, y, width as i32, height as i32, separation_color) {
+        let (sep_x, sep_y, sep_width, sep_height) = (x, y, width as i32, height as i32);
+        
+        if let Some(separation) = SeparationLayer::new(sep_x, sep_y, sep_width, sep_height, separation_color) {
             *SEPARATION_LAYER.lock().unwrap() = Some(separation);
             log::info!("✅ Separation layer created (RegionToShare style)");
         } else {
             log::warn!("⚠️ Failed to create separation layer");
+        }
+    }
+
+    // macOS: Re-enabled after fixing y-coordinate and window level
+    #[cfg(target_os = "macos")]
+    {
+        let separation_color = 0x0000FF; // Blue
+        let (sep_x, sep_y, sep_width, sep_height) = (x, y, width as i32, height as i32);
+        
+        if let Some(separation) = SeparationLayer::new(sep_x, sep_y, sep_width, sep_height, separation_color) {
+            *SEPARATION_LAYER.lock().unwrap() = Some(separation);
+            log::info!("✅ Separation layer created (macOS)");
+        } else {
+            log::warn!("⚠️ Failed to create separation layer (macOS)");
+        }
+
+        // CRITICAL: Establish and enforce z-order after all windows created
+        // Order from front to back: Border → Separation → Preview
+        restore_window_z_order_macos();
+        log::info!("✅ Z-order enforced (macOS): Border (front) → Separation (middle) → Preview (back)");
+        log::info!("✅ All 3 windows created with SAME dimensions: ({}, {}) {}x{}", x, y, width, height);
+        
+        // DEBUG: Verify all windows have same position
+        if let Some(border) = HOLLOW_BORDER.lock().unwrap().as_ref() {
+            let (bx, by, bw, bh) = border.get_rect();
+            log::info!("  → Border actual rect: ({}, {}) {}x{}", bx, by, bw, bh);
+        }
+        if let Some(dest) = DESTINATION_WINDOW.lock().unwrap().as_ref() {
+            if let Some((dx, dy, dw, dh)) = dest.get_rect() {
+                log::info!("  → Destination actual rect: ({}, {}) {}x{}", dx, dy, dw, dh);
+            }
         }
     }
 
@@ -1904,57 +2029,12 @@ async fn start_capture(
         #[cfg(not(target_os = "macos"))]
         let preview_window_id: Option<window_filter::WindowIdentifier> = Some(window_filter::WindowIdentifier::preview_window());
         
-        // Build exclusion list depending on filter mode
-        use window_filter::{WindowFilterMode, WindowIdentifier};
-        let mut excluded_windows: Vec<WindowIdentifier> = match settings.window_filter.mode {
-            WindowFilterMode::IncludeOnly => {
-                // Include-only: compute exclusions as (all current windows - included_windows)
-                let mut all_ids: Vec<WindowIdentifier> = Vec::new();
-                match platform::window_enumerator::enumerate_windows() {
-                    Ok(apps) => {
-                        for app in apps {
-                            for w in app.windows {
-                                all_ids.push(WindowIdentifier {
-                                    app_id: app.bundle_id.clone(),
-                                    window_name: w.title,
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error=%e, "Failed to enumerate windows for include_only; defaulting to no exclusions");
-                    }
-                }
+        // Note: Separation layer is already hidden from screen sharing via NSWindowSharingNone
+        // No need to explicitly exclude it from capture
+        let exclusion_list = preview_window_id.into_iter().collect::<Vec<_>>();
 
-                let include_set = settings.window_filter.included_windows.clone();
-
-                // Windows: provide included list to mask layer to avoid black holes in include-only
-                #[cfg(target_os = "windows")]
-                {
-                    use rustframe_capture::capture::windows::set_included_windows_for_mask;
-                    set_included_windows_for_mask(include_set.clone());
-                }
-
-                all_ids
-                    .into_iter()
-                    .filter(|id| !include_set.contains(id))
-                    .collect()
-            }
-            WindowFilterMode::ExcludeList => settings.window_filter.excluded_windows.clone(),
-            WindowFilterMode::None => Vec::new(),
-        };
-
-        // Ensure preview window is excluded when configured
-        if settings.window_filter.auto_exclude_preview && !settings.window_filter.dev_mode {
-            if let Some(preview_id) = preview_window_id.as_ref() {
-                if !excluded_windows.contains(preview_id) {
-                    excluded_windows.push(preview_id.clone());
-                }
-            }
-        }
-        
-        log::info!("[MAIN] Calling engine.start() with region: {:?}, excluded: {} items", region, excluded_windows.len());
-        engine.start(region, settings.show_cursor, Some(excluded_windows)).map_err(|e| {
+        log::info!("[MAIN] Calling engine.start() with region: {:?}, excluded: {} items", region, exclusion_list.len());
+        engine.start(region, settings.show_cursor, Some(exclusion_list)).map_err(|e| {
             tracing::error!(error = %e, "Capture engine start failed");
             e.to_string()
         })?;
@@ -2080,8 +2160,50 @@ async fn start_capture(
                     }
                 }
             }
+
+            #[cfg(target_os = "macos")]
+            {
+                // CRITICAL: All 3 windows MUST have same position and size
+                // Border, Separation, and Preview windows must be synchronized
+                
+                // Update preview/destination window to match border exactly
+                if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref dest) = *dest_lock {
+                        dest.update_position(x, y, width as u32, height as u32);
+                        log::info!("✅ Preview window updated: ({}, {}) {}x{}", x, y, width, height);
+                    }
+                }
+                
+                // Update separation layer to match border exactly  
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        sep.update_position(x, y, width, height);
+                        log::info!("✅ Separation layer updated: ({}, {}) {}x{}", x, y, width, height);
+                    }
+                }
+
+                // CRITICAL: Restore z-order after all windows updated
+                // Order: Border (front) → Separation (middle) → Preview (back)
+                restore_window_z_order_macos();
+                log::info!("[Z-Order] ✅ All windows synchronized and z-order restored");
+                
+                // DEBUG: Verify all windows have same position after update
+                if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
+                    if let Some(border) = border_lock.as_ref() {
+                        let (bx, by, bw, bh) = border.get_rect();
+                        log::info!("  → Border rect after update: ({}, {}) {}x{}", bx, by, bw, bh);
+                    }
+                }
+                if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(dest) = dest_lock.as_ref() {
+                        if let Some((dx, dy, dw, dh)) = dest.get_rect() {
+                            log::info!("  → Destination rect after update: ({}, {}) {}x{}", dx, dy, dw, dh);
+                        }
+                    }
+                }
+            }
             
-            // Emit region update to frontend  
+            // Emit region update to frontend
             if let Err(e) = app_for_cb.emit("region-changed", serde_json::json!({
                 "x": x,
                 "y": y,
@@ -2414,8 +2536,7 @@ async fn start_capture(
                 inner_height
             );
             
-            // Windows: Resize preview and position at border location (not off-screen!)
-            // RegionToShare approach: Preview is visible to capture but below separation layer
+            // Windows/macOS: keep preview aligned with border; macOS also updates separation layer.
             #[cfg(target_os = "windows")]
             {
                 if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
@@ -2427,8 +2548,29 @@ async fn start_capture(
                     }
                 }
             }
-            
-            #[cfg(not(target_os = "windows"))]
+
+            #[cfg(target_os = "macos")]
+            {
+                let inner_x = x + border_offset;
+                let inner_y = y + border_offset;
+                
+                if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref mut dest) = *dest_lock {
+                        // macOS: window already created with inner size, just update position
+                        dest.set_pos(inner_x, inner_y);
+                        log::info!("✅ macOS preview positioned at inner rect: at ({}, {})", inner_x, inner_y);
+                    }
+                }
+
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        sep.update_position(inner_x, inner_y, inner_width as i32, inner_height as i32);
+                        sep.show();
+                    }
+                }
+            }
+
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref mut dest) = *dest_lock {
                     dest.resize(inner_width as u32, inner_height as u32);
@@ -2453,8 +2595,6 @@ async fn start_capture(
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(ref dest_window) = *dest_lock {
                         if let Some((px, py, pw, ph)) = dest_window.get_rect() {
-                            // Capture region is inner rect (excluding border)
-                            // offset by border_width from hollow border position
                             set_preview_bounds_and_check_overlap(
                                 px, py, pw, ph,         // preview bounds
                                 x, y, width, height     // capture (border) bounds
@@ -2468,26 +2608,14 @@ async fn start_capture(
 
     // Register callback for live border movement (fires during drag/resize)
     // This keeps REC indicator in sync with border while dragging
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use crate::hollow_border::set_border_live_move_callback;
         let border_w = settings.border_width;
-        let update_counter = std::sync::Arc::new(std::sync::Mutex::new(0u64));
 
         set_border_live_move_callback(move |x, y, width, height| {
-            // Throttle updates to reduce lag - update every 3rd event
-            // With high refresh rate mice (1000Hz), processing every move is too expensive
-            // causing window drag lag. Throttling ensures smoothness.
-            let should_update = if let Ok(mut c) = update_counter.lock() {
-                *c += 1;
-                *c % 3 == 0
-            } else {
-                false
-            };
-
-            if !should_update {
-                return;
-            }
+            // Update every event for smooth following, but use try_lock to avoid blocking
+            // if another thread is using the resource
 
             // Update Separation Layer position (maintains z-order)
             #[cfg(target_os = "windows")]
@@ -2497,11 +2625,41 @@ async fn start_capture(
                 }
             }
 
+            #[cfg(target_os = "macos")]
+            {
+                // On macOS, separation follows preview size (inner rect)
+                let border_offset = border_w as i32;
+                let inner_x = x + border_offset;
+                let inner_y = y + border_offset;
+                let inner_width = (width - border_offset * 2).max(1);
+                let inner_height = (height - border_offset * 2).max(1);
+                
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        sep.update_position(inner_x, inner_y, inner_width, inner_height);
+                    }
+                }
+            }
+
             // Update Destination Window position (smooth follow)
             #[cfg(target_os = "windows")]
             if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref dest) = *dest_lock {
                     dest.set_position_and_size(x, y, width, height);
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let border_offset = border_w as i32;
+                let inner_x = x + border_offset;
+                let inner_y = y + border_offset;
+                
+                if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(ref mut dest) = *dest_lock {
+                        // macOS: window already created with inner size, just update position
+                        dest.set_pos(inner_x, inner_y);
+                    }
                 }
             }
 
@@ -2538,7 +2696,7 @@ async fn start_capture(
     let settings_clone = state.settings.clone(); // Clone settings for GPU check
     let stop_flag = state.render_thread_stop.clone();
     let target_fps = settings.target_fps;
-    let capture_clicks = settings.capture_clicks;
+    let capture_clicks = settings.click_highlight_color;
     let click_color = settings.click_highlight_color;
     let click_dissolve_ms = settings.click_dissolve_ms as u64;
     let click_radius = settings.click_highlight_radius;
@@ -2595,7 +2753,7 @@ async fn start_capture(
                         // Gather click data if enabled
                         let mut click_shader_data = None;
                         
-                        if capture_clicks {
+                        if settings.capture_clicks {
                             let display_info = display_info::get();
                             
                             // Convert frame offset to pixels
@@ -2819,7 +2977,7 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     *DESTINATION_WINDOW.lock().unwrap() = None;
     
     // Clean up separation layer (RegionToShare approach)
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         tracing::debug!("Clearing SEPARATION_LAYER");
         *SEPARATION_LAYER.lock().unwrap() = None;
@@ -2871,7 +3029,7 @@ async fn cleanup_on_capture_failed(state: State<'_, AppState>) -> Result<(), Str
     *REC_INDICATOR.lock().unwrap() = None;
     
     // Clean up separation layer (RegionToShare approach)
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         *SEPARATION_LAYER.lock().unwrap() = None;
     }

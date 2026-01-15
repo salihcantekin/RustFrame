@@ -34,6 +34,14 @@ lazy_static! {
         Arc::new(Mutex::new(None));
 }
 
+// Callback for live border movement (fires during drag/resize)
+// Used for REC indicator to follow border in real-time
+type BorderLiveMoveCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
+lazy_static! {
+    static ref BORDER_LIVE_MOVE_CALLBACK: Arc<Mutex<Option<BorderLiveMoveCallback>>> =
+        Arc::new(Mutex::new(None));
+}
+
 /// Register callback to be notified when border drag/resize completes
 /// Fires only on mouseUp - allows pausing capture during interaction for performance
 pub fn set_border_interaction_complete_callback<F>(callback: F)
@@ -41,6 +49,17 @@ where
     F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
 {
     if let Ok(mut cb) = BORDER_INTERACTION_COMPLETE_CALLBACK.lock() {
+        *cb = Some(Box::new(callback));
+    }
+}
+
+/// Register callback for live border movement updates (fires during drag/resize)
+/// Used for REC indicator to follow border in real-time
+pub fn set_border_live_move_callback<F>(callback: F)
+where
+    F: Fn(i32, i32, i32, i32) + Send + Sync + 'static,
+{
+    if let Ok(mut cb) = BORDER_LIVE_MOVE_CALLBACK.lock() {
         *cb = Some(Box::new(callback));
     }
 }
@@ -119,7 +138,7 @@ fn start_mouse_poll(window: id) {
 
                     // Helper: set the cursor immediately based on current mouse position.
                     // This avoids requiring an initial click/resize before cursor feedback works.
-                    let desired_cursor_kind =
+                    let _desired_cursor_kind =
                         |_window: id, view: id, x: f64, y: f64, width: f64, height: f64| -> i32 {
                             if view == nil {
                                 return CURSOR_NONE;
@@ -805,10 +824,18 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
             let x = new_frame.origin.x as i32;
             let y = (screen_height - new_frame.origin.y - new_frame.size.height) as i32;
             let width = new_frame.size.width as i32;
+            let height = new_frame.size.height as i32;
 
             // Update cache for render thread to read
             if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
-                *cache = (x, y, width, new_frame.size.height as i32);
+                *cache = (x, y, width, height);
+            }
+
+            // Fire live move callback for real-time updates (REC indicator, separation layer, etc.)
+            if let Ok(cb_guard) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {
+                if let Some(ref callback) = *cb_guard {
+                    callback(x, y, width, height);
+                }
             }
 
             // Update REC indicator position during dragging (if moving, not resizing)
@@ -1514,6 +1541,11 @@ impl HollowBorder {
 
     pub fn hwnd_value(&self) -> isize {
         self.window as isize
+    }
+
+    /// Get raw NSWindow pointer for z-order operations
+    pub fn get_window(&self) -> id {
+        self.window
     }
 
     pub fn stop(&mut self) {

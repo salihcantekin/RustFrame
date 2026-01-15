@@ -6,14 +6,19 @@
 
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 #[cfg(target_os = "windows")]
 pub use windows::SeparationLayer;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub use macos::SeparationLayer;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub struct SeparationLayer;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 impl SeparationLayer {
     pub fn new(_x: i32, _y: i32, _width: i32, _height: i32, _color: u32) -> Option<Self> {
         None

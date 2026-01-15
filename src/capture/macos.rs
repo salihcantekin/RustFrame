@@ -581,18 +581,21 @@ impl MacOSCaptureEngine {
             ScreenCaptureKitCapture::is_available()
         );
 
-        let sck = if cfg!(target_os = "macos")
+        let sck_available = cfg!(target_os = "macos")
             && supports_screen_capture_kit()
-            && ScreenCaptureKitCapture::is_available()
-        {
-            log::info!("[MACOS_ENGINE] Creating ScreenCaptureKit instance...");
-            Some(ScreenCaptureKitCapture::new())
-        } else {
-            log::warn!(
-                "[MACOS_ENGINE] ScreenCaptureKit NOT available, will use CoreGraphics fallback"
+            && ScreenCaptureKitCapture::is_available();
+
+        if !sck_available {
+            log::error!(
+                "[MACOS_ENGINE] ScreenCaptureKit is required but not available (macOS < 12.3 or missing frameworks)." 
             );
-            None
-        };
+            return Err(anyhow!(
+                "ScreenCaptureKit is required on macOS. Update to macOS 12.3+ and ensure Screen Recording permission is granted."
+            ));
+        }
+
+        log::info!("[MACOS_ENGINE] Creating ScreenCaptureKit instance...");
+        let sck = Some(ScreenCaptureKitCapture::new());
 
         log::info!("[MACOS_ENGINE] sck.is_some() = {}", sck.is_some());
 
@@ -729,34 +732,34 @@ impl CaptureEngine for MacOSCaptureEngine {
             "[MACOS_ENGINE] Checking if SCK is available... self.sck.is_some()={}",
             self.sck.is_some()
         );
-        if let Some(ref mut sck) = self.sck {
-            log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
-            if supports_screen_capture_kit() {
-                log::info!("[MACOS_ENGINE] SCK is supported, calling sck.start()...");
-                match sck.start(region.x, region.y, region.width, region.height, show_cursor, excluded_windows.clone()) {
-                    Ok(()) => {
-                        log::info!("[MACOS_ENGINE] SCK start succeeded!");
-                        self.using_sck = true;
-                        self.sck_last_seq = 0;
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        log::warn!("[MACOS_ENGINE] ScreenCaptureKit init failed, falling back to CoreGraphics: {}", e);
-                        self.using_sck = false;
-                    }
-                }
-            } else {
-                log::info!("[MACOS_ENGINE] ScreenCaptureKit not supported on this macOS version");
-            }
-        } else {
-            log::warn!("[MACOS_ENGINE] self.sck is None!");
+        let Some(ref mut sck) = self.sck else {
+            log::error!("[MACOS_ENGINE] ScreenCaptureKit instance missing; cannot start capture.");
+            self.is_active = false;
+            return Err(anyhow!("ScreenCaptureKit is required on macOS; capture start aborted."));
+        };
+
+        log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
+        if !supports_screen_capture_kit() {
+            log::error!("[MACOS_ENGINE] ScreenCaptureKit not supported on this macOS version");
+            self.is_active = false;
+            return Err(anyhow!("ScreenCaptureKit not supported on this macOS version"));
         }
 
-        // Fallback: legacy CoreGraphics screenshot capture.
-        log::info!("[MACOS_ENGINE] Using CoreGraphics fallback");
-        self.capture_region(region)?;
-        self.using_sck = false;
-        Ok(())
+        log::info!("[MACOS_ENGINE] SCK is supported, calling sck.start()...");
+        match sck.start(region.x, region.y, region.width, region.height, show_cursor, excluded_windows.clone()) {
+            Ok(()) => {
+                log::info!("[MACOS_ENGINE] SCK start succeeded!");
+                self.using_sck = true;
+                self.sck_last_seq = 0;
+                Ok(())
+            }
+            Err(e) => {
+                self.is_active = false;
+                self.using_sck = false;
+                log::error!("[MACOS_ENGINE] ScreenCaptureKit init failed; not falling back: {}", e);
+                Err(e)
+            }
+        }
     }
 
     fn stop(&mut self) {
