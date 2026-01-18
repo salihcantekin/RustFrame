@@ -369,7 +369,7 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // CRITICAL: Collection behavior for border window
         // - MANAGED (1 << 2): Participates in window management
         // - MOVE_TO_ACTIVE_SPACE (1 << 1): Moves with active space (hides on desktop view)
-        // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows  
+        // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows
         // - IGNORES_CYCLE (1 << 6): Hidden from Dock/Cmd+Tab
         // Do NOT use CAN_JOIN_ALL_SPACES (1 << 0) - it conflicts with MOVE_TO_ACTIVE_SPACE!
         let collection_behavior = (1u64 << 2) /*managed*/
@@ -837,6 +837,8 @@ extern "C" fn mouse_dragged(this: &Object, _cmd: Sel, event: id) {
             if let Ok(mut cache) = BORDER_RECT_CACHE.try_lock() {
                 *cache = (x, y, width, height);
             }
+
+            log::info!("🔍 [Border] Reporting: ({}, {}) {}x{}", x, y, width, height);
 
             // Fire live move callback for real-time updates (REC indicator, separation layer, etc.)
             if let Ok(cb_guard) = BORDER_LIVE_MOVE_CALLBACK.try_lock() {

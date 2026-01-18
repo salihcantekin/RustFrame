@@ -2,11 +2,14 @@
 //! Opaque window inserted between border and preview. Kept behind user windows.
 
 use cocoa::appkit::{NSBackingStoreType, NSColor, NSWindow, NSWindowStyleMask};
-use cocoa::base::{id, nil, YES, NO};
+use cocoa::base::{id, nil, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize};
 use objc::{class, msg_send, sel, sel_impl};
 
+// CRITICAL: Separation layer must be BELOW normal windows (0) so user windows always appear above it
+// Level -1 is above desktop (-1000) so still visible to screen sharing, but below all user apps
 const NS_NORMAL_WINDOW_LEVEL: i32 = 0;
+const NS_SEPARATION_WINDOW_LEVEL: i32 = -1; // Below user windows, above desktop
 
 unsafe impl Send for SeparationLayer {}
 unsafe impl Sync for SeparationLayer {}
@@ -48,7 +51,7 @@ impl SeparationLayer {
                 let screen: id = msg_send![class!(NSScreen), mainScreen];
                 let screen_frame: NSRect = msg_send![screen, frame];
                 let screen_height = screen_frame.size.height;
-                
+
                 // Convert y from top-left to bottom-left origin
                 let cocoa_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
 
@@ -86,7 +89,7 @@ impl SeparationLayer {
                 // CRITICAL: Collection behavior MUST match destination window
                 // - MANAGED (1 << 2): Participates in window management
                 // - MOVE_TO_ACTIVE_SPACE (1 << 1): Moves with active space (hides on desktop view)
-                // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows  
+                // - FULL_SCREEN_AUXILIARY (1 << 8): Can be shown alongside fullscreen windows
                 // - IGNORES_CYCLE (1 << 6): Hidden from Dock/Cmd+Tab
                 // Do NOT use CAN_JOIN_ALL_SPACES (1 << 0) - it conflicts with MOVE_TO_ACTIVE_SPACE!
                 let behavior = (1u64 << 2) /*managed*/
@@ -95,9 +98,10 @@ impl SeparationLayer {
                     | (1u64 << 6); /*ignores cycle*/
                 let _: () = msg_send![window, setCollectionBehavior: behavior];
 
-                // CRITICAL: Use NORMAL level (0) for screen sharing visibility
-                // Desktop level windows are filtered by Meet/Zoom/Teams
-                let _: () = msg_send![window, setLevel: NS_NORMAL_WINDOW_LEVEL];
+                // CRITICAL: Use level -1 to ensure separation stays BELOW user windows
+                // Level -1 is above desktop (-1000) so still visible to screen sharing APIs
+                // but BELOW normal windows (0) so user apps always appear above it
+                let _: () = msg_send![window, setLevel: NS_SEPARATION_WINDOW_LEVEL];
 
                 // CRITICAL: Window will be positioned and shown via update_position() and show()
                 // Do NOT call orderOut/orderBack here - let z-order restoration handle it
@@ -130,7 +134,9 @@ impl SeparationLayer {
         if result_window == nil {
             None
         } else {
-            Some(Self { window: result_window })
+            Some(Self {
+                window: result_window,
+            })
         }
     }
 
@@ -147,33 +153,46 @@ impl SeparationLayer {
         extern "C" fn move_on_main(ctx_ptr: *mut std::ffi::c_void) {
             unsafe {
                 let ctx = &*(ctx_ptr as *const PosCtx);
-                
+
                 // macOS uses bottom-left origin, need to convert from top-left
                 let screen: id = msg_send![class!(NSScreen), mainScreen];
                 let screen_frame: NSRect = msg_send![screen, frame];
                 let screen_height = screen_frame.size.height;
-                
-                log::debug!("[SepLayer] Input: ({}, {}) {}x{}, screen_height: {}", 
-                    ctx.x, ctx.y, ctx.width, ctx.height, screen_height);
-                
+
+                log::debug!(
+                    "[SepLayer] Input: ({}, {}) {}x{}, screen_height: {}",
+                    ctx.x,
+                    ctx.y,
+                    ctx.width,
+                    ctx.height,
+                    screen_height
+                );
+
                 // Convert y from top-left to bottom-left origin
                 let cocoa_y = screen_height - (ctx.y as f64) - (ctx.height as f64);
-                
-                log::debug!("[SepLayer] Converted cocoa_y: {} (from top-left y: {})", 
-                    cocoa_y, ctx.y);
-                
+
+                log::debug!(
+                    "[SepLayer] Converted cocoa_y: {} (from top-left y: {})",
+                    cocoa_y,
+                    ctx.y
+                );
+
                 let new_frame = NSRect::new(
                     NSPoint::new(ctx.x as f64, cocoa_y),
                     NSSize::new(ctx.width as f64, ctx.height as f64),
                 );
                 let _: () = msg_send![ctx.window, setFrame:new_frame display:NO animate:NO];
-                
+
                 // Verify the frame was actually set
                 let actual_frame: NSRect = msg_send![ctx.window, frame];
-                log::debug!("[SepLayer] Actual frame after setFrame: origin=({}, {}), size=({}, {})",
-                    actual_frame.origin.x, actual_frame.origin.y, 
-                    actual_frame.size.width, actual_frame.size.height);
-                
+                log::debug!(
+                    "[SepLayer] Actual frame after setFrame: origin=({}, {}), size=({}, {})",
+                    actual_frame.origin.x,
+                    actual_frame.origin.y,
+                    actual_frame.size.width,
+                    actual_frame.size.height
+                );
+
                 // NOTE: Do NOT call orderOut/orderBack here - causes flashing!
                 // Z-order is restored separately in callback when interaction completes
             }
