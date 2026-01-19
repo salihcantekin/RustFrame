@@ -8,36 +8,22 @@ Platform-specific configuration parameters for customizing RustFrame's preview w
 - **[macOS Parameters](macos.md)** - macOS NSWindow and collection behavior settings (Coming Soon)
 - **[Linux Parameters](linux.md)** - X11/Wayland window properties (Coming Soon)
 
+
 ## Overview
 
-RustFrame uses platform-specific parameters to control how the preview window appears and behaves. Each platform has different windowing APIs and conventions:
+RustFrame uses platform-specific parameters to control how the preview window appears and behaves. Each platform has different windowing APIs and conventions.
 
-### Windows
-Uses Win32 API window styles (`WS_*`) and extended styles (`WS_EX_*`) to control:
-- Window decoration (title bar, borders)
-- Taskbar visibility
-- Transparency and layering
-- Z-order and focus behavior
+| Platform | Windowing API | Key Parameters | Notes |
+|----------|---------------|---------------|-------|
+| Windows  | Win32         | WS_*, WS_EX_* | Taskbar, z-order, transparency |
+| macOS    | Cocoa/AppKit  | NSWindow, NSWindowLevel, NSWindowCollectionBehavior | Mission Control, screen sharing |
+| Linux    | X11/Wayland   | Type hints, stacking, compositor hints | Desktop integration, experimental |
 
-[→ See full Windows documentation](windows.md)
+- [See full Windows documentation](windows.md)
+- [macOS documentation coming soon](macos.md)
+- [Linux documentation coming soon](linux.md)
 
-### macOS
-Uses Cocoa/AppKit APIs (`NSWindow`, `NSWindowLevel`, `NSWindowCollectionBehavior`) to control:
-- Window level (floating, normal, etc.)
-- Mission Control and Exposé behavior
-- Screen sharing visibility
-- Transparency and compositing
-
-[→ macOS documentation coming soon](macos.md)
-
-### Linux
-Uses X11 properties and Wayland protocols to control:
-- Window type hints
-- Stacking order
-- Desktop environment integration
-- Compositor behavior
-
-[→ Linux documentation coming soon](linux.md)
+For implementation details, see [../technical/](../technical/).
 
 ---
 

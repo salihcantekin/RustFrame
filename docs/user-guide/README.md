@@ -41,14 +41,17 @@ RustFrame creates a **shareable preview window** that displays exactly the regio
 3. Share the "RustFrame Preview" window in your video call
 4. Only your selected region is visible to participants
 
-## Supported Platforms
 
-| Platform | Status | Capture Method | Rendering |
-|----------|--------|---------------|-----------|
-| **Windows 10/11** | ✅ Full Support | Windows Graphics Capture (WGC) | GPU-accelerated |
-| **macOS 12.3+** | ✅ Full Support | ScreenCaptureKit | Metal (GPU) |
-| **macOS 10.15-12.2** | ✅ Supported | CoreGraphics | CPU fallback |
-| **Linux** | 🚧 Experimental | X11/Wayland | wgpu |
+## Supported Platforms & Feature Comparison
+
+| Platform         | Status         | Capture Method                | Rendering         | Notes |
+|------------------|---------------|-------------------------------|-------------------|-------|
+| Windows 10/11    | ✅ Full Support| Windows Graphics Capture (WGC)| DirectX 11 (GPU)  | Best performance, full GPU pipeline |
+| macOS 12.3+      | ✅ Full Support| ScreenCaptureKit              | Metal (GPU)       | Full GPU pipeline, window exclusion supported |
+| macOS 10.15-12.2 | ✅ Supported   | CoreGraphics                  | CPU fallback      | Lower performance, no window exclusion |
+| Linux            | 🚧 Experimental| X11/Wayland                   | wgpu              | Limited features, experimental |
+
+See [Technical Docs](../technical/) for platform-specific implementation details and limitations.
 
 ## Key Features at a Glance
 

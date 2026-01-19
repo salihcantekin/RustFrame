@@ -65,31 +65,7 @@ Complete guide to all RustFrame settings and their effects.
 
 ## Click Highlights
 
-Settings for customizing the appearance and behavior of mouse click visual feedback.
-
-### Click Highlight Color
-**Setting**: `click_highlight_color`  
-**Type**: RGBA Color Array `[R, G, B, A]`  
-**Default**: `[255, 255, 0, 180]` (Yellow, 70% opacity)  
-**UI Location**: Settings → Click Highlights → Color Picker
-
-**Description**: The color and transparency of the circle that appears when you click.
-
-**Format**:
-- **R, G, B**: Color values (0-255)
-- **A**: Alpha/opacity (0-255, where 0 = transparent, 255 = opaque)
-
-**Preset Colors**:
-- **Yellow** (Default): `[255, 255, 0, 180]` - High visibility, non-intrusive
-- **Red**: `[255, 0, 0, 180]` - Attention-grabbing
-- **Green**: `[0, 255, 0, 180]` - Success/confirmation feel
-- **Blue**: `[0, 150, 255, 180]` - Professional look
-- **Purple**: `[200, 0, 255, 180]` - Creative/modern
-
-**Recommendations**:
-- Use high contrast colors for visibility
-- Keep alpha between 150-200 for balance between visibility and readability
-- Test colors against your typical screen content
+For configuration, color options, and troubleshooting, see the [Features Guide – Click Highlights](features.md#click-highlights).
 
 ---
 
@@ -140,24 +116,7 @@ Settings for customizing the appearance and behavior of mouse click visual feedb
 
 ## Border Settings
 
-Customize the hollow border that shows your capture region.
-
-### Show Border
-**Setting**: `show_border`  
-**Type**: Boolean  
-**Default**: `true`  
-**UI Location**: Settings → Border → Enabled
-
-**Description**: Shows a colored border around your capture region.
-
-**When to Use**:
-- ✅ **Enabled (Default)**: Visual feedback for capture area, easy to reposition
-- ❌ **Disabled**: Cleaner look, border doesn't appear in screen sharing pickers
-
-**Technical Notes**:
-- Border window is click-through (except edges) - won't interfere with work
-- Border is visible only on your screen, not in the capture itself
-- Can be moved/resized by dragging edges and corners
+For all border options and technical details, see the [Features Guide – Border Customization](features.md#border-customization).
 
 ---
 
@@ -202,36 +161,7 @@ Customize the hollow border that shows your capture region.
 
 ## Performance Settings
 
-Control capture performance and resource usage.
-
-### Target FPS
-**Setting**: `target_fps`  
-**Type**: Frames per second (integer)  
-**Default**: `60` FPS  
-**Range**: `15` - `120` FPS  
-**UI Location**: Settings → Performance → Target FPS
-
-**Description**: Maximum frame rate for screen capture.
-
-**FPS Guide**:
-- **Low (15-24 FPS)**: Minimal CPU/GPU usage, still smooth for presentations
-- **Medium (30 FPS)**: Good balance, sufficient for most video calls
-- **Default (60 FPS)**: Smooth motion, recommended for most use cases
-- **High (90-120 FPS)**: Extremely smooth, for high-refresh displays or gaming
-
-**Performance Impact**:
-
-| FPS | CPU Usage | GPU Usage | Use Case |
-|-----|-----------|-----------|----------|
-| 15 | ~2% | ~3% | Static content, presentations |
-| 30 | ~3-4% | ~5% | Video calls, screen sharing |
-| 60 | ~4-7% | ~10% | Default, smooth motion |
-| 120 | ~8-12% | ~18% | High-refresh displays |
-
-**Technical Notes**:
-- Actual FPS may be lower if system is under load
-- Higher FPS requires more CPU/GPU resources
-- Video conferencing apps typically cap at 30 FPS anyway
+For detailed performance metrics, CPU/GPU usage, and optimization tips, see the [Features Guide – Performance Settings](features.md#performance-settings).
 
 ---
 
@@ -710,32 +640,7 @@ Profiles can be applied through the UI or by copying their contents to `settings
 
 ## Troubleshooting Settings
 
-### Black Preview Window
-- Try disabling GPU acceleration
-- Switch to GDI capture method (Windows)
-- Check log files for errors
-
-### High CPU Usage
-- Lower target FPS to 30
-- Disable click highlights
-- Ensure GPU acceleration is enabled
-
-### Click Highlights Not Showing
-- Verify `capture_clicks` is `true`
-- Check click color is visible against your screen
-- Increase `click_highlight_radius`
-
-### Border Not Visible
-- Ensure `show_border` is `true`
-- Try different border color
-- Increase `border_width`
-
-### Settings Not Saving
-- Check file permissions on config directory
-- Close RustFrame properly (don't force-kill)
-- Check log files for save errors
-
----
+For troubleshooting settings, see the [Troubleshooting Guide](troubleshooting.md) and [Features Guide](features.md#performance-settings).
 
 ## Related Documentation
 

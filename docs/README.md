@@ -1,63 +1,65 @@
+
 # RustFrame Documentation
 
-Complete documentation for RustFrame—a cross-platform screen region capture tool.
+This documentation covers all aspects of RustFrame—a cross-platform screen region capture tool for privacy-focused, high-performance screen sharing.
+
+---
 
 ## 📖 Documentation Structure
 
-### For Users
+### User Documentation
 
-- **[User Guide](user-guide/)** - Installation, usage, and troubleshooting
-  - [Installation](user-guide/installation.md) - Download and install
-  - [Quick Start](user-guide/quick-start.md) - Get started in 30 seconds
-  - [Features Guide](user-guide/features.md) - Complete feature reference
-  - [Settings Reference](user-guide/settings.md) - All settings explained
-  - [Troubleshooting](user-guide/troubleshooting.md) - Common issues and solutions
-  - [FAQ](user-guide/faq.md) - Frequently asked questions
+- **[User Guide](user-guide/)** – Installation, usage, troubleshooting
+  - [Installation](user-guide/installation.md)
+  - [Quick Start](user-guide/quick-start.md)
+  - [Features](user-guide/features.md)
+  - [Settings](user-guide/settings.md)
+  - [Troubleshooting](user-guide/troubleshooting.md)
+  - [FAQ](user-guide/faq.md)
 
-### For Developers
+### Developer Documentation
 
-- **[Developer Guide](developer/)** - Architecture and contributing
-  - [Architecture Overview](developer/README.md) - System design and code structure
-  - [Building from Source](developer/building.md) - Compilation instructions
-  - [Capture Engines](developer/capture-engines.md) - Screen capture implementations
-  - [Platform-Specific Code](developer/platform-specific.md) - Cross-platform abstractions
-  - [Rendering Pipeline](developer/rendering-pipeline.md) - GPU/CPU rendering
-  - [Performance Optimization](developer/performance.md) - CPU/GPU tuning
-  - [Known Issues](developer/known-issues.md) - Current limitations
+- **[Developer Guide](developer/)** – Architecture, building, contributing
+  - [Architecture Overview](developer/README.md)
+  - [Building from Source](developer/building.md)
+  - [Platform-Specific Code](developer/platform-specific.md)
+  - [Rendering Pipeline](developer/rendering-pipeline.md)
+  - [Performance Optimization](developer/performance.md)
+  - [Known Issues](developer/known-issues.md)
 
-### Technical Deep Dives
+### Technical & Platform Details
 
-- **[Technical Documentation](technical/)** - Low-level technical details
-  - [GPU Optimization](technical/gpu-optimization.md) - Platform-specific GPU strategies
-  - [Zero-Copy Strategy](technical/zero-copy-strategy.md) - Memory optimization
-  - [Multi-Monitor Support](technical/multi-monitor.md) - Display detection and DPI
-  - [Color Format Handling](technical/color-formats.md) - BGRA vs RGBA across platforms
-  - [Coordinate Systems](technical/coordinate-system-architecture.md) - Screen coordinate handling
-  - [macOS Window Visibility](technical/macos-window-visibility.md) - Screen sharing compatibility
+- **[Technical Docs](technical/)** – Platform internals, performance, and implementation
+  - [GPU Optimization](technical/gpu-optimization.md)
+  - [Zero-Copy Strategy](technical/zero-copy-strategy.md)
+  - [Multi-Monitor Support](technical/multi-monitor.md)
+  - [Color Format Handling](technical/color-formats.md)
+  - [Coordinate Systems](technical/coordinate-system-architecture.md)
+  - [macOS/Windows Platform Details](technical/)
 
-### Historical Records
+### Profiles & Platform Settings
 
-- **[Experiments](experiments/)** - Development experiments and fixes
-  - [Border Capture Fix](experiments/2026-01-07_border_capture_fix.md)
-  - [Color Format Fix](experiments/2026-01-07_color_format_fix.md)
-  - [Event-Driven Optimization](experiments/2026-01-07_event_driven_optimization.md)
-  - [Coordinate System](experiments/2026-01-07_coordinate_system_architecture.md)
-  - [Window Visibility Tests](experiments/2026-01-07_window_visibility_tests.md)
+- **[Profiles](profiles/)** – Platform-specific configuration and windowing parameters
 
-- **[Changelog](changelog/)** - Version history
-  - [All Releases](changelog/README.md)
-  - [v1.56.0](changelog/v1.56.0.md) - Bug fixes and logging improvements
-  - [v1.1.0](changelog/v1.1.0.md) - Multi-monitor support and custom tray icon
+### Changelog
+
+- **[Changelog](changelog/)** – Version history and release notes
+
+### Archive & Historical Docs
+
+- **[Archive](archive/)** – Past experiments, failed approaches, and technical lessons. See archive README for details and reasons for archiving.
+
+---
 
 ## 🚀 Quick Links
-
-### I want to...
 
 | Goal | Documentation |
 |------|---------------|
 | **Install RustFrame** | [Installation Guide](user-guide/installation.md) |
-| **Learn basic usage** | [Quick Start](user-guide/quick-start.md) (30 sec) |
+| **Learn basic usage** | [Quick Start](user-guide/quick-start.md) |
 | **Fix a problem** | [Troubleshooting](user-guide/troubleshooting.md) |
+| **See platform details** | [Technical Docs](technical/) |
+| **See historical/archived docs** | [Archive](archive/) |
 | **Understand all features** | [Features Guide](user-guide/features.md) |
 | **Configure settings** | [Settings Reference](user-guide/settings.md) |
 | **Build from source** | [Building Guide](developer/building.md) |

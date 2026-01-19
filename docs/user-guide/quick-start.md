@@ -46,9 +46,6 @@ Navigate to **Capture Region** tab:
 
 ### 3. Adjust the Border (Optional)
 
-When Preview Border is enabled, a hollow border window appears on your screen:
-
-```
 ┌────────────────────────────────┐
 │                                │  ← Border (draggable/resizable)
 │   ┌────────────────────────┐   │
@@ -123,26 +120,14 @@ When done:
 
 ## Common Workflows
 
-### Scenario 1: Share a Specific Application Window
-
-```
 Goal: Share only VS Code, exclude everything else
 
-Steps:
-1. Open VS Code
-2. Launch RustFrame → Settings → Capture Region
 3. Enable Preview Border
 4. Position border to cover ONLY VS Code window
-5. Start Capture
-6. Share "RustFrame Preview" in video call
 ```
-
-### Scenario 2: Multi-Monitor Setup
 
 ```
 Setup: Laptop screen (primary) + External monitor
-
-Goal: Capture content from external monitor
 
 Steps:
 1. Settings → Capture Region → Monitor dropdown
@@ -160,10 +145,6 @@ Goal: Share browser but hide bookmarks bar and tabs
 
 Steps:
 1. Open browser window
-2. Enable Preview Border
-3. Position border to EXCLUDE top tab bar
-4. Adjust to EXCLUDE bookmarks bar
-5. Only content area is captured
 6. Start Capture and share
 ```
 
@@ -174,7 +155,6 @@ Goal: Tutorial video with visible mouse clicks
 
 Steps:
 1. Settings → Mouse & Clicks
-2. Enable "Capture Clicks"
 3. Choose highlight color (e.g., bright red)
 4. Set radius (20-30px recommended)
 5. Set dissolve time (300-500ms)
