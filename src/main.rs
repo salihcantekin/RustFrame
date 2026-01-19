@@ -29,18 +29,24 @@ use destination_window::{DestinationWindow, DestinationWindowConfig};
 use hollow_border::HollowBorder;
 use platform::window_enumerator::{self, AvailableApp};
 use rec_indicator::RecIndicator;
+#[cfg(target_os = "windows")]
 use separation_layer::SeparationLayer;
 
 // Global state for Windows (not thread-safe, but only accessed from commands)
 lazy_static! {
     static ref HOLLOW_BORDER: Mutex<Option<HollowBorder>> = Mutex::new(None);
     static ref DESTINATION_WINDOW: Mutex<Option<DestinationWindow>> = Mutex::new(None);
-    static ref SEPARATION_LAYER: Mutex<Option<SeparationLayer>> = Mutex::new(None);
+
     static ref REC_INDICATOR: Mutex<Option<RecIndicator>> = Mutex::new(None);
     // Global flag to track if cleanup has been performed
     static ref CLEANUP_PERFORMED: AtomicBool = AtomicBool::new(false);
     // Single instance lock - prevents multiple instances from running
     static ref SINGLE_INSTANCE_LOCK: Mutex<Option<single_instance::SingleInstanceLock>> = Mutex::new(None);
+}
+
+#[cfg(target_os = "windows")]
+lazy_static! {
+    static ref SEPARATION_LAYER: Mutex<Option<SeparationLayer>> = Mutex::new(None);
 }
 
 /// Perform cleanup of all capture resources
@@ -1347,7 +1353,7 @@ fn show_preview_border(
                 dest_window.set_pos(x, y);
                 dest_window.resize(width as u32, height as u32);
 
-                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                #[cfg(target_os = "windows")]
                 if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
                     if let Some(ref sep) = *sep_lock {
                         sep.update_position(x, y, width, height);
@@ -1374,7 +1380,7 @@ fn show_preview_border(
             dest_window.set_pos(x, y);
             dest_window.resize(width as u32, height as u32);
 
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
                 if let Some(ref sep) = *sep_lock {
                     sep.update_position(x, y, width, height);
@@ -1444,82 +1450,14 @@ fn get_preview_border_rect() -> Result<Option<(i32, i32, i32, i32)>, String> {
     }
 }
 
-/// macOS: Restore window z-order after drag/resize operations
-/// Order from top to bottom: Border → User Windows → Separation → Destination
+/// macOS helper to restore window Z-order
 #[cfg(target_os = "macos")]
 fn restore_window_z_order_macos() {
-    use cocoa::base::id;
-    use objc::{msg_send, sel, sel_impl};
-
-    extern "C" {
-        static _dispatch_main_q: std::ffi::c_void;
-        fn dispatch_sync_f(
-            queue: *const std::ffi::c_void,
-            context: *mut std::ffi::c_void,
-            work: extern "C" fn(*mut std::ffi::c_void),
-        );
-        fn pthread_main_np() -> i32;
-    }
-
-    #[repr(C)]
-    struct ZOrderContext {
-        dest_window: id,
-        sep_window: id,
-        border_window: id,
-    }
-
-    extern "C" fn restore_z_order_on_main(ctx_ptr: *mut std::ffi::c_void) {
-        let ctx = unsafe { &*(ctx_ptr as *const ZOrderContext) };
-
-        unsafe {
-            // CRITICAL Z-Order at level 0 (from back to front): Preview → Separation → User Windows
-            // Border is at level 3 (floating) so it's ALWAYS on top - don't touch it!
-            // Do NOT use orderOut - it causes flashing by removing window from screen!
-
-            // Step 1: Send preview/destination to absolute back (level 0)
-            let _: () = msg_send![ctx.dest_window, orderBack: cocoa::base::nil];
-
-            // Step 2: Place separation above preview but still at level 0
-            // orderWindow:1:relativeTo: means "order in front of" the specified window
-            let _: () = msg_send![ctx.sep_window, orderWindow: 1 relativeTo: ctx.dest_window];
-
-            // Step 3: Border is level 3 - already always on top, NO need to call orderFront
-            // Calling orderFront can cause it to steal focus or flash
-            // let _: () = msg_send![ctx.border_window, orderFront: cocoa::base::nil];
-
-            log::info!("[Z-Order] ✅ Fixed at level 0: Preview (back) → Separation (middle) | Border at level 3 (always on top)");
-        }
-    }
-
-    // DEADLOCK FIX: Use try_lock instead of lock().unwrap()
-    // The render thread might be holding these locks while waiting for the main thread (dispatch_sync)
-    // If we block here on the main thread waiting for the locks, we create a deadlock.
-    if let (Ok(dest_lock), Ok(sep_lock), Ok(border_lock)) = (
-        DESTINATION_WINDOW.try_lock(),
-        SEPARATION_LAYER.try_lock(),
-        HOLLOW_BORDER.try_lock(),
-    ) {
-        if let (Some(dest), Some(sep), Some(border)) =
-            (dest_lock.as_ref(), sep_lock.as_ref(), border_lock.as_ref())
-        {
-            let mut ctx = ZOrderContext {
-                dest_window: dest.get_window(),
-                sep_window: sep.get_window(),
-                border_window: border.get_window(),
-            };
-
-            unsafe {
-                let is_main = pthread_main_np() != 0;
-                if is_main {
-                    restore_z_order_on_main(&mut ctx as *mut _ as *mut std::ffi::c_void);
-                } else {
-                    dispatch_sync_f(
-                        &_dispatch_main_q,
-                        &mut ctx as *mut _ as *mut std::ffi::c_void,
-                        restore_z_order_on_main,
-                    );
-                }
-            }
+    // Separation layer removed - simplified Z-order
+    if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
+        if let Some(border) = border_lock.as_ref() {
+            // Border is topmost
+            let _ = border;
         }
     }
 }
@@ -1850,6 +1788,18 @@ async fn start_capture(
                 tracing::error!("Failed to store destination window - is None after assignment");
             }
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            // Just verify window creation
+            log::info!(
+                "✅ Windows created (Border, Preview) with SAME dimensions: ({}, {}) {}x{}",
+                x,
+                y,
+                width,
+                height
+            );
+        }
     }
 
     // Create separation layer (RegionToShare approach)
@@ -1866,53 +1816,6 @@ async fn start_capture(
             log::info!("✅ Separation layer created (RegionToShare style)");
         } else {
             log::warn!("⚠️ Failed to create separation layer");
-        }
-    }
-
-    // macOS: Re-enabled after fixing y-coordinate and window level
-    #[cfg(target_os = "macos")]
-    {
-        let separation_color = 0x0000FF; // Blue
-        let (sep_x, sep_y, sep_width, sep_height) = (x, y, width as i32, height as i32);
-
-        if let Some(separation) =
-            SeparationLayer::new(sep_x, sep_y, sep_width, sep_height, separation_color)
-        {
-            *SEPARATION_LAYER.lock().unwrap() = Some(separation);
-            log::info!("✅ Separation layer created (macOS)");
-        } else {
-            log::warn!("⚠️ Failed to create separation layer (macOS)");
-        }
-
-        // CRITICAL: Establish and enforce z-order after all windows created
-        // Order from front to back: Border → Separation → Preview
-        restore_window_z_order_macos();
-        log::info!(
-            "✅ Z-order enforced (macOS): Border (front) → Separation (middle) → Preview (back)"
-        );
-        log::info!(
-            "✅ All 3 windows created with SAME dimensions: ({}, {}) {}x{}",
-            x,
-            y,
-            width,
-            height
-        );
-
-        // DEBUG: Verify all windows have same position
-        if let Some(border) = HOLLOW_BORDER.lock().unwrap().as_ref() {
-            let (bx, by, bw, bh) = border.get_rect();
-            log::info!("  → Border actual rect: ({}, {}) {}x{}", bx, by, bw, bh);
-        }
-        if let Some(dest) = DESTINATION_WINDOW.lock().unwrap().as_ref() {
-            if let Some((dx, dy, dw, dh)) = dest.get_rect() {
-                log::info!(
-                    "  → Destination actual rect: ({}, {}) {}x{}",
-                    dx,
-                    dy,
-                    dw,
-                    dh
-                );
-            }
         }
     }
 
@@ -2131,10 +2034,10 @@ async fn start_capture(
                         }
                     }
                 }
-                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
-                    if let Some(sep) = sep_lock.as_ref() {
-                        if let Some((sx, sy, sw, sh)) = sep.get_rect() {
-                            log::info!("  ✓ Separation after: ({}, {}) {}x{}", sx, sy, sw, sh);
+                if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
+                    if let Some(dest) = dest_lock.as_ref() {
+                        if let Some((dx, dy, dw, dh)) = dest.get_rect() {
+                            log::info!("  ✓ Destination after: ({}, {}) {}x{}", dx, dy, dw, dh);
                         }
                     }
                 }
@@ -2566,22 +2469,8 @@ async fn start_capture(
 
             #[cfg(target_os = "macos")]
             {
-                // CRITICAL: All 3 windows (Border, Separation, Destination) MUST have SAME size
+                // CRITICAL: Windows (Border, Destination) MUST have SAME size
                 // Use FULL border dimensions, not inner rect
-                // Inner rect was causing 50-100px offset!
-
-                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
-                    if let Some(ref sep) = *sep_lock {
-                        log::info!(
-                            "  → Updating separation to: ({}, {}) {}x{}",
-                            x,
-                            y,
-                            width,
-                            height
-                        );
-                        sep.update_position(x, y, width, height);
-                    }
-                }
 
                 // NEW: Also update destination during live drag (not just mouseUp)
                 // This eliminates the 1-second lag when releasing mouse
@@ -2674,7 +2563,7 @@ async fn start_capture(
     let settings_clone = state.settings.clone(); // Clone settings for GPU check
     let stop_flag = state.render_thread_stop.clone();
     let target_fps = settings.target_fps;
-    let capture_clicks = settings.click_highlight_color;
+    let capture_clicks_enabled = settings.capture_clicks;
     let click_color = settings.click_highlight_color;
     let click_dissolve_ms = settings.click_dissolve_ms as u64;
     let click_radius = settings.click_highlight_radius;
@@ -2691,7 +2580,21 @@ async fn start_capture(
 
             let frame_start = std::time::Instant::now();
 
+            #[cfg(target_os = "macos")]
+            if crate::hollow_border::is_border_interacting() {
+                // Freeze content during interaction to prevent "swimming" lag
+                // The window moves via set_border_live_move_callback, carrying the last frame with it
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                continue;
+            }
+
+            // User requested higher update frequency during drag/resize
+            // Check border interaction only for non-macOS platforms if needed
+            // (macOS is handled above by freezing)
+            #[cfg(not(target_os = "macos"))]
             let is_interacting = crate::hollow_border::is_border_interacting();
+            #[cfg(target_os = "macos")]
+            let is_interacting = false;
             // User requested higher update frequency during drag/resize
             // previously we skipped capture here, now we allow it for smoother updates
 
@@ -2725,7 +2628,19 @@ async fn start_capture(
                         #[cfg(target_os = "windows")]
                         let mut click_shader_data = None;
 
-                        if settings.capture_clicks {
+                        #[cfg(target_os = "macos")]
+                        // x, y, radius, r, g, b, alpha
+                        let mut macos_clicks: Vec<(
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                        )> = Vec::new();
+
+                        if capture_clicks_enabled {
                             let display_info = display_info::get();
 
                             // Convert frame offset to pixels
@@ -2747,6 +2662,30 @@ async fn start_capture(
                             );
 
                             if !clicks.is_empty() {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    let r = click_color[0] as f32 / 255.0;
+                                    let g = click_color[1] as f32 / 255.0;
+                                    let b = click_color[2] as f32 / 255.0;
+                                    let scale = display_info.scale_factor as f32;
+
+                                    for click in &clicks {
+                                        let frame_x = click.x as f32 - offset_x_pixels as f32;
+                                        let frame_y = click.y as f32 - offset_y_pixels as f32;
+                                        let age_ms = click.timestamp.elapsed().as_millis() as f32;
+                                        let alpha =
+                                            1.0 - (age_ms / click_dissolve_ms as f32).min(1.0);
+                                        macos_clicks.push((
+                                            frame_x / scale,
+                                            frame_y / scale,
+                                            click_radius as f32,
+                                            r,
+                                            g,
+                                            b,
+                                            alpha,
+                                        ));
+                                    }
+                                }
                                 // For GPU shader, we currently support only one active click (the most recent one)
                                 // or we could blend them if we upgraded the shader.
                                 // For now, picking the latest one is a good 80/20 solution.
@@ -2825,6 +2764,7 @@ async fn start_capture(
                                         crop_y,
                                         crop_w,
                                         crop_h,
+                                        Some(&macos_clicks),
                                     );
                                 } else {
                                     window.update_frame(frame.data, frame.width, frame.height);
@@ -2965,7 +2905,7 @@ async fn stop_capture(state: State<'_, AppState>) -> Result<Settings, String> {
     *DESTINATION_WINDOW.lock().unwrap() = None;
 
     // Clean up separation layer (RegionToShare approach)
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
         tracing::debug!("Clearing SEPARATION_LAYER");
         *SEPARATION_LAYER.lock().unwrap() = None;
@@ -3017,7 +2957,7 @@ async fn cleanup_on_capture_failed(state: State<'_, AppState>) -> Result<(), Str
     *REC_INDICATOR.lock().unwrap() = None;
 
     // Clean up separation layer (RegionToShare approach)
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
         *SEPARATION_LAYER.lock().unwrap() = None;
     }

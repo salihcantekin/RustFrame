@@ -7,13 +7,15 @@
 //! - Zoom: Similar to Meet
 
 use crate::traits::PreviewWindow;
-use cocoa::appkit::{NSBackingStoreType, NSColor, NSView, NSWindow, NSWindowStyleMask};
+use cocoa::appkit::{NSBackingStoreType, NSColor, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask};
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize};
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::data_provider::CGDataProvider;
 use core_graphics::geometry::CGRect as CG_CGRect;
 use core_graphics::image::CGImage;
+use core_graphics::path::CGPath;
+use core_graphics::geometry::{CGRect, CGPoint, CGSize};
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
@@ -534,6 +536,7 @@ impl DestinationWindow {
         crop_y: i64,
         crop_w: i64,
         crop_h: i64,
+        clicks: Option<&Vec<(f32, f32, f32, f32, f32, f32, f32)>>, // (x, y, radius, r, g, b, alpha)
     ) {
         // GPU rendering with CALayer contentsRect for cropping
         // No need for CPU fallback - CALayer handles cropping on GPU!
@@ -547,6 +550,7 @@ impl DestinationWindow {
                 crop_y: i64,
                 crop_w: i64,
                 crop_h: i64,
+                clicks: *const Vec<(f32, f32, f32, f32, f32, f32, f32)>,
             }
 
             let ctx = unsafe { &*(ctx_ptr as *const UpdateContext) };
@@ -656,6 +660,79 @@ impl DestinationWindow {
 
                 let _: () = msg_send![transaction_class, commit];
 
+                // Render click highlights using CALayer (simple circle via cornerRadius)
+                if !ctx.clicks.is_null() {
+                    let clicks = &*ctx.clicks;
+                    
+                    let transaction_class = class!(CATransaction);
+                    let _: () = msg_send![transaction_class, begin];
+                    let _: () = msg_send![transaction_class, setDisableActions: YES];
+                    
+                    // Clear old sublayers first
+                    let sublayers: id = msg_send![layer, sublayers];
+                    if sublayers != nil {
+                         // Create a mutable copy or just iterate and remove?
+                         // Safest is to remove all sublayers if we are the only ones managing them here.
+                        let copy: id = msg_send![sublayers, copy];
+                        let sel_remove = sel!(removeFromSuperlayer);
+                        let _: () = msg_send![copy, makeObjectsPerformSelector: sel_remove];
+                        let _: () = msg_send![copy, release];
+                    }
+                    
+                    // Get view height for coordinate flipping (macOS (0,0) is bottom-left)
+                    // We need to flip the y coordinate.
+                    // The clicks are in "points from top-left" (from main.rs).
+                    // The layer is in "points from bottom-left" (standard CALayer in unflipped view).
+                    let bounds: NSRect = msg_send![ctx.view, bounds];
+                    let view_height = bounds.size.height;
+
+                    for (cx, cy, radius, r, g, b, alpha) in clicks {
+                        let circle_layer: id = msg_send![class!(CALayer), layer];
+                        
+                        // Color using NSColor -> CGColor
+                        // Note: NSColor needs an autorelease pool usually, but we are in a main thread callback?
+                        // Using convenience constructor returns autoreleased object.
+                        let ns_color: id = NSColor::colorWithRed_green_blue_alpha_(nil, *r as f64, *g as f64, *b as f64, *alpha as f64);
+                        let cg_color: id = msg_send![ns_color, CGColor];
+                        let _: () = msg_send![circle_layer, setBackgroundColor: cg_color];
+                        
+                        // Frame & Corner Radius
+                        let radius_val = *radius as f64;
+                        let size = radius_val * 2.0;
+
+                        // Flip Y coordinate: view_height - y
+                        // Center is at (cx, inverted_y)
+                        // Origin of rect is (cx - r, inverted_y - r)
+                        // Inverted Y (from bottom) = view_height - y_from_top
+                        let flipped_y = view_height - *cy as f64;
+
+                        let rect = NSRect::new(
+                            NSPoint::new(*cx as f64 - radius_val, flipped_y - radius_val),
+                            NSSize::new(size, size)
+                        );
+                        let _: () = msg_send![circle_layer, setFrame: rect];
+                        let _: () = msg_send![circle_layer, setCornerRadius: radius_val];
+                         
+                        let _: () = msg_send![layer, addSublayer: circle_layer];
+                    }
+
+                    let _: () = msg_send![transaction_class, commit];
+
+                } else {
+                     // Clear
+                    let transaction_class = class!(CATransaction);
+                    let _: () = msg_send![transaction_class, begin];
+                    let _: () = msg_send![transaction_class, setDisableActions: YES];
+                    let sublayers: id = msg_send![layer, sublayers];
+                    if sublayers != nil {
+                        let copy: id = msg_send![sublayers, copy];
+                        let sel_remove = sel!(removeFromSuperlayer);
+                        let _: () = msg_send![copy, makeObjectsPerformSelector: sel_remove];
+                        let _: () = msg_send![copy, release];
+                    }
+                    let _: () = msg_send![transaction_class, commit];
+                }
+
                 // Release our retain from get_iosurface() - CALayer now owns a reference
                 CFRelease(iosurface);
             }
@@ -672,6 +749,7 @@ impl DestinationWindow {
                 crop_y: i64,
                 crop_w: i64,
                 crop_h: i64,
+                clicks: *const Vec<(f32, f32, f32, f32, f32, f32, f32)>,
             }
 
             let context = UpdateContext {
@@ -681,6 +759,7 @@ impl DestinationWindow {
                 crop_y,
                 crop_w,
                 crop_h,
+                clicks: clicks.map(|v| v as *const _).unwrap_or(std::ptr::null()),
             };
 
             if !is_main {
