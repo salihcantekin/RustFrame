@@ -32,6 +32,9 @@ use rec_indicator::RecIndicator;
 #[cfg(target_os = "windows")]
 use separation_layer::SeparationLayer;
 
+// Import PreviewWindow trait for method resolution
+use crate::traits::PreviewWindow;
+
 // Global state for Windows (not thread-safe, but only accessed from commands)
 lazy_static! {
     static ref HOLLOW_BORDER: Mutex<Option<HollowBorder>> = Mutex::new(None);
