@@ -43,125 +43,6 @@ lazy_static! {
     static ref SINGLE_INSTANCE_LOCK: Mutex<Option<single_instance::SingleInstanceLock>> = Mutex::new(None);
 }
 
-// ============================================================================
-// Collision Detection & Auto-Repositioning
-// ============================================================================
-
-/// Check if two rectangles intersect
-fn rectangles_intersect(r1: (i32, i32, i32, i32), r2: (i32, i32, i32, i32)) -> bool {
-    let (x1, y1, w1, h1) = r1;
-    let (x2, y2, w2, h2) = r2;
-
-    !(x1 + w1 <= x2 || x2 + w2 <= x1 || y1 + h1 <= y2 || y2 + h2 <= y1)
-}
-
-/// Find a safe position for preview window that doesn't intersect with border
-fn find_safe_preview_position(
-    border_rect: (i32, i32, i32, i32),
-    preview_size: (i32, i32),
-    monitors: &[MonitorInfo],
-) -> (i32, i32) {
-    let (bx, by, bw, bh) = border_rect;
-    let (pw, ph) = preview_size;
-
-    // Try positions in order of preference:
-    // 1. Top-left of border
-    // 2. Top-right of border
-    // 3. Bottom-left of border
-    // 4. Bottom-right of border
-    // 5. Move to another monitor if available
-
-    let candidates = vec![
-        (bx - pw - 10, by), // Left of border
-        (bx + bw + 10, by), // Right of border
-        (bx, by - ph - 10), // Above border
-        (bx, by + bh + 10), // Below border
-    ];
-
-    // Find first candidate that doesn't intersect with border and fits on screen
-    for (px, py) in candidates {
-        let preview_rect = (px, py, pw, ph);
-        if !rectangles_intersect(border_rect, preview_rect) {
-            // Check if it fits on any monitor
-            for monitor in monitors {
-                let mx = monitor.x as i32;
-                let my = monitor.y as i32;
-                let mw = monitor.width as i32;
-                let mh = monitor.height as i32;
-
-                if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
-                    return (px, py);
-                }
-            }
-        }
-    }
-
-    // If no safe position found on current monitor, try other monitors
-    if monitors.len() > 1 {
-        for monitor in monitors {
-            let mx = monitor.x as i32;
-            let my = monitor.y as i32;
-            let mw = monitor.width as i32;
-            let mh = monitor.height as i32;
-
-            // Try top-left corner of other monitors
-            let px = mx + 50;
-            let py = my + 50;
-            let preview_rect = (px, py, pw, ph);
-
-            if px >= mx && py >= my && px + pw <= mx + mw && py + ph <= my + mh {
-                if !rectangles_intersect(border_rect, preview_rect) {
-                    return (px, py);
-                }
-            }
-        }
-    }
-
-    // Fallback: slightly offset from border
-    (bx + bw + 20, by + 20)
-}
-
-/// Auto-reposition preview window if it intersects with border
-fn auto_reposition_preview_if_needed(
-    border_x: i32,
-    border_y: i32,
-    border_width: i32,
-    border_height: i32,
-    monitors: &[MonitorInfo],
-) {
-    if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
-        if let Some(ref mut dest_window) = *dest_lock {
-            // Get current preview position and size
-            if let Some((px, py, pw, ph)) = dest_window.get_rect() {
-                let border_rect = (border_x, border_y, border_width, border_height);
-                let preview_rect = (px, py, pw, ph);
-
-                // Check for intersection
-                if rectangles_intersect(border_rect, preview_rect) {
-                    tracing::info!(
-                        "Border and preview intersect, auto-repositioning preview. Border: {:?}, Preview: {:?}", 
-                        border_rect, preview_rect
-                    );
-
-                    let (new_x, new_y) =
-                        find_safe_preview_position(border_rect, (pw, ph), monitors);
-
-                    dest_window.set_pos(new_x, new_y);
-                    tracing::info!("Preview repositioned to ({}, {})", new_x, new_y);
-
-                    // Keep separation layer aligned with preview when present
-                    #[cfg(any(target_os = "windows", target_os = "macos"))]
-                    if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
-                        if let Some(ref sep) = *sep_lock {
-                            sep.update_position(new_x, new_y, pw, ph);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Perform cleanup of all capture resources
 /// This function is safe to call multiple times - it will only execute once
 fn perform_cleanup() {
@@ -1460,8 +1341,20 @@ fn show_preview_border(
         border.set_preview_mode();
         border.show();
 
-        // Auto-reposition preview window if it intersects with border
-        auto_reposition_preview_if_needed(x, y, width, height, &state.monitors.lock().unwrap());
+        // Update preview/destination window to match border
+        if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+            if let Some(ref mut dest_window) = *dest_lock {
+                dest_window.set_pos(x, y);
+                dest_window.resize(width as u32, height as u32);
+
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                    if let Some(ref sep) = *sep_lock {
+                        sep.update_position(x, y, width, height);
+                    }
+                }
+            }
+        }
 
         return Ok(());
     }
@@ -1475,8 +1368,20 @@ fn show_preview_border(
 
     *preview = Some(border);
 
-    // Auto-reposition preview window if it intersects with border
-    auto_reposition_preview_if_needed(x, y, width, height, &state.monitors.lock().unwrap());
+    // Update preview/destination window to match border
+    if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
+        if let Some(ref mut dest_window) = *dest_lock {
+            dest_window.set_pos(x, y);
+            dest_window.resize(width as u32, height as u32);
+
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
+                if let Some(ref sep) = *sep_lock {
+                    sep.update_position(x, y, width, height);
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -1586,29 +1491,34 @@ fn restore_window_z_order_macos() {
         }
     }
 
-    let dest_lock = DESTINATION_WINDOW.lock().unwrap();
-    let sep_lock = SEPARATION_LAYER.lock().unwrap();
-    let border_lock = HOLLOW_BORDER.lock().unwrap();
+    // DEADLOCK FIX: Use try_lock instead of lock().unwrap()
+    // The render thread might be holding these locks while waiting for the main thread (dispatch_sync)
+    // If we block here on the main thread waiting for the locks, we create a deadlock.
+    if let (Ok(dest_lock), Ok(sep_lock), Ok(border_lock)) = (
+        DESTINATION_WINDOW.try_lock(),
+        SEPARATION_LAYER.try_lock(),
+        HOLLOW_BORDER.try_lock(),
+    ) {
+        if let (Some(dest), Some(sep), Some(border)) =
+            (dest_lock.as_ref(), sep_lock.as_ref(), border_lock.as_ref())
+        {
+            let mut ctx = ZOrderContext {
+                dest_window: dest.get_window(),
+                sep_window: sep.get_window(),
+                border_window: border.get_window(),
+            };
 
-    if let (Some(dest), Some(sep), Some(border)) =
-        (dest_lock.as_ref(), sep_lock.as_ref(), border_lock.as_ref())
-    {
-        let mut ctx = ZOrderContext {
-            dest_window: dest.get_window(),
-            sep_window: sep.get_window(),
-            border_window: border.get_window(),
-        };
-
-        unsafe {
-            let is_main = pthread_main_np() != 0;
-            if is_main {
-                restore_z_order_on_main(&mut ctx as *mut _ as *mut std::ffi::c_void);
-            } else {
-                dispatch_sync_f(
-                    &_dispatch_main_q,
-                    &mut ctx as *mut _ as *mut std::ffi::c_void,
-                    restore_z_order_on_main,
-                );
+            unsafe {
+                let is_main = pthread_main_np() != 0;
+                if is_main {
+                    restore_z_order_on_main(&mut ctx as *mut _ as *mut std::ffi::c_void);
+                } else {
+                    dispatch_sync_f(
+                        &_dispatch_main_q,
+                        &mut ctx as *mut _ as *mut std::ffi::c_void,
+                        restore_z_order_on_main,
+                    );
+                }
             }
         }
     }
@@ -2207,63 +2117,7 @@ async fn start_capture(
 
             #[cfg(target_os = "macos")]
             {
-                // CRITICAL DECISION POINT:
-                // In CAPTURE mode: All 3 windows (Border, Separation, Preview) MUST be synchronized
-                // In PREVIEW mode: Preview window must NOT overlap with border - auto-reposition if needed
-
                 log::info!("📍 Callback received: ({}, {}) {}x{}", x, y, width, height);
-
-                // Check if we're in preview mode
-                let is_preview_mode = if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
-                    border_lock
-                        .as_ref()
-                        .map(|b| b.is_preview_mode())
-                        .unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if is_preview_mode {
-                    // PREVIEW MODE: Do NOT sync windows - keep preview separate from border
-                    // Auto-reposition preview if it intersects with the new border position
-                    log::info!("  → Preview mode: checking for collision...");
-
-                    if let Ok(monitors) = monitors_for_cb.lock() {
-                        auto_reposition_preview_if_needed(x, y, width, height, &monitors);
-                    }
-                } else {
-                    // CAPTURE MODE: Sync all windows to same position
-                    log::info!("  → Capture mode: syncing all windows...");
-
-                    // Update preview/destination window to match border exactly
-                    if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
-                        if let Some(ref dest) = *dest_lock {
-                            log::info!("  → Updating destination...");
-                            dest.update_position(x, y, width as u32, height as u32);
-                        }
-                    }
-
-                    // Update separation layer to match border exactly
-                    if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
-                        if let Some(ref sep) = *sep_lock {
-                            log::info!(
-                                "  → [Separation] Updating to: ({}, {}) {}x{}",
-                                x,
-                                y,
-                                width,
-                                height
-                            );
-                            sep.update_position(x, y, width, height);
-                        }
-                    }
-
-                    // CRITICAL: Restore z-order ONCE after all windows updated (at end of interaction)
-                    // This ensures smooth movement without flashing/flickering
-                    log::info!("  → Restoring z-order...");
-                    restore_window_z_order_macos();
-                }
-
-                // DEBUG: Verify all windows have same position after update
                 if let Ok(border_lock) = HOLLOW_BORDER.try_lock() {
                     if let Some(border) = border_lock.as_ref() {
                         let (bx, by, bw, bh) = border.get_rect();
@@ -2646,36 +2500,6 @@ async fn start_capture(
                 }
             }
 
-            #[cfg(target_os = "macos")]
-            {
-                let inner_x = x + border_offset;
-                let inner_y = y + border_offset;
-
-                if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
-                    if let Some(ref mut dest) = *dest_lock {
-                        // macOS: window already created with inner size, just update position
-                        dest.set_pos(inner_x, inner_y);
-                        log::info!(
-                            "✅ macOS preview positioned at inner rect: at ({}, {})",
-                            inner_x,
-                            inner_y
-                        );
-                    }
-                }
-
-                if let Ok(sep_lock) = SEPARATION_LAYER.try_lock() {
-                    if let Some(ref sep) = *sep_lock {
-                        sep.update_position(
-                            inner_x,
-                            inner_y,
-                            inner_width as i32,
-                            inner_height as i32,
-                        );
-                        sep.show();
-                    }
-                }
-            }
-
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
                 if let Some(ref mut dest) = *dest_lock {
@@ -2718,6 +2542,7 @@ async fn start_capture(
     {
         use crate::hollow_border::set_border_live_move_callback;
         let border_w = settings.border_width;
+        let eng_for_callback = state.capture_engine.clone();
 
         set_border_live_move_callback(move |x, y, width, height| {
             log::info!(
@@ -2787,20 +2612,6 @@ async fn start_capture(
                 }
             }
 
-            #[cfg(target_os = "macos")]
-            {
-                let border_offset = border_w as i32;
-                let inner_x = x + border_offset;
-                let inner_y = y + border_offset;
-
-                if let Ok(mut dest_lock) = DESTINATION_WINDOW.try_lock() {
-                    if let Some(ref mut dest) = *dest_lock {
-                        // macOS: window already created with inner size, just update position
-                        dest.set_pos(inner_x, inner_y);
-                    }
-                }
-            }
-
             // Update REC indicator position in real-time during drag (fixed: re-enabled)
             if let Ok(rec_lock) = REC_INDICATOR.try_lock() {
                 if let Some(ref rec) = *rec_lock {
@@ -2820,6 +2631,35 @@ async fn start_capture(
                                 x, y, width, height, // capture (border) bounds
                             );
                         }
+                    }
+                }
+            }
+
+            // CRITICAL: Update capture engine region in REAL-TIME during drag
+            // This prevents "frozen" content inside the border or capturing the border edge
+            // CRITICAL: Update capture engine region in REAL-TIME during drag
+            // This prevents "frozen" content inside the border or capturing the border edge
+            if let Ok(mut engine_lock) = eng_for_callback.try_lock() {
+                if let Some(ref mut eng) = *engine_lock {
+                    let scale_factor = crate::platform::input::get_screen_scale_factor();
+                    if let Err(e) = eng.set_scale_factor(scale_factor) {
+                        log::trace!("Failed to set scale factor: {}", e);
+                    }
+
+                    let border_offset = if cfg!(target_os = "macos") { 50 } else { 0 };
+                    let inner_width = width as i32 - (border_offset * 2);
+                    let inner_height = height as i32 - (border_offset * 2);
+
+                    let new_region = crate::CaptureRect {
+                        x: x + border_offset,
+                        y: y + border_offset,
+                        width: inner_width as u32,
+                        height: inner_height as u32,
+                    };
+
+                    if let Err(e) = eng.update_region(new_region) {
+                        // excessive logging can cause lag, so maybe log only on error or very verbose trace
+                        log::trace!("Failed to update capture region during drag: {}", e);
                     }
                 }
             }
@@ -2851,16 +2691,9 @@ async fn start_capture(
 
             let frame_start = std::time::Instant::now();
 
-            // PERFORMANCE OPTIMIZATION: Skip capture during border drag/resize
-            // Reduces CPU from ~50% to ~5-10% during interaction
-            // Border updates happen once on mouseUp event (see callback above)
             let is_interacting = crate::hollow_border::is_border_interacting();
-
-            if is_interacting {
-                // Skip frame capture and rendering during interaction
-                std::thread::sleep(frame_duration);
-                continue;
-            }
+            // User requested higher update frequency during drag/resize
+            // previously we skipped capture here, now we allow it for smoother updates
 
             // Get frame from capture engine
             let frame = {
@@ -2889,6 +2722,7 @@ async fn start_capture(
                 if let Ok(dest_lock) = DESTINATION_WINDOW.try_lock() {
                     if let Some(window) = dest_lock.as_ref() {
                         // Gather click data if enabled
+                        #[cfg(target_os = "windows")]
                         let mut click_shader_data = None;
 
                         if settings.capture_clicks {
@@ -2916,6 +2750,7 @@ async fn start_capture(
                                 // For GPU shader, we currently support only one active click (the most recent one)
                                 // or we could blend them if we upgraded the shader.
                                 // For now, picking the latest one is a good 80/20 solution.
+                                #[cfg(target_os = "windows")]
                                 if let Some(latest_click) = clicks.last() {
                                     let age_ms =
                                         latest_click.timestamp.elapsed().as_millis() as f32;

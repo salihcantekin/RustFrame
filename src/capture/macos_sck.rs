@@ -10,6 +10,7 @@
 
 #![cfg(target_os = "macos")]
 
+use crate::window_filter::WindowIdentifier;
 use anyhow::{anyhow, Result};
 use block::ConcreteBlock;
 use cocoa::base::{id, nil};
@@ -24,7 +25,6 @@ use std::sync::{
     atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering},
     Arc, Mutex,
 };
-use crate::window_filter::WindowIdentifier;
 
 #[link(name = "ScreenCaptureKit", kind = "framework")]
 extern "C" {}
@@ -460,20 +460,20 @@ fn ensure_output_class() -> *const Class {
 
 /// Build an NSArray of SCWindow objects to exclude from capture
 /// Matches window identifiers against shareable content windows
-fn build_excluding_windows_array(
-    excluded: &Option<Vec<WindowIdentifier>>,
-    shareable: id,
-) -> id {
+fn build_excluding_windows_array(excluded: &Option<Vec<WindowIdentifier>>, shareable: id) -> id {
     unsafe {
         let empty = NSArray::array(nil);
-        
+
         if let Some(ref windows) = excluded {
             if windows.is_empty() {
                 return empty;
             }
-            
+
             // Log what we're excluding
-            log::info!("[SCK] Building excludingWindows array for {} windows", windows.len());
+            log::info!(
+                "[SCK] Building excludingWindows array for {} windows",
+                windows.len()
+            );
             for w in windows {
                 log::debug!(
                     "[SCK]   Excluding: app_id={}, window_name={}",
@@ -481,30 +481,30 @@ fn build_excluding_windows_array(
                     w.window_name
                 );
             }
-            
+
             // Get all available windows from shareable content
             let windows_list: id = msg_send![shareable, windows];
             if windows_list == nil {
                 log::warn!("[SCK] No windows available from shareable content");
                 return empty;
             }
-            
+
             let count: NSUInteger = msg_send![windows_list, count];
             log::debug!("[SCK] Found {} total windows in shareable content", count);
-            
+
             let array_cls = class!(NSMutableArray);
             let result_array: id = msg_send![array_cls, arrayWithCapacity: windows.len()];
-            
+
             // Try to match our exclusion list against available windows
             for i in 0..count {
                 let sc_window: id = msg_send![windows_list, objectAtIndex: i];
                 if sc_window == nil {
                     continue;
                 }
-                
+
                 // Get window ID (CGWindowID) from SCWindow
                 let window_id: u32 = msg_send![sc_window, windowID];
-                
+
                 // Get window title
                 let title: id = msg_send![sc_window, title];
                 let title_str = if title != nil {
@@ -517,7 +517,7 @@ fn build_excluding_windows_array(
                 } else {
                     String::new()
                 };
-                
+
                 // Get owning application (SCRunningApplication)
                 let app: id = msg_send![sc_window, owningApplication];
                 let bundle_id_str = if app != nil {
@@ -535,14 +535,15 @@ fn build_excluding_windows_array(
                 } else {
                     String::new()
                 };
-                
+
                 // Check if this window should be excluded
                 for exclusion in windows {
                     let mut should_exclude = false;
-                    
+
                     // Special case: preview window identifier format is "RustFrame Preview {window_id}"
                     if exclusion.window_name.starts_with("RustFrame Preview") {
-                        if let Ok(id_str) = exclusion.window_name
+                        if let Ok(id_str) = exclusion
+                            .window_name
                             .strip_prefix("RustFrame Preview ")
                             .ok_or("")
                         {
@@ -555,27 +556,31 @@ fn build_excluding_windows_array(
                     } else {
                         // Generic app window matching by bundle ID and window name
                         // Match by bundle ID
-                        let bundle_matches = if !exclusion.app_id.is_empty() && !bundle_id_str.is_empty() {
-                            bundle_id_str.contains(&exclusion.app_id)
-                                || exclusion.app_id.contains(&bundle_id_str)
-                        } else {
-                            false
-                        };
-                        
+                        let bundle_matches =
+                            if !exclusion.app_id.is_empty() && !bundle_id_str.is_empty() {
+                                bundle_id_str.contains(&exclusion.app_id)
+                                    || exclusion.app_id.contains(&bundle_id_str)
+                            } else {
+                                false
+                            };
+
                         // Match by window name (exact or partial)
-                        let window_matches = if !exclusion.window_name.is_empty() && !title_str.is_empty() {
-                            title_str.contains(&exclusion.window_name)
-                                || exclusion.window_name.contains(&title_str)
-                        } else {
-                            false
-                        };
-                        
+                        let window_matches =
+                            if !exclusion.window_name.is_empty() && !title_str.is_empty() {
+                                title_str.contains(&exclusion.window_name)
+                                    || exclusion.window_name.contains(&title_str)
+                            } else {
+                                false
+                            };
+
                         // For meaningful match: either both match, or window name matches with app_id present
-                        if (bundle_matches && window_matches) || (!exclusion.window_name.is_empty() && window_matches) {
+                        if (bundle_matches && window_matches)
+                            || (!exclusion.window_name.is_empty() && window_matches)
+                        {
                             should_exclude = true;
                         }
                     }
-                    
+
                     if should_exclude {
                         log::info!(
                             "[SCK] Excluding window: ID={}, bundle='{}', title='{}'",
@@ -588,9 +593,12 @@ fn build_excluding_windows_array(
                     }
                 }
             }
-            
+
             let excluded_count: NSUInteger = msg_send![result_array, count];
-            log::info!("[SCK] Created excludingWindows NSArray with {} windows", excluded_count);
+            log::info!(
+                "[SCK] Created excludingWindows NSArray with {} windows",
+                excluded_count
+            );
             result_array
         } else {
             log::debug!("[SCK] No excluded windows specified");
@@ -645,6 +653,11 @@ impl ScreenCaptureKitCapture {
         self.state.set_region_points(x, y, w, h);
     }
 
+    pub fn update_scale(&self, scale: f64) {
+        let scale_milli = (scale * 1000.0).round().max(1.0) as u32;
+        self.state.set_scale_milli(scale_milli);
+    }
+
     pub fn start(
         &mut self,
         region_x: i32,
@@ -691,10 +704,10 @@ impl ScreenCaptureKitCapture {
         let mut start_err: Option<String> = None;
 
         log::info!("[SCK] Dispatching SCK initialization to main thread...");
-        
+
         // Prepare excluded windows for the closure
         let excluded_for_closure = excluded_windows.clone();
-        
+
         run_on_main_thread(|| unsafe {
             autoreleasepool(|| {
                 log::info!("[SCK] Inside main thread autorelease pool");
@@ -826,10 +839,10 @@ impl ScreenCaptureKitCapture {
 
                 log::info!("[SCK] Creating content filter...");
                 // Create filter and config with exclusion list
-                let excluding_windows = build_excluding_windows_array(&excluded_for_closure, shareable);
+                let excluding_windows =
+                    build_excluding_windows_array(&excluded_for_closure, shareable);
                 let filter: id = msg_send![class!(SCContentFilter), alloc];
-                let filter: id =
-                    msg_send![filter, initWithDisplay: target_display excludingWindows: excluding_windows];
+                let filter: id = msg_send![filter, initWithDisplay: target_display excludingWindows: excluding_windows];
                 if filter == nil {
                     start_err = Some("Failed to create SCContentFilter".to_string());
                     return;

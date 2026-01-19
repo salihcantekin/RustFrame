@@ -112,14 +112,14 @@ pub enum GpuTextureHandle {
 /// Trait for platform-specific capture engines
 pub trait CaptureEngine: Send {
     /// Start capturing the specified region
-    /// 
+    ///
     /// # Parameters
     /// - `region`: Screen region to capture
     /// - `show_cursor`: Include cursor in capture
     /// - `excluded_windows`: Windows to exclude from capture (platform-specific)
     fn start(
-        &mut self, 
-        region: CaptureRect, 
+        &mut self,
+        region: CaptureRect,
         show_cursor: bool,
         excluded_windows: Option<Vec<crate::window_filter::WindowIdentifier>>,
     ) -> anyhow::Result<()>;
@@ -145,6 +145,12 @@ pub trait CaptureEngine: Send {
 
     /// Update the capture region (called when border is resized/moved)
     fn update_region(&mut self, region: CaptureRect) -> anyhow::Result<()>;
+
+    /// Update the screen scale factor (DPI)
+    /// Used to ensure correct pixel-to-point mapping on Retina/High-DPI displays
+    fn set_scale_factor(&mut self, _scale: f64) -> anyhow::Result<()> {
+        Ok(()) // Default implementation does nothing
+    }
 
     /// Downcast to Any for platform-specific access
     fn as_any(&self) -> &dyn std::any::Any;

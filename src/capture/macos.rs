@@ -676,7 +676,12 @@ impl MacOSCaptureEngine {
 }
 
 impl CaptureEngine for MacOSCaptureEngine {
-    fn start(&mut self, region: CaptureRect, show_cursor: bool, excluded_windows: Option<Vec<WindowIdentifier>>) -> Result<()> {
+    fn start(
+        &mut self,
+        region: CaptureRect,
+        show_cursor: bool,
+        excluded_windows: Option<Vec<WindowIdentifier>>,
+    ) -> Result<()> {
         log::info!(
             "[MACOS_ENGINE] start() called with region: {:?}, cursor: {}, excluded: {:?}",
             region,
@@ -735,18 +740,29 @@ impl CaptureEngine for MacOSCaptureEngine {
         let Some(ref mut sck) = self.sck else {
             log::error!("[MACOS_ENGINE] ScreenCaptureKit instance missing; cannot start capture.");
             self.is_active = false;
-            return Err(anyhow!("ScreenCaptureKit is required on macOS; capture start aborted."));
+            return Err(anyhow!(
+                "ScreenCaptureKit is required on macOS; capture start aborted."
+            ));
         };
 
         log::info!("[MACOS_ENGINE] Checking supports_screen_capture_kit()...");
         if !supports_screen_capture_kit() {
             log::error!("[MACOS_ENGINE] ScreenCaptureKit not supported on this macOS version");
             self.is_active = false;
-            return Err(anyhow!("ScreenCaptureKit not supported on this macOS version"));
+            return Err(anyhow!(
+                "ScreenCaptureKit not supported on this macOS version"
+            ));
         }
 
         log::info!("[MACOS_ENGINE] SCK is supported, calling sck.start()...");
-        match sck.start(region.x, region.y, region.width, region.height, show_cursor, excluded_windows.clone()) {
+        match sck.start(
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            show_cursor,
+            excluded_windows.clone(),
+        ) {
             Ok(()) => {
                 log::info!("[MACOS_ENGINE] SCK start succeeded!");
                 self.using_sck = true;
@@ -756,7 +772,10 @@ impl CaptureEngine for MacOSCaptureEngine {
             Err(e) => {
                 self.is_active = false;
                 self.using_sck = false;
-                log::error!("[MACOS_ENGINE] ScreenCaptureKit init failed; not falling back: {}", e);
+                log::error!(
+                    "[MACOS_ENGINE] ScreenCaptureKit init failed; not falling back: {}",
+                    e
+                );
                 Err(e)
             }
         }
@@ -876,6 +895,15 @@ impl CaptureEngine for MacOSCaptureEngine {
         if self.using_sck {
             if let Some(ref sck) = self.sck {
                 sck.update_region_points(region.x, region.y, region.width, region.height);
+            }
+        }
+        Ok(())
+    }
+
+    fn set_scale_factor(&mut self, scale: f64) -> Result<()> {
+        if self.using_sck {
+            if let Some(ref sck) = self.sck {
+                sck.update_scale(scale);
             }
         }
         Ok(())
