@@ -5,58 +5,95 @@
 [![Downloads](https://img.shields.io/github/downloads/salihcantekin/RustFrame/total.svg)](https://github.com/salihcantekin/RustFrame/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**A cross-platform screen region capture tool for precise screen sharing in video calls.**
 
-📦 **[Download Latest Release](https://github.com/salihcantekin/RustFrame/releases/latest)** | 📚 **[Documentation](docs/)** | 🚀 **[Quick Start](docs/user-guide/quick-start.md)**
 
-RustFrame lets you capture and share a specific region of your screen in video calls (Google Meet, Zoom, Teams, Discord) without exposing your entire desktop. Perfect for privacy-conscious sharing, multi-monitor setups, or ultra-wide displays.
+**RustFrame** is a privacy-focused, cross-platform screen region sharing tool. It lets you select any area of your screen and share only that region in video calls—without exposing your entire desktop.
 
-## ✨ Key Features
+**What does RustFrame do?**
 
-- 🎯 **Precise Region Capture** - Select any screen area with pixel-perfect control
-- 🖥️ **Multi-Monitor Support** - Capture from any display, auto-detects when you drag between monitors
-- 🔍 **Share Content Filters** - Include or exclude specific apps/windows, with search, app/window views, and manual refresh
-- ⚡ **GPU-Accelerated** - High-performance capture with minimal CPU usage (~8-10%)
-- 🎨 **Customizable** - Click highlights, cursor visibility, border styling, FPS tuning
-- 🔧 **Cross-Platform** - Windows, macOS, and Linux (experimental)
-- 🎮 **Real-Time Adjustment** - Move and resize capture region while sharing
+- Lets you share a specific part of your screen (not the whole desktop)
+- Works with all major video conferencing apps (Google Meet, Zoom, Teams, Discord)
+- Supports multi-monitor setups and ultra-wide screens
+- Keeps your private info hidden—share only what you want
+- Fast and lightweight: minimal CPU/memory usage, instant region adjustment
+- No account, no cloud, no telemetry—everything runs locally
 
-## 🚀 Quick Start
+**Key Features:**
+- Pixel-perfect region selection with a draggable border
+- Real-time preview window (“RustFrame - Share this window”) for sharing
+- Move/resize the capture region live—even while sharing
+- GPU-accelerated for smooth performance
+- Customizable: border, highlights, cursor, FPS, and more
+- Windows, macOS, and Linux support (Linux experimental)
 
-### Installation
+See below for quick links and platform details. For more, see the [User Guide](docs/user-guide/).
 
-**Windows**: Extract ZIP and run `RustFrame.exe`  
-**macOS**: Drag to Applications folder  
-**Linux**: Make AppImage executable and run  
+---
 
-→ See [Installation Guide](docs/user-guide/installation.md) for detailed instructions
+## 🚀 Quick Links
 
-### Usage (30 seconds)
+- **[Download Latest Release](https://github.com/salihcantekin/RustFrame/releases/latest)**
+- **[User Guide](docs/user-guide/)** – Installation, usage, troubleshooting
+- **[Quick Start](docs/user-guide/quick-start.md)** – Get started in 30 seconds
+- **[Developer Guide](docs/developer/)** – Architecture, building, contributing
+- **[Technical Docs](docs/technical/)** – Platform details, performance, internals
+- **[Profiles & Platform Settings](docs/profiles/)** – Platform-specific configuration
+- **[Changelog](docs/changelog/)** – Version history
+- **[Archive](docs/archive/)** – Historical/experimental docs
 
-1. **Launch RustFrame** → UI window opens
-2. **Configure region (optional)** → Settings → Capture Region (use preview border)
-3. **Start capture** → Click "Start Capture"
-4. **Share** → In your video call, select "RustFrame - Share This Window"
+---
 
-**Note**: The preview window is positioned at the bottom-right corner of your screen and sent to the back (z-order) to minimize interference. It remains fully visible to screen sharing applications (Discord, Meet, Zoom, Teams) while being unobtrusive to your workflow.
+## 🎯 Project Overview
 
-→ See [Quick Start Guide](docs/user-guide/quick-start.md) for detailed walkthrough
+RustFrame is designed for:
+- **Precise region capture** with pixel-perfect control
+- **Multi-monitor support** and auto-detection
+- **Content filtering** (include/exclude apps/windows)
+- **GPU-accelerated performance**
+- **Customizable UI** (borders, highlights, cursor, FPS)
+- **Cross-platform**: Windows, macOS, Linux (experimental)
 
-## 📚 Documentation
+See [docs/README.md](docs/README.md) for full documentation structure and navigation.
 
-### For Users
-- **[User Guide](docs/user-guide/)** - Installation, usage, and troubleshooting
-- **[Quick Start](docs/user-guide/quick-start.md)** - Get started in 30 seconds
-- **[Features](docs/user-guide/features.md)** - Complete feature reference
-- **[Troubleshooting](docs/user-guide/troubleshooting.md)** - Common issues and solutions
-- **[FAQ](docs/user-guide/faq.md)** - Frequently asked questions
+---
 
-### For Developers
-- **[Developer Guide](docs/developer/)** - Architecture and contributing
-- **[Building Guide](docs/developer/building.md)** - Compile from source
-- **[Technical Documentation](docs/technical/)** - Low-level implementation details
+## 📚 Documentation Structure
 
-## 🎯 Features in Detail
+All detailed documentation is under the [docs/](docs/) directory:
+
+- **User Guide**: [docs/user-guide/](docs/user-guide/)
+- **Developer Guide**: [docs/developer/](docs/developer/)
+- **Technical Docs**: [docs/technical/](docs/technical/)
+- **Profiles & Platform Settings**: [docs/profiles/](docs/profiles/)
+- **Changelog**: [docs/changelog/](docs/changelog/)
+- **Archive**: [docs/archive/](docs/archive/)
+
+Each section contains platform-specific details and comparison tables where relevant.
+
+---
+
+## 🖥️ Supported Platforms (Summary)
+
+| Platform      | Status         | Capture Method                | Rendering         |
+|--------------|----------------|-------------------------------|-------------------|
+| Windows 10/11| ✅ Full Support | Windows Graphics Capture (WGC)| DirectX 11 (GPU)  |
+| macOS 12.3+  | ✅ Full Support | ScreenCaptureKit              | Metal (GPU)       |
+| macOS 10.15+ | ✅ Supported    | CoreGraphics                  | CPU fallback      |
+| Linux        | 🚧 Experimental| X11/Wayland                   | wgpu              |
+
+For details, see [docs/technical/](docs/technical/) and [docs/user-guide/](docs/user-guide/).
+
+---
+
+## 🗂️ Archive & Historical Docs
+
+Past experiments, failed approaches, and technical lessons are preserved in [docs/archive/](docs/archive/). See archive README for details.
+
+---
+
+## 🛠️ Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/developer/](docs/developer/) for guidelines.
 
 ### Capture Features
 - **Region Selection**: Pixel-perfect control via draggable/resizable border
@@ -169,18 +206,15 @@ We welcome contributions! Here's how to get started:
 ## 📝 Known Issues & Roadmap
 
 ### Known Issues
-- **Windows**: GPU acceleration temporarily disabled due to D3D11 device mismatch (will be fixed)
 - **macOS**: Click highlights use CPU instead of GPU (optimization planned)
 - **Linux**: PipeWire support experimental, may have compatibility issues
 
 → See [Known Issues](docs/developer/known-issues.md) for complete list
 
 ### Planned Features
-- [ ] Window-based capture (capture specific application windows)
 - [ ] Zero-copy GPU texture sharing (eliminate CPU copy)
 - [ ] Global hotkeys for start/stop
 - [ ] Region presets (save/load favorite regions)
-- [ ] Annotation tools (draw on capture)
 
 ## 📚 Technical Resources
 

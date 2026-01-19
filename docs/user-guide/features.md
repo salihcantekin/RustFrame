@@ -1,3 +1,37 @@
+## Performance Settings
+
+For detailed performance metrics, CPU/GPU usage, and optimization tips, see the [Settings Reference – Performance Settings](settings.md#performance-settings).
+
+---
+## Click Highlights
+
+For configuration, platform notes, and troubleshooting, see the [Settings Reference – Click Highlights](settings.md#click-highlights).
+
+---
+## Border Customization
+
+For all border options and technical details, see the [Settings Reference – Border Settings](settings.md#border-settings).
+
+---
+## Capture Region
+
+For configuration, technical details, and multi-monitor usage, see the [Features Guide – Capture Region](features.md#capture-region).
+
+---
+## Share Content Filters (macOS only)
+
+See [Technical Docs – macOS Window Exclusion](../technical/macos-window-exclusion.md) and [Settings Reference](settings.md#share-content) for details.
+
+---
+## Capture Profiles
+
+For advanced configuration and custom profiles, see the [Profiles Guide](../profiles/README.md).
+
+---
+## Troubleshooting
+
+For solutions to common issues, see the [Troubleshooting Guide](troubleshooting.md).
+
 # Features Guide
 
 Complete reference for all RustFrame features.
@@ -45,9 +79,10 @@ Control which part of your screen is captured.
 - **Resize**: Drag corners or edges
 - **Precision**: Use arrow keys for 1-pixel adjustments (when supported)
 
+
 ### Technical Details
 
-- **Minimum Size**: 1×1 pixel (enforced)
+- **Minimum Size**: 400×400 pixels (enforced)
 - **Maximum Size**: Limited by screen resolution
 - **Border Offset**: Capture region excludes border thickness (prevents border from appearing in capture)
 - **Coordinate System**: Screen coordinates (multi-monitor aware)
@@ -61,37 +96,16 @@ Control which part of your screen is captured.
 
 ---
 
-## Share Content Filters
 
-Control which apps/windows are visible in your capture output.
+## Share Content Filters (macOS only)
 
-### Path
-**Settings → Share Content** (tab)
+This feature allows you to include or exclude specific apps/windows from your capture output. **Currently, Share Content Filters are only supported on macOS.**
 
-### Modes
-| Mode | Behavior | Use Case |
-|------|-----------|----------|
-| **Capture All** | No filtering | Default/simple sharing |
-| **Exclude** | Hide selected apps/windows | Hide chat, control center, or sensitive popups |
-| **Include Only** | Capture only the selected set | Lock to your demo apps; everything else hidden |
+- **macOS**: Full support for window/app filtering (see [Technical Docs](../technical/macos-window-exclusion.md)).
+- **Windows**: Not supported due to OS limitations ([details](../technical/WINDOWS_LIMITATIONS.md)).
+- **Linux**: UI planned, backend support coming later.
 
-### Workflow
-1. Click **Load Applications & Windows** (manual refresh, no auto polling)
-2. Choose view: **Applications** or **Windows**
-3. Filter with search (matches app name, bundle/exe, or window title)
-4. Select items → **Add Selected**
-5. Current selection appears at the top (chips); remove individually or **Clear All**
-6. Optional: **Auto-exclude Preview Window** to avoid mirror effects
-
-### Platform Notes
-- **macOS**: Enumerates visible, shareable CG windows (layer 0, titled, non-system bundles like Dock/Control Center/Spotlight are skipped).
-- **Windows**: Enumerates visible, non-cloaked, non-tool windows via EnumWindows; groups by process image (exe name). Titles are required.
-- **Linux**: UI supported; platform enumeration coming later.
-
-### Tips
-- Use **Include Only** when presenting to guarantee no stray popups.
-- Refresh the list after opening new apps/windows.
-- If you don’t see a window, ensure it’s visible and not minimized/cloaked.
+See [Settings Reference](settings.md#share-content) for configuration details.
 
 ---
 

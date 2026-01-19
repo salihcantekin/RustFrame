@@ -8,12 +8,29 @@ Welcome to RustFrame development! This guide covers architecture, building, and 
 - [Building from Source](building.md) - Compilation instructions
 - [Development Setup](building.md#development-setup) - IDE configuration
 
+
 ### Architecture
 - [Architecture Overview](#architecture-overview) - High-level design
 - [Platform Abstractions](platform-specific.md) - Cross-platform code
 - [Capture Engines](capture-engines.md) - Screen capture implementations
 - [Rendering Pipeline](rendering-pipeline.md) - GPU/CPU rendering
 - [Window Management](platform-specific.md#window-management) - Border and preview windows
+- [Platform-Specific Implementation](#platform-specific-implementation) - OS differences, comparison tables
+## Platform-Specific Implementation
+
+RustFrame uses a trait-based abstraction for all platform-dependent code. Each platform (Windows, macOS, Linux) has its own implementation for capture, rendering, and window management.
+
+- See [technical docs](../technical/) for low-level details and platform comparison tables.
+- Platform-specific quirks, limitations, and optimizations are documented in both developer and technical sections.
+
+| Platform      | Capture Engine                | Rendering         | Windowing/Notes                |
+|--------------|-------------------------------|-------------------|-------------------------------|
+| Windows      | Windows Graphics Capture (WGC)| DirectX 11 (GPU)  | Full GPU pipeline, best perf  |
+| macOS 12.3+  | ScreenCaptureKit              | Metal (GPU)       | Window exclusion, full GPU    |
+| macOS <12.3  | CoreGraphics                  | CPU fallback      | No window exclusion           |
+| Linux        | X11/Wayland                   | wgpu              | Experimental, limited support |
+
+For more, see [../technical/](../technical/) and [profiles](../profiles/).
 
 ### Technical Deep Dives
 - [Performance Optimization](performance.md) - CPU/GPU tuning
