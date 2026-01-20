@@ -293,6 +293,8 @@ pub struct Settings {
 
     // Preview Mode
     pub preview_mode: PreviewMode,
+    #[serde(default)]
+    pub capture_preview_window: bool,
 
     // Advanced (hidden) WinAPI Destination Window overrides (Windows-only behavior)
     // These are intentionally not exposed in the UI by default.
@@ -387,6 +389,7 @@ impl Default for Settings {
             gpu_acceleration: true,
             capture_method: CaptureMethod::default(),
             preview_mode: PreviewMode::default(),
+            capture_preview_window: false, // Default to hidden (0)
             winapi_destination_alpha: None,
             winapi_destination_topmost: None,
             winapi_destination_click_through: None,
@@ -1745,7 +1748,11 @@ async fn start_capture(
             #[cfg(target_os = "macos")]
             macos_floating_level: Some(false), // Use normal level for visibility
             #[cfg(target_os = "macos")]
-            macos_sharing_type: Some(1), // NSWindowSharingReadOnly
+            macos_sharing_type: Some(if settings.capture_preview_window {
+                1
+            } else {
+                0
+            }), // 1=ReadOnly(Visible), 0=None(Hidden)
             #[cfg(target_os = "macos")]
             macos_collection_behavior: None, // Use defaults (managed, joinable, etc.)
             #[cfg(target_os = "macos")]
