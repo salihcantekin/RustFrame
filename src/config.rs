@@ -95,6 +95,15 @@ pub mod timing {
     pub const WINDOW_CREATION_POLL_INTERVAL_MS: u64 = 10;
 }
 
+/// Debug and Advanced Features
+pub mod debug {
+    /// Environment variable name to allow preview/destination windows in screen capture tools
+    /// Set this environment variable to any value to enable:
+    /// - Windows: `set RUSTFRAME_ALLOW_SCREEN_CAPTURE=1`
+    /// - macOS/Linux: `export RUSTFRAME_ALLOW_SCREEN_CAPTURE=1`
+    pub const ALLOW_SCREEN_CAPTURE_ENV: &str = "RUSTFRAME_ALLOW_SCREEN_CAPTURE";
+}
+
 /// Color Utilities
 pub mod colors {
     /// Convert ARGB u32 to RGBA byte array

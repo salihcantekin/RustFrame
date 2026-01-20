@@ -188,7 +188,7 @@ impl DestinationWindow {
     /// Update the frame buffer (called from render thread)
     /// This just updates the buffer - window thread will paint on next timer tick
     pub fn update_frame(&self, data: Vec<u8>, width: u32, height: u32) {
-        info!("update_frame: {}x{}, {} bytes", width, height, data.len());
+        //info!("update_frame: {}x{}, {} bytes", width, height, data.len());
 
         // Update the global buffer
         if let Ok(mut buffer) = FRAME_BUFFER.lock() {
@@ -333,12 +333,13 @@ impl DestinationWindow {
         }
     }
 
-    /// Exclude window from screen capture (Windows 10 2000H+)
-    /// Prevents infinite mirroring when capturing desktop regions that include the preview window
-    pub fn exclude_from_capture(&self) {
+    /// Set window display affinity based on config (Windows 10 2000H+)
+    /// Controls whether window is visible in screen capture tools
+    pub fn set_display_affinity(&self, allow_capture: bool) {
         use windows::Win32::Foundation::HWND;
 
         const WDA_EXCLUDEFROMCAPTURE: u32 = 0x00000011;
+        const WDA_NONE: u32 = 0x00000000;
 
         let hwnd_val = self.hwnd_value();
         if hwnd_val == 0 {
@@ -347,20 +348,32 @@ impl DestinationWindow {
 
         unsafe {
             let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
-            
+
             // Windows API declaration - returns i32 (BOOL)
             extern "system" {
                 fn SetWindowDisplayAffinity(hwnd: HWND, dwAffinity: u32) -> i32;
             }
 
-            let result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
-            
+            let affinity = if allow_capture { WDA_NONE } else { WDA_EXCLUDEFROMCAPTURE };
+            let result = SetWindowDisplayAffinity(hwnd, affinity);
+
             if result != 0 {
-                tracing::info!("✅ Preview window excluded from screen capture (WDA_EXCLUDEFROMCAPTURE)");
+                if allow_capture {
+                    tracing::info!("✅ Preview window visible in screen capture tools (WDA_NONE)");
+                } else {
+                    tracing::info!("✅ Preview window excluded from screen capture (WDA_EXCLUDEFROMCAPTURE)");
+                }
             } else {
-                tracing::warn!("⚠️ Failed to exclude window from capture (requires Windows 10 2000H+)");
+                tracing::warn!("⚠️ Failed to set window display affinity (requires Windows 10 2000H+)");
             }
         }
+    }
+
+    /// Exclude window from screen capture (Windows 10 2000H+)
+    /// Prevents infinite mirroring when capturing desktop regions that include the preview window
+    /// Deprecated: Use set_display_affinity instead
+    pub fn exclude_from_capture(&self) {
+        self.set_display_affinity(false);
     }
 
     /// Bring window to front (for debugging or special cases)
@@ -834,7 +847,7 @@ unsafe extern "system" fn window_proc(
                         debug!("WM_PAINT: Could not lock D3D11 renderer (lock failed)");
                     }
                 } else {
-                    debug!("WM_PAINT: No GPU texture data");
+                    //debug!("WM_PAINT: No GPU texture data");
                 }
             } else {
                 debug!("WM_PAINT: Could not lock GPU_TEXTURE_DATA");
@@ -842,13 +855,13 @@ unsafe extern "system" fn window_proc(
 
             // If GPU rendering didn't happen, use GDI fallback
             if !gpu_rendered {
-                debug!("WM_PAINT: Using GDI fallback");
+                //debug!("WM_PAINT: Using GDI fallback");
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);
 
                 if let Ok(buffer_lock) = FRAME_BUFFER.try_lock() {
                     if let Some(ref frame) = *buffer_lock {
-                        debug!("WM_PAINT: GDI rendering {}x{}", frame.width, frame.height);
+                        //debug!("WM_PAINT: GDI rendering {}x{}", frame.width, frame.height);
                         paint_frame_gdi(hdc, &frame.data, frame.width, frame.height);
                     } else {
                         debug!("WM_PAINT: No frame data available");

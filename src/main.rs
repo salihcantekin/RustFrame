@@ -119,6 +119,52 @@ fn reset_cleanup_flag() {
 }
 
 // ============================================================================
+// Debug/Advanced Helper Functions
+// ============================================================================
+
+/// Check if screen capture visibility should be allowed for preview/destination windows
+/// This checks both environment variable and hidden settings key
+///
+/// Priority order:
+/// 1. Environment variable (RUSTFRAME_ALLOW_SCREEN_CAPTURE)
+/// 2. Hidden settings key (debug_allow_screen_capture)
+/// 3. Dev mode (debug builds always allow)
+///
+/// Returns true if windows should be visible in screen capture tools (Snipping Tool, OBS, etc.)
+fn should_allow_screen_capture(settings: &Settings) -> bool {
+    // 1. Check environment variable
+    let env_result = std::env::var(config::debug::ALLOW_SCREEN_CAPTURE_ENV);
+    tracing::info!("Environment variable check: {:?}", env_result);
+    if let Ok(value) = env_result {
+        // Parse value: "1", "true", "yes" = true, anything else = false
+        let allow = value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes");
+        if allow {
+            tracing::info!("✅ Screen capture ALLOWED via environment variable (value: {})", value);
+            log::info!("✅ Screen capture ALLOWED via environment variable (value: {})", value);
+            return true;
+        } else {
+            tracing::info!("❌ Screen capture BLOCKED via environment variable (value: {})", value);
+            log::info!("❌ Screen capture BLOCKED via environment variable (value: {})", value);
+            return false;
+        }
+    }
+
+    // 2. Check hidden settings key
+    if let Some(allow) = settings.debug_allow_screen_capture {
+        if allow {
+            tracing::info!("✅ Screen capture ALLOWED via settings.json");
+            log::info!("✅ Screen capture ALLOWED via settings.json");
+            return true;
+        }
+    }
+
+    // Default: exclude from capture
+    tracing::info!("❌ Screen capture BLOCKED (default)");
+    log::info!("❌ Screen capture BLOCKED (default)");
+    false
+}
+
+// ============================================================================
 // Click Highlight Rendering
 // ============================================================================
 
@@ -339,6 +385,13 @@ pub struct Settings {
     pub log_to_file: bool,
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: u32,
+
+    // Debug/Advanced Features (hidden from UI)
+    /// Allow preview/destination windows to be visible in screen capture tools (Snipping Tool, OBS, etc.)
+    /// This is a hidden setting - not exposed in UI, only via settings.json manual edit
+    /// Default: false (windows are excluded from capture for privacy/performance)
+    #[serde(default)]
+    pub debug_allow_screen_capture: Option<bool>,
 }
 
 // Default functions for serde
@@ -407,6 +460,7 @@ impl Default for Settings {
             log_level: "Error".to_string(),
             log_to_file: true,
             log_retention_days: config::capture::LOG_RETENTION_DAYS as u32,
+            debug_allow_screen_capture: None,
         }
     }
 }
@@ -788,8 +842,38 @@ fn persist_settings_to_disk(settings: &Settings) -> Result<(), String> {
     if let (serde_json::Value::Object(ref mut existing_obj), serde_json::Value::Object(new_obj)) =
         (&mut existing_value, new_value)
     {
+        // Preserve hidden/debug settings that may not be in the new serialized value
+        // These fields use #[serde(skip_serializing_if = "Option::is_none")]
+        // and won't appear in new_obj even if they exist in settings.json
+        let hidden_keys = ["debug_allow_screen_capture"];
+
+        // Save hidden keys from existing JSON before merge
+        let mut preserved_hidden_values: Vec<(String, serde_json::Value)> = Vec::new();
+        for key in &hidden_keys {
+            if let Some(value) = existing_obj.get(*key) {
+                preserved_hidden_values.push((key.to_string(), value.clone()));
+            }
+        }
+
+        // Merge new values (but skip None values for hidden keys)
         for (k, v) in new_obj {
+            // Skip hidden keys if they are null/None - keep the original value
+            let is_hidden_key = hidden_keys.contains(&k.as_str());
+            let is_null = v.is_null();
+
+            if is_hidden_key && is_null {
+                // Don't overwrite hidden key with null
+                continue;
+            }
+
             existing_obj.insert(k, v);
+        }
+
+        // Restore hidden keys that were in the original JSON but not in new_obj
+        for (key, value) in preserved_hidden_values {
+            if !existing_obj.contains_key(&key) {
+                existing_obj.insert(key, value);
+            }
         }
     } else {
         existing_value = serde_json::to_value(settings).unwrap_or_else(|_| serde_json::json!({}));
@@ -1613,6 +1697,16 @@ async fn start_capture(
     // Create hollow border (always WinAPI)
     // COLORREF format is 0x00BBGGRR, border_color is [R, G, B, A]
     log::info!("[MAIN] Creating hollow border...");
+
+    // Set screen capture visibility flag for hollow border
+    {
+        use crate::hollow_border::set_allow_screen_capture;
+        let allow = should_allow_screen_capture(&settings);
+        log::info!("[MAIN] Setting allow_screen_capture flag to: {}", allow);
+        tracing::info!("Setting allow_screen_capture flag to: {}", allow);
+        set_allow_screen_capture(allow);
+        log::info!("[MAIN] Flag set successfully");
+    }
 
     let border_color = (settings.border_color[0] as u32)
         | ((settings.border_color[1] as u32) << 8)
@@ -2620,13 +2714,13 @@ async fn start_capture(
 
             // Render frame to destination window (use try_lock to avoid blocking)
             if let Some(mut frame) = frame {
-                log::debug!(
+                /*log::debug!(
                     "Got frame: {}x{}, data len: {}, gpu: {}",
                     frame.width,
                     frame.height,
                     frame.data.len(),
                     frame.gpu_texture.is_some()
-                );
+                );*/
 
                 // Check if GPU acceleration is available and enabled
                 let gpu_enabled = settings_clone.lock().unwrap().gpu_acceleration;

@@ -876,7 +876,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         // Try to get frame from pool (non-blocking)
         let frame = match frame_pool.TryGetNextFrame() {
             Ok(f) => {
-                debug!("Got frame from pool!");
+                //debug!("Got frame from pool!");
                 f
             }
             Err(e) => {

@@ -55,6 +55,13 @@ static WINDOW_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
 static PREVIEW_MODE: AtomicBool = AtomicBool::new(true);
 /// Flag indicating border is being dragged/resized
 static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
+/// Allow screen capture: when true, window is visible in Snipping Tool, OBS, etc.
+static ALLOW_SCREEN_CAPTURE: AtomicBool = AtomicBool::new(false);
+
+/// Set whether hollow border should be visible in screen capture tools
+pub fn set_allow_screen_capture(allow: bool) {
+    ALLOW_SCREEN_CAPTURE.store(allow, Ordering::SeqCst);
+}
 
 /// Check if border is currently being dragged or resized
 pub fn is_border_interacting() -> bool {
@@ -324,6 +331,10 @@ impl HollowBorder {
 
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
 
+                    // Preview mode: always visible in screen capture (for region selection)
+                    log::info!("✅ PREVIEW MODE - Setting WDA_NONE - Window always VISIBLE in screen capture");
+                    let _ = SetWindowDisplayAffinity(hwnd, WDA_NONE);
+
                     // Preview mode: use alpha transparency (15% opaque = 38/255)
                     // This makes interior visible but semi-transparent, and NOT click-through
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
@@ -360,6 +371,20 @@ impl HollowBorder {
                     };
 
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+
+                    // Capture mode: set display affinity based on allow_screen_capture flag
+                    let allow_capture = ALLOW_SCREEN_CAPTURE.load(Ordering::SeqCst);
+                    tracing::info!("🔍 CAPTURE MODE - ALLOW_SCREEN_CAPTURE flag value: {}", allow_capture);
+                    log::info!("🔍 CAPTURE MODE - ALLOW_SCREEN_CAPTURE flag value: {}", allow_capture);
+
+                    let affinity = if allow_capture {
+                        log::info!("✅ CAPTURE MODE - Setting WDA_NONE - Window VISIBLE in screen capture");
+                        WDA_NONE // Visible in screen capture tools
+                    } else {
+                        log::info!("❌ CAPTURE MODE - Setting WDA_EXCLUDEFROMCAPTURE - Window HIDDEN from screen capture");
+                        WDA_EXCLUDEFROMCAPTURE // Hidden from screen capture
+                    };
+                    let _ = SetWindowDisplayAffinity(hwnd, affinity);
 
                     // Capture mode: use color key for transparency (green = click-through)
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
@@ -440,6 +465,21 @@ impl BorderWindow for HollowBorder {
                     };
 
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+
+                    // Capture mode: set display affinity based on allow_screen_capture flag
+                    let allow_capture = ALLOW_SCREEN_CAPTURE.load(Ordering::SeqCst);
+                    tracing::info!("🔍 CAPTURE MODE (trait) - ALLOW_SCREEN_CAPTURE flag value: {}", allow_capture);
+                    log::info!("🔍 CAPTURE MODE (trait) - ALLOW_SCREEN_CAPTURE flag value: {}", allow_capture);
+
+                    let affinity = if allow_capture {
+                        log::info!("✅ CAPTURE MODE (trait) - Setting WDA_NONE - Window VISIBLE in screen capture");
+                        WDA_NONE
+                    } else {
+                        log::info!("❌ CAPTURE MODE (trait) - Setting WDA_EXCLUDEFROMCAPTURE - Window HIDDEN from screen capture");
+                        WDA_EXCLUDEFROMCAPTURE
+                    };
+                    let _ = SetWindowDisplayAffinity(hwnd, affinity);
+
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0x00FF00), 255, LWA_COLORKEY);
 
                     let mut win_rect = RECT::default();
@@ -468,6 +508,11 @@ impl BorderWindow for HollowBorder {
                     };
 
                     let hwnd = HWND(hwnd_val as *mut std::ffi::c_void);
+
+                    // Preview mode: always visible in screen capture (for region selection)
+                    log::info!("✅ PREVIEW MODE (trait) - Setting WDA_NONE - Window always VISIBLE in screen capture");
+                    let _ = SetWindowDisplayAffinity(hwnd, WDA_NONE);
+
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 38, LWA_ALPHA);
 
                     let mut win_rect = RECT::default();

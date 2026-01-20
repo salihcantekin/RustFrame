@@ -26,6 +26,14 @@ lazy_static! {
 // When true, capture should be paused for performance
 static BORDER_INTERACTING: AtomicBool = AtomicBool::new(false);
 
+/// Allow screen capture: when true, window is visible in Snipping Tool, OBS, etc.
+static ALLOW_SCREEN_CAPTURE: AtomicBool = AtomicBool::new(false);
+
+/// Set whether hollow border should be visible in screen capture tools
+pub fn set_allow_screen_capture(allow: bool) {
+    ALLOW_SCREEN_CAPTURE.store(allow, Ordering::SeqCst);
+}
+
 // Callback to notify when border interaction completes (mouseUp)
 // Called once after drag/resize finishes - updates capture region and windows
 type BorderInteractionCompleteCallback = Box<dyn Fn(i32, i32, i32, i32) + Send + Sync>;
@@ -384,6 +392,12 @@ extern "C" fn create_border_on_main_thread(context: *mut std::ffi::c_void) {
         // Accept mouse events without becoming key window
         // This allows interaction without activating the main application window
         let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
+
+        // PREVIEW BORDER: Always visible in screen capture (for region selection)
+        // NSWindowSharingReadOnly = 1 (visible in screen capture tools)
+        const NS_WINDOW_SHARING_READ_ONLY: u64 = 1;
+        let _: () = msg_send![window, setSharingType: NS_WINDOW_SHARING_READ_ONLY];
+        log::info!("✅ PREVIEW BORDER - Setting NSWindowSharingReadOnly - Window always VISIBLE in screen capture");
 
         // Note: register_border_view_class() already called before window creation
 
@@ -1575,6 +1589,20 @@ impl HollowBorder {
         extern "C" fn set_capture_mode_on_main_thread(ctx_ptr: *mut std::ffi::c_void) {
             let ctx = unsafe { &*(ctx_ptr as *const SetCaptureModeContext) };
             unsafe {
+                // Capture mode: set sharing type based on allow_screen_capture flag
+                let allow_capture = ALLOW_SCREEN_CAPTURE.load(Ordering::SeqCst);
+                const NS_WINDOW_SHARING_NONE: u64 = 0; // Hidden from screen capture
+                const NS_WINDOW_SHARING_READ_ONLY: u64 = 1; // Visible in screen capture
+
+                let sharing_type = if allow_capture {
+                    log::info!("✅ CAPTURE MODE - Setting NSWindowSharingReadOnly - Window VISIBLE in screen capture");
+                    NS_WINDOW_SHARING_READ_ONLY
+                } else {
+                    log::info!("❌ CAPTURE MODE - Setting NSWindowSharingNone - Window HIDDEN from screen capture");
+                    NS_WINDOW_SHARING_NONE
+                };
+                let _: () = msg_send![ctx.window, setSharingType: sharing_type];
+
                 // Disable moving window from anywhere except edges
                 let _: () = msg_send![ctx.window, setMovableByWindowBackground: NO];
                 // Real click-through requires ignoresMouseEvents=YES.
@@ -1616,6 +1644,11 @@ impl HollowBorder {
         PREVIEW_MODE.store(true, Ordering::SeqCst);
         stop_mouse_poll();
         unsafe {
+            // Preview mode: always visible in screen capture (for region selection)
+            const NS_WINDOW_SHARING_READ_ONLY: u64 = 1;
+            let _: () = msg_send![self.window, setSharingType: NS_WINDOW_SHARING_READ_ONLY];
+            log::info!("✅ PREVIEW MODE - Setting NSWindowSharingReadOnly - Window always VISIBLE in screen capture");
+
             // Disable native drag - we handle it manually in mouse events
             let _: () = msg_send![self.window, setMovableByWindowBackground: NO];
             let _: () = msg_send![self.window, setIgnoresMouseEvents: NO];

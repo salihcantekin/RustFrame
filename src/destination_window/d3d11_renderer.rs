@@ -12,7 +12,7 @@ use log::info;
 use std::ffi::CString;
 use std::ptr;
 use std::slice;
-use windows::core::{Interface, PCSTR};
+use windows::core::{PCSTR};
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
 use windows::Win32::Graphics::Direct3D11::{
