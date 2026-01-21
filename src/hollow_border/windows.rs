@@ -5,7 +5,6 @@
 //! Runs in its own thread with dedicated message loop.
 
 use crate::traits::BorderWindow;
-use rustframe_capture::config::timing::*;
 use rustframe_capture::config::window::*;
 use rustframe_capture::display_info;
 use std::sync::atomic::{AtomicBool, Ordering};

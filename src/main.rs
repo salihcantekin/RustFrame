@@ -722,7 +722,7 @@ fn sanitize_settings_json_for_platform(value: &mut serde_json::Value) {
         }
     }
 
-    if let Some(pm) = obj.get("preview_mode").and_then(|v| v.as_str()) {
+    if let Some(_pm) = obj.get("preview_mode").and_then(|v| v.as_str()) {
         let invalid_for_platform = {
             #[cfg(target_os = "windows")]
             {
@@ -1456,7 +1456,7 @@ fn show_preview_border(
     }
 
     // Create new preview border
-    let mut border = HollowBorder::new(x, y, width, height, border_width, border_color)
+    let border = HollowBorder::new(x, y, width, height, border_width, border_color)
         .ok_or("Failed to create preview border")?;
 
     // Preview mode: interior is draggable, not click-through
@@ -1712,7 +1712,7 @@ async fn start_capture(
         | ((settings.border_color[1] as u32) << 8)
         | ((settings.border_color[2] as u32) << 16);
 
-    let mut hollow_border = HollowBorder::new(
+    let hollow_border = HollowBorder::new(
         x,
         y,
         width as i32,
@@ -2099,8 +2099,8 @@ async fn start_capture(
         let engine_for_cb = state.capture_engine.clone();
         let border_w = settings.border_width;
         let app_for_cb = app.clone();
-        let monitors_for_cb = state.monitors.clone();
-        let settings_for_cb = state.settings.clone();
+        let _monitors_for_cb = state.monitors.clone();
+        let _settings_for_cb = state.settings.clone();
 
         set_border_interaction_complete_callback(move |x, y, width, height| {
             log::info!(
@@ -2696,7 +2696,7 @@ async fn start_capture(
             // Check border interaction only for non-macOS platforms if needed
             // (macOS is handled above by freezing)
             #[cfg(not(target_os = "macos"))]
-            let is_interacting = crate::hollow_border::is_border_interacting();
+            let _is_interacting = crate::hollow_border::is_border_interacting();
             #[cfg(target_os = "macos")]
             let is_interacting = false;
             // User requested higher update frequency during drag/resize

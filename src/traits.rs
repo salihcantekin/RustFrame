@@ -3,7 +3,6 @@
 //! These traits ensure consistent API across all platforms (Windows, macOS, Linux)
 //! and help prevent missing implementations.
 
-use anyhow::Result;
 
 /// Hollow border window - shows capture region with resizable/draggable border
 pub trait BorderWindow: Send + Sync {

@@ -21,16 +21,15 @@ use super::d3d11_renderer::D3D11Renderer;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetDC, InvalidateRect, ReleaseDC, StretchDIBits, ValidateRect, BITMAPINFO,
+    BeginPaint, EndPaint, InvalidateRect, StretchDIBits, ValidateRect, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-    GetMessageW, GetSystemMetrics, GetWindowRect, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SetWindowPos, CS_HREDRAW, CS_VREDRAW, MSG, SM_CXSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    GetMessageW, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SetWindowPos, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SWP_ASYNCWINDOWPOS, WM_USER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_VISIBLE, ShowWindow, SW_HIDE, SW_SHOW, SWP_FRAMECHANGED,
-    GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+    WS_POPUP, WS_VISIBLE, ShowWindow, SW_HIDE, SW_SHOW,
 };
 
 use windows::Win32::Foundation::COLORREF;
@@ -40,10 +39,6 @@ use windows::Win32::Foundation::COLORREF;
 use windows::Win32::UI::WindowsAndMessaging::SM_CYSCREEN;
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    SetLayeredWindowAttributes, LWA_ALPHA, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT,
-};
 
 use lazy_static::lazy_static;
 use log::{debug, error, info};

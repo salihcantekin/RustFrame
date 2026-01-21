@@ -4,7 +4,7 @@
 //! in z-order that shows solid color when border is over desktop.
 
 use lazy_static::lazy_static;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::sync::mpsc;
 use windows::core::w;
@@ -13,10 +13,10 @@ use windows::Win32::UI::WindowsAndMessaging::{GetClientRect};
 use windows::Win32::Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HDC, HBRUSH, HGDIOBJ};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos, SetWindowDisplayAffinity,
+    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos,
     CS_HREDRAW, CS_VREDRAW, HWND_BOTTOM, SWP_NOACTIVATE, SWP_SHOWWINDOW, WNDCLASSEXW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, MSG, GetMessageW, TranslateMessage, DispatchMessageW,
-    PostQuitMessage, SWP_ASYNCWINDOWPOS, WDA_EXCLUDEFROMCAPTURE 
+    PostQuitMessage, SWP_ASYNCWINDOWPOS 
 };
 
 const CLASS_NAME: &str = "RustFrameSeparationLayer";

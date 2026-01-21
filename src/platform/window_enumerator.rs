@@ -302,10 +302,10 @@ mod windows_impl {
     use anyhow::Result;
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
+    
+    
 
-    use windows::Win32::Foundation::{HWND, LPARAM, MAX_PATH};
+    use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW};
