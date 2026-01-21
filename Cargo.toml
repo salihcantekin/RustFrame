@@ -1,6 +1,6 @@
 [package]
 name = "rustframe"
-version = "1.1.1"
+version = "1.0.0-windows"
 edition = "2021"
 authors = ["Salih Cantekin <salihcantekin@gmail.com>"]
 description = "Cross-platform screen capture application with Tauri UI"
