@@ -35,6 +35,7 @@ See below for quick links and platform details. For more, see the [User Guide](d
 
 ## 🚀 Quick Links
 
+- **[Project Website](https://salihcantekin.github.io/RustFrame/)** – Overview, features, documentation hub
 - **[Download Latest Release](https://github.com/salihcantekin/RustFrame/releases/latest)**
 - **[User Guide](docs/user-guide/)** – Installation, usage, troubleshooting
 - **[Quick Start](docs/user-guide/quick-start.md)** – Get started in 30 seconds
